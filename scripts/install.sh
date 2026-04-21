@@ -322,6 +322,49 @@ if [[ "${SKIP_INCUS:-0}" != "1" && -x "${SCRIPT_DIR}/setup-incus.sh" ]]; then
     "${SCRIPT_DIR}/setup-incus.sh"
 fi
 
+# ── Step 5b: Docker ↔ Incus firewall integration ────────────────────────────
+#
+# Docker installs iptables rules with FORWARD policy DROP and a DOCKER-USER
+# chain consulted first. Without explicit allow rules, traffic from the Incus
+# bridge (svkexe-br0) to the outside world is silently dropped — containers
+# can resolve DNS but time out on every TCP connection.
+#
+# Install a systemd oneshot that inserts accept rules on boot and is idempotent
+# on re-run.
+
+if [[ "${SKIP_INCUS:-0}" != "1" && "${SKIP_DOCKER:-0}" != "1" ]] \
+        && command -v iptables &>/dev/null \
+        && iptables -nL DOCKER-USER &>/dev/null; then
+    log "Installing Docker↔Incus firewall bridge rules…"
+
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+    cat >/etc/sysctl.d/99-svkexe-forward.conf <<'EOF'
+net.ipv4.ip_forward = 1
+EOF
+
+    cat >/etc/systemd/system/svkexe-firewall.service <<'EOF'
+[Unit]
+Description=svkexe firewall integration (allow Incus bridge through Docker FORWARD)
+After=docker.service incus.service
+Wants=docker.service incus.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'iptables -C DOCKER-USER -i svkexe-br0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER -i svkexe-br0 -j ACCEPT'
+ExecStart=/bin/bash -c 'iptables -C DOCKER-USER -o svkexe-br0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER -o svkexe-br0 -j ACCEPT'
+ExecStop=/bin/bash -c 'iptables -D DOCKER-USER -i svkexe-br0 -j ACCEPT 2>/dev/null || true'
+ExecStop=/bin/bash -c 'iptables -D DOCKER-USER -o svkexe-br0 -j ACCEPT 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now svkexe-firewall.service
+    log "svkexe-firewall.service enabled and active."
+fi
+
 # ── Step 6: Build svkexe-base Incus image ────────────────────────────────────
 
 if [[ "${SKIP_INCUS:-0}" != "1" && "${SKIP_IMAGE_BUILD:-0}" != "1" && -x "${SCRIPT_DIR}/build-image.sh" ]]; then

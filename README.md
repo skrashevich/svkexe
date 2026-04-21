@@ -34,7 +34,7 @@ Self-hosted platform for persistent Linux VMs with integrated [Shelley](https://
 - **SSH Gateway** with interactive VM menu and direct connect (`ssh vm@host`)
 - **Shared links** (Discord-style) for temporary container access
 - **LLM key management** with AES-GCM encryption, per-container isolation
-- **OIDC authentication** via Authelia with auto user provisioning
+- **Built-in web login** — cookie-based sessions, bcrypt password hashing, first-run admin bootstrap via env
 - **Admin panel** for user and container management
 - **Per-user rate limiting** (token bucket)
 - **Prometheus metrics** + Grafana dashboards
@@ -141,7 +141,7 @@ export GATEWAY_DB_PATH="/var/lib/svkexe/gateway.db"
 | Coding Agent | [Shelley](https://github.com/boldsoftware/shelley) (Go + React) |
 | API Gateway | Go, [chi](https://github.com/go-chi/chi), SQLite (WAL) |
 | Reverse Proxy | [Caddy](https://caddyserver.com/) |
-| Auth | [Authelia](https://www.authelia.com/) (OIDC) |
+| Auth | Built-in web login (bcrypt + session cookies) |
 | Dashboard | Go templates + [htmx](https://htmx.org/) |
 | Web Shell | [xterm.js](https://xtermjs.org/) + WebSocket |
 | SSH Gateway | [gliderlabs/ssh](https://github.com/gliderlabs/ssh) |

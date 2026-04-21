@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,6 +19,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+	gossh "golang.org/x/crypto/ssh"
+
 	"github.com/svkexe/platform/internal/api"
 	"github.com/svkexe/platform/internal/db"
 	"github.com/svkexe/platform/internal/proxy"
@@ -24,7 +30,6 @@ import (
 	"github.com/svkexe/platform/internal/runtime"
 	"github.com/svkexe/platform/internal/secrets"
 	"github.com/svkexe/platform/internal/sshgw"
-	gossh "golang.org/x/crypto/ssh"
 )
 
 func main() {
@@ -62,6 +67,34 @@ func main() {
 		log.Fatalf("open db: %v", err)
 	}
 	defer database.Close()
+
+	// Session cookie hardening: set Secure flag when deployed behind TLS.
+	api.CookieSecure = strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", "0"), "1") ||
+		strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", ""), "true")
+
+	// Bootstrap an admin account from env if requested (idempotent: updates the
+	// password if the user already exists).
+	if adminEmail := os.Getenv("BOOTSTRAP_ADMIN_EMAIL"); adminEmail != "" {
+		adminPassword := os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
+		if adminPassword == "" {
+			log.Printf("BOOTSTRAP_ADMIN_EMAIL set but BOOTSTRAP_ADMIN_PASSWORD is empty — skipping bootstrap")
+		} else if err := bootstrapAdmin(database, adminEmail, adminPassword); err != nil {
+			log.Fatalf("bootstrap admin: %v", err)
+		}
+	}
+
+	// Purge expired sessions every hour.
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if n, err := database.DeleteExpiredSessions(); err != nil {
+				log.Printf("expired session purge: %v", err)
+			} else if n > 0 {
+				log.Printf("expired session purge: removed %d rows", n)
+			}
+		}
+	}()
 
 	// Build runtime client.
 	rt, err := runtime.NewIncusRuntime(incusSocket)
@@ -216,4 +249,43 @@ func marshalED25519PrivateKey(key ed25519.PrivateKey) ([]byte, error) {
 		return nil, err
 	}
 	return pem.EncodeToMemory(pemBlock), nil
+}
+
+// bootstrapAdmin creates or updates the operator-managed admin account based
+// on env vars. The password is always re-hashed so rotating the env var
+// reliably resets the password on the next restart.
+func bootstrapAdmin(database *db.DB, email, password string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	existing, err := database.GetUserByEmail(email)
+	if err == nil {
+		if err := database.SetUserPassword(existing.ID, string(hash)); err != nil {
+			return err
+		}
+		if existing.Role != "admin" {
+			existing.Role = "admin"
+			if err := database.UpdateUser(existing); err != nil {
+				return err
+			}
+		}
+		log.Printf("bootstrap admin: refreshed password for %s", email)
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	u := &db.User{
+		ID:           uuid.NewString(),
+		Email:        email,
+		Role:         "admin",
+		PasswordHash: string(hash),
+	}
+	if err := database.CreateUser(u); err != nil {
+		return err
+	}
+	log.Printf("bootstrap admin: created admin account %s", email)
+	return nil
 }

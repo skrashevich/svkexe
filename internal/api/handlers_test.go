@@ -80,6 +80,11 @@ func (m *mockRuntime) Snapshot(_ context.Context, id, name string) error {
 
 var testEncKey = []byte("12345678901234567890123456789012")
 
+// testSessionToken is the session cookie value used by authedRequest. It is
+// (re)initialised at the top of every newTestServer / newTestServerWithAdmin
+// call, so each test gets a fresh token bound to its own in-memory DB.
+var testSessionToken string
+
 func newTestServer(t *testing.T) (*Server, *dbpkg.DB) {
 	t.Helper()
 	database, err := dbpkg.Open(":memory:")
@@ -90,11 +95,17 @@ func newTestServer(t *testing.T) (*Server, *dbpkg.DB) {
 
 	// Seed a test user.
 	_ = database.CreateUser(&dbpkg.User{ID: "user1", Email: "user1@example.com", Role: "user"})
+	sess, err := database.CreateSession("user1")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	testSessionToken = sess.Token
 
 	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil)
 	return srv, database
 }
 
+// authedRequest builds a request carrying the current test session cookie.
 func authedRequest(method, path string, body []byte) *http.Request {
 	var r *http.Request
 	if body != nil {
@@ -103,8 +114,7 @@ func authedRequest(method, path string, body []byte) *http.Request {
 	} else {
 		r = httptest.NewRequest(method, path, nil)
 	}
-	r.Header.Set("X-ExeDev-Userid", "user1")
-	r.Header.Set("X-ExeDev-Email", "user1@example.com")
+	r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: testSessionToken})
 	return r
 }
 

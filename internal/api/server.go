@@ -59,10 +59,30 @@ func (s *Server) buildRouter() chi.Router {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
 	r.Use(metrics.Middleware)
-	r.Use(s.AuthMiddleware)
-	if s.rateLimiter != nil {
-		r.Use(s.rateLimiter.Middleware)
-	}
+
+	// Unauthenticated endpoints. Keep these before the auth middleware is
+	// mounted — order matters for chi.
+	r.Get("/login", s.loginGet)
+	r.Post("/login", s.loginPost)
+	r.Post("/logout", s.logoutPost)
+	r.Get("/logout", s.logoutPost)
+	r.Get("/register", s.registerGet)
+	r.Post("/register", s.registerPost)
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+
+	// Everything below requires a valid session cookie.
+	r.Group(func(r chi.Router) {
+		r.Use(s.AuthMiddleware)
+		if s.rateLimiter != nil {
+			r.Use(s.rateLimiter.Middleware)
+		}
+		s.registerAuthedRoutes(r)
+	})
+
+	return r
+}
+
+func (s *Server) registerAuthedRoutes(r chi.Router) {
 
 	r.Route("/api", func(r chi.Router) {
 		// Current user
@@ -109,9 +129,4 @@ func (s *Server) buildRouter() chi.Router {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}
 	r.Route("/dashboard", d.RegisterRoutes)
-
-	// Prometheus metrics endpoint (unauthenticated, scrape-only).
-	r.Get("/metrics", promhttp.Handler().ServeHTTP)
-
-	return r
 }

@@ -422,6 +422,8 @@ fi
 
 if [[ ! -f "${ENV_FILE}" ]]; then
     GATEWAY_ENC_KEY="${GATEWAY_ENC_KEY:-$(openssl rand -hex 32)}"
+    BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-admin@${DOMAIN:-localhost}}"
+    BOOTSTRAP_ADMIN_PASSWORD="${BOOTSTRAP_ADMIN_PASSWORD:-$(openssl rand -base64 18 | tr -d '/+=' | head -c 24)}"
     log "Seeding ${ENV_FILE} (edit it before starting the service)…"
     cat >"${ENV_FILE}" <<EOF
 # svkexe-gateway runtime environment — edit before starting the service.
@@ -434,8 +436,15 @@ GATEWAY_ENC_KEY=${GATEWAY_ENC_KEY}
 # Base domain for subdomain routing (e.g. example.com). Required in production.
 DOMAIN=${DOMAIN:-}
 
-# ACME email used by Caddy. Required if you deploy the Caddy reverse proxy.
+# ACME email used by Caddy if you deploy the optional docker compose stack.
 ACME_EMAIL=${ACME_EMAIL:-}
+
+# Built-in authentication — first admin created automatically at startup. The
+# password is re-applied on every restart, so rotate it here to reset access.
+# Set GATEWAY_COOKIE_SECURE=1 when the gateway is served over HTTPS.
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL}
+BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD}
+GATEWAY_COOKIE_SECURE=0
 
 # Incus API socket.
 INCUS_SOCKET=/var/lib/incus/unix.socket
@@ -449,6 +458,11 @@ RATE_LIMIT_BURST=20
 EOF
     chown root:svkexe "${ENV_FILE}"
     chmod 0640 "${ENV_FILE}"
+    # Print the generated admin password so the operator can grab it from
+    # stdout; it is also inside the (root-readable) env file.
+    log "Initial admin account: ${BOOTSTRAP_ADMIN_EMAIL}"
+    log "Initial admin password: ${BOOTSTRAP_ADMIN_PASSWORD}"
+    log "Login at http://<host>:8080/login — rotate BOOTSTRAP_ADMIN_PASSWORD in ${ENV_FILE} to change."
 else
     log "${ENV_FILE} exists — leaving untouched."
 fi

@@ -9,18 +9,19 @@ import (
 
 // User represents a platform user.
 type User struct {
-	ID          string
-	Email       string
-	DisplayName string
-	Role        string
-	CreatedAt   time.Time
+	ID           string
+	Email        string
+	DisplayName  string
+	Role         string
+	PasswordHash string
+	CreatedAt    time.Time
 }
 
 // CreateUser inserts a new user into the database.
 func (db *DB) CreateUser(u *User) error {
 	_, err := db.Exec(
-		`INSERT INTO users (id, email, display_name, role) VALUES (?, ?, ?, ?)`,
-		u.ID, u.Email, u.DisplayName, u.Role,
+		`INSERT INTO users (id, email, display_name, role, password_hash) VALUES (?, ?, ?, ?, ?)`,
+		u.ID, u.Email, u.DisplayName, u.Role, u.PasswordHash,
 	)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -32,8 +33,8 @@ func (db *DB) CreateUser(u *User) error {
 func (db *DB) GetUserByID(id string) (*User, error) {
 	u := &User{}
 	err := db.QueryRow(
-		`SELECT id, email, display_name, role, created_at FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.CreatedAt)
+		`SELECT id, email, display_name, role, password_hash, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -47,8 +48,8 @@ func (db *DB) GetUserByID(id string) (*User, error) {
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	err := db.QueryRow(
-		`SELECT id, email, display_name, role, created_at FROM users WHERE email = ?`, email,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.CreatedAt)
+		`SELECT id, email, display_name, role, password_hash, created_at FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -56,6 +57,24 @@ func (db *DB) GetUserByEmail(email string) (*User, error) {
 		return nil, fmt.Errorf("get user by email: %w", err)
 	}
 	return u, nil
+}
+
+// SetUserPassword updates the password_hash column for the given user.
+func (db *DB) SetUserPassword(id, passwordHash string) error {
+	_, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, id)
+	if err != nil {
+		return fmt.Errorf("set user password: %w", err)
+	}
+	return nil
+}
+
+// CountUsers returns the total number of users.
+func (db *DB) CountUsers() (int, error) {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return n, nil
 }
 
 // UpdateUser updates display_name and role for the given user.
@@ -73,7 +92,7 @@ func (db *DB) UpdateUser(u *User) error {
 // ListUsers returns all users ordered by created_at.
 func (db *DB) ListUsers() ([]*User, error) {
 	rows, err := db.Query(
-		`SELECT id, email, display_name, role, created_at FROM users ORDER BY created_at ASC`,
+		`SELECT id, email, display_name, role, password_hash, created_at FROM users ORDER BY created_at ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -83,7 +102,7 @@ func (db *DB) ListUsers() ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)

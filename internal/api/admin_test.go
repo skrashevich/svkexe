@@ -9,19 +9,28 @@ import (
 	dbpkg "github.com/svkexe/platform/internal/db"
 )
 
-// authedAdminRequest creates a request with admin user headers.
+// testAdminToken is the session cookie value for the admin seeded by
+// newTestServerWithAdmin.
+var testAdminToken string
+
+// authedAdminRequest creates a request authenticated as the admin user.
 func authedAdminRequest(method, path string) *http.Request {
 	r := httptest.NewRequest(method, path, nil)
-	r.Header.Set("X-ExeDev-Userid", "admin1")
-	r.Header.Set("X-ExeDev-Email", "admin@example.com")
+	r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: testAdminToken})
 	return r
 }
 
-// newTestServerWithAdmin creates a test server with a seeded admin user.
+// newTestServerWithAdmin creates a test server with a seeded admin user and
+// a valid admin session cookie stored in testAdminToken.
 func newTestServerWithAdmin(t *testing.T) (*Server, *dbpkg.DB) {
 	t.Helper()
 	srv, database := newTestServer(t)
 	_ = database.CreateUser(&dbpkg.User{ID: "admin1", Email: "admin@example.com", Role: "admin"})
+	sess, err := database.CreateSession("admin1")
+	if err != nil {
+		t.Fatalf("create admin session: %v", err)
+	}
+	testAdminToken = sess.Token
 	return srv, database
 }
 
@@ -52,29 +61,17 @@ func TestGetMe_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestAutoProvisioning(t *testing.T) {
-	srv, database := newTestServer(t)
+func TestAuth_InvalidSessionCookie(t *testing.T) {
+	srv, _ := newTestServer(t)
 
-	// Request with a new user ID not in DB.
+	// Request with a bogus session cookie — must be rejected even though
+	// newTestServer seeded a valid session elsewhere.
 	r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	r.Header.Set("X-ExeDev-Userid", "newuser42")
-	r.Header.Set("X-ExeDev-Email", "new@example.com")
+	r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "bogus"})
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, r)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200 after auto-provision, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Verify the user was created in the DB.
-	u, err := database.GetUserByID("newuser42")
-	if err != nil {
-		t.Fatalf("user should exist after auto-provisioning: %v", err)
-	}
-	if u.Email != "new@example.com" {
-		t.Errorf("want email 'new@example.com', got %q", u.Email)
-	}
-	if u.Role != "user" {
-		t.Errorf("want role 'user', got %q", u.Role)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401 for invalid cookie, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

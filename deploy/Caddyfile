@@ -3,28 +3,31 @@
 	admin off
 }
 
+# Gateway root and container subdomains both terminate at the Go gateway —
+# authentication lives there (web login form + session cookies).
+(gateway_backend) {
+	# Always strip spoofable identity headers before they reach the gateway;
+	# the gateway sets them from its own session store for downstream services
+	# (Shelley rate limiter, proxy).
+	request_header -X-ExeDev-Userid
+	request_header -X-ExeDev-Email
+
+	reverse_proxy gateway:8080 {
+		# SSE: disable buffering; WebSocket upgrades pass through automatically.
+		flush_interval -1
+	}
+}
+
+{$DOMAIN} {
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+	import gateway_backend
+}
+
 *.{$DOMAIN} {
 	tls {
 		dns cloudflare {$CLOUDFLARE_API_TOKEN}
 	}
-
-	# S1: Strip ALL spoofed incoming auth headers before anything else
-	request_header -X-ExeDev-Userid
-	request_header -X-ExeDev-Email
-
-	# Forward auth to Authelia
-	forward_auth authelia:9091 {
-		uri /api/authz/forward-auth
-		copy_headers Remote-User Remote-Email Remote-Groups
-	}
-
-	# Inject verified identity from Authelia response
-	header_up X-ExeDev-Userid {http.reverse_proxy.header.Remote-User}
-	header_up X-ExeDev-Email {http.reverse_proxy.header.Remote-Email}
-
-	reverse_proxy gateway:8080 {
-		# SSE support: disable buffering for streaming responses
-		flush_interval -1
-		# WebSocket: Caddy passes Upgrade header automatically
-	}
+	import gateway_backend
 }

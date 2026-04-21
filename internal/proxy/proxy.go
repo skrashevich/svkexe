@@ -16,6 +16,10 @@ import (
 
 const shelleyPort = 9000
 
+// sessionCookieName mirrors api.SessionCookieName — redeclared here to avoid
+// importing the api package (which would create an import cycle).
+const sessionCookieName = "svkexe_session"
+
 // ContainerProxy routes subdomain requests to the appropriate container.
 type ContainerProxy struct {
 	db      *db.DB
@@ -53,12 +57,26 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security Invariant S2 / S3: verify caller owns this container.
-	userID := r.Header.Get("X-ExeDev-Userid")
+	// Security Invariant S2 / S3: verify caller owns this container. Identity
+	// comes from the session cookie — we never trust incoming X-ExeDev-*
+	// headers for subdomain traffic.
+	userID := p.authenticate(r)
+	r.Header.Del("X-ExeDev-Userid")
+	r.Header.Del("X-ExeDev-Email")
+
 	if userID == "" || userID != container.OwnerID {
 		// If not owner, check for shared link token.
 		token := r.URL.Query().Get("share")
 		if token == "" {
+			if userID == "" {
+				// Redirect browsers to the login page; API clients get 401.
+				if strings.Contains(r.Header.Get("Accept"), "text/html") {
+					http.Redirect(w, r, "https://"+p.domain+"/login", http.StatusSeeOther)
+					return
+				}
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -67,7 +85,10 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		// Valid shared link — proceed.
+		// Valid shared link — proceed without injecting the user header.
+	} else {
+		// Forward the authenticated user ID to Shelley.
+		r.Header.Set("X-ExeDev-Userid", userID)
 	}
 
 	// Reject requests to stopped containers.
@@ -118,6 +139,20 @@ func (p *ContainerProxy) extractSubdomain(host string) (string, bool) {
 // isRunning returns true for statuses considered "running".
 func isRunning(status string) bool {
 	return strings.EqualFold(status, "running") || strings.EqualFold(status, "started")
+}
+
+// authenticate resolves the session cookie to a user ID. Returns the empty
+// string when the cookie is absent, the session expired, or lookups fail.
+func (p *ContainerProxy) authenticate(r *http.Request) string {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	sess, err := p.db.GetSession(c.Value)
+	if err != nil {
+		return ""
+	}
+	return sess.UserID
 }
 
 // newReverseProxy builds an httputil.ReverseProxy pointed at target with

@@ -44,9 +44,45 @@ Self-hosted platform for persistent Linux VMs with integrated [Shelley](https://
 
 ### Prerequisites
 
-- Linux host (Ubuntu 24.04+ recommended)
+- Linux host (Ubuntu 24.04+ / Debian 12+ recommended, amd64 or arm64)
 - Domain with wildcard DNS (`*.yourdomain.com`)
-- Docker and Docker Compose
+- Root (sudo) access on the host
+
+### One-liner install (recommended)
+
+On a fresh Ubuntu 24.04+ / Debian 12+ server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh | sudo bash
+```
+
+Or with production defaults pre-filled in `/etc/svkexe/gateway.env`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh \
+  | sudo env DOMAIN=example.com ACME_EMAIL=you@example.com bash
+```
+
+The installer clones the repo to `/opt/svkexe`, then installs system packages,
+Go, Docker + Compose, Incus, runs host setup, builds the `svkexe-base` Incus
+image, builds the `gateway` binary, and installs a hardened
+`svkexe-gateway.service` systemd unit. It is idempotent — re-running is safe.
+
+After it finishes:
+
+```bash
+sudo $EDITOR /etc/svkexe/gateway.env       # review DOMAIN, ACME_EMAIL, etc.
+sudo systemctl start svkexe-gateway
+journalctl -u svkexe-gateway -f
+```
+
+If you already have a local checkout you can run `sudo ./scripts/install.sh`
+directly — it auto-detects and uses the current tree instead of cloning.
+
+Useful skip-flags (comma-combine via env): `SKIP_DOCKER=1`, `SKIP_INCUS=1`,
+`SKIP_IMAGE_BUILD=1` (long), `SKIP_GO=1`, `SKIP_BUILD=1`, `SKIP_SERVICE=1`.
+Override repo source with `SVKEXE_REPO=...`, `SVKEXE_BRANCH=...`,
+`SVKEXE_SRC_DIR=...`.
 
 ### Deploy with Docker Compose
 

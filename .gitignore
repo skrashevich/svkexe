@@ -1,5 +1,5 @@
 # Binaries
-gateway
+/gateway
 bin/
 *.exe
 *.exe~

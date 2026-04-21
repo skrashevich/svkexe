@@ -176,7 +176,7 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
     install -m 0755 /tmp/shelley/bin/shelley /usr/local/bin/shelley
     rm -rf /tmp/shelley
 
-    echo \"Shelley installed: \$(/usr/local/bin/shelley --version 2>&1 || echo 'no --version flag')\"
+    echo \"Shelley binary installed: \$(stat -c '%s bytes, %y' /usr/local/bin/shelley)\"
 "
 
 # ── Create Shelley environment file ─────────────────────────────────────────

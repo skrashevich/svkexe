@@ -63,12 +63,22 @@ func (s *Server) buildRouter() chi.Router {
 	// Unauthenticated endpoints. Keep these before the auth middleware is
 	// mounted — order matters for chi.
 	r.Get("/login", s.loginGet)
-	r.Post("/login", s.loginPost)
-	r.Post("/logout", s.logoutPost)
 	r.Get("/logout", s.logoutPost)
 	r.Get("/register", s.registerGet)
-	r.Post("/register", s.registerPost)
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+
+	// Mutating auth endpoints: apply the rate limiter when available to make
+	// password brute-force expensive. The limiter keys by X-ExeDev-Userid
+	// (not set pre-login) and falls back to RemoteAddr — which is what we want
+	// for per-IP throttling of login attempts.
+	r.Group(func(r chi.Router) {
+		if s.rateLimiter != nil {
+			r.Use(s.rateLimiter.Middleware)
+		}
+		r.Post("/login", s.loginPost)
+		r.Post("/logout", s.logoutPost)
+		r.Post("/register", s.registerPost)
+	})
 
 	// Everything below requires a valid session cookie.
 	r.Group(func(r chi.Router) {

@@ -54,6 +54,20 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
     done
 "
 
+# The bridge (svkexe-br0) is IPv4-only; force apt and curl to skip AAAA lookups.
+log "Forcing IPv4 for apt and curl inside the container…"
+incus exec "${CONTAINER_NAME}" -- bash -c "
+    mkdir -p /etc/apt/apt.conf.d
+    echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99-force-ipv4
+    mkdir -p /etc/gai.conf.d 2>/dev/null || true
+    # Prefer IPv4 addresses when resolving — flips the default precedence
+    # so getaddrinfo returns A records before AAAA.
+    if ! grep -qs '^precedence ::ffff:0:0/96  100' /etc/gai.conf; then
+        printf 'precedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
+    fi
+    echo '--ipv4' > /root/.curlrc
+"
+
 # ── Install base packages ────────────────────────────────────────────────────
 
 log "Installing base packages (build-essential, git, curl)…"

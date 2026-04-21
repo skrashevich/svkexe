@@ -81,8 +81,16 @@ else
     if [[ "${POOL_DRIVER}" == "zfs" ]]; then
         incus storage create "${POOL_NAME}" zfs
     else
-        mkdir -p "${POOL_DIR}"
-        incus storage create "${POOL_NAME}" dir source="${POOL_DIR}"
+        # Incus refuses to adopt a pre-existing directory. If one is left over
+        # from a prior failed run (not registered as a pool), remove it first.
+        if [[ -d "${POOL_DIR}" ]]; then
+            log "Removing stale pool directory '${POOL_DIR}' from prior run…"
+            rm -rf "${POOL_DIR}"
+        fi
+        # Let Incus create the directory itself under its standard layout —
+        # passing source= with a non-existent path is more reliable across
+        # versions than pre-creating the dir.
+        incus storage create "${POOL_NAME}" dir
     fi
 fi
 

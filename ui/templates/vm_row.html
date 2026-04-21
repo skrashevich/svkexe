@@ -1,0 +1,48 @@
+{{define "vm_card"}}
+<div class="card" id="vm-{{.ID}}">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px;">
+        <div>
+            <div style="font-size:15px; font-weight:600; margin-bottom:4px;">{{.Name}}</div>
+            <span class="badge badge-{{statusClass .Status}}">{{.Status}}</span>
+        </div>
+        {{if .IPAddress}}
+        <a href="https://{{.Name}}.{{$.Domain}}/" target="_blank"
+           style="font-size:12px; color:var(--text-muted); text-decoration:none; padding:4px 8px; border:1px solid var(--border); border-radius:5px; white-space:nowrap;">
+            Open &rarr;
+        </a>
+        {{end}}
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; font-size:12px; color:var(--text-muted);">
+        <div>CPU: <span style="color:var(--text)">{{.CPULimit}} vCPU</span></div>
+        <div>RAM: <span style="color:var(--text)">{{.MemoryMB}} MB</span></div>
+        <div>Disk: <span style="color:var(--text)">{{.DiskGB}} GB</span></div>
+        {{if .IPAddress}}<div>IP: <span style="color:var(--text)">{{.IPAddress}}</span></div>{{end}}
+    </div>
+
+    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        {{if eq .Status "stopped"}}
+        <button class="btn btn-secondary btn-sm"
+            hx-post="/dashboard/vms/{{.ID}}/start"
+            hx-target="#vm-{{.ID}}"
+            hx-swap="outerHTML">
+            Start
+        </button>
+        {{else if eq .Status "running"}}
+        <button class="btn btn-secondary btn-sm"
+            hx-post="/dashboard/vms/{{.ID}}/stop"
+            hx-target="#vm-{{.ID}}"
+            hx-swap="outerHTML">
+            Stop
+        </button>
+        {{end}}
+        <button class="btn btn-danger btn-sm"
+            hx-delete="/dashboard/vms/{{.ID}}"
+            hx-target="#vm-{{.ID}}"
+            hx-swap="outerHTML"
+            hx-confirm="Delete VM '{{.Name}}'? This cannot be undone.">
+            Delete
+        </button>
+    </div>
+</div>
+{{end}}

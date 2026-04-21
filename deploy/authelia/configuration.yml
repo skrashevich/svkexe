@@ -1,0 +1,35 @@
+---
+theme: dark
+
+server:
+  address: tcp://0.0.0.0:9091
+
+log:
+  level: debug
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: bcrypt
+      iterations: 12
+
+session:
+  domain: "{{ env \"AUTHELIA_SESSION_DOMAIN\" }}"
+  secret: "{{ env \"AUTHELIA_SESSION_SECRET\" }}"
+  expiration: 1h
+  inactivity: 30m
+  cookies:
+    - domain: "{{ env \"AUTHELIA_SESSION_DOMAIN\" }}"
+      authelia_url: https://auth.{{ env "AUTHELIA_SESSION_DOMAIN" }}
+
+storage:
+  local:
+    path: /config/db.sqlite3
+
+access_control:
+  default_policy: one_factor
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt

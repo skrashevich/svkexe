@@ -1,0 +1,105 @@
+{{template "layout.html" .}}
+
+{{define "content"}}
+<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+    <a href="/dashboard/vms" class="btn btn-secondary btn-sm">&larr; Back to VMs</a>
+    <h1 style="font-size:18px; font-weight:600;">Shell &mdash; {{.Container.Name}}</h1>
+    <span class="badge badge-{{statusClass .Container.Status}}">{{.Container.Status}}</span>
+</div>
+
+<div class="card" style="padding:0; overflow:hidden;">
+    <div id="terminal" style="width:100%; height:calc(100vh - 180px);"></div>
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script>
+(function() {
+    var vmID = {{.Container.ID | js}};
+    var wsURL = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/dashboard/vms/' + vmID + '/ws';
+
+    var term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+        theme: {
+            background: '#0d0d1a',
+            foreground: '#eaeaea',
+            cursor: '#e94560',
+            selectionBackground: 'rgba(233,69,96,0.3)',
+            black: '#1a1a2e',
+            brightBlack: '#4a4a6e',
+            red: '#ef5350',
+            brightRed: '#ff6b6b',
+            green: '#4caf50',
+            brightGreen: '#81c784',
+            yellow: '#ff9800',
+            brightYellow: '#ffb74d',
+            blue: '#42a5f5',
+            brightBlue: '#64b5f6',
+            magenta: '#ab47bc',
+            brightMagenta: '#ce93d8',
+            cyan: '#26c6da',
+            brightCyan: '#4dd0e1',
+            white: '#eaeaea',
+            brightWhite: '#ffffff'
+        }
+    });
+
+    var fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    var ws;
+    var reconnectDelay = 1000;
+
+    function connect() {
+        ws = new WebSocket(wsURL);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = function() {
+            reconnectDelay = 1000;
+            // Send initial terminal size
+            var dims = {type: 'resize', cols: term.cols, rows: term.rows};
+            ws.send(JSON.stringify(dims));
+        };
+
+        ws.onmessage = function(e) {
+            if (e.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(e.data));
+            } else {
+                term.write(e.data);
+            }
+        };
+
+        ws.onclose = function() {
+            term.write('\r\n\x1b[33m[disconnected — reconnecting in ' + (reconnectDelay / 1000) + 's...]\x1b[0m\r\n');
+            setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+        };
+
+        ws.onerror = function() {
+            ws.close();
+        };
+    }
+
+    term.onData(function(data) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(data);
+        }
+    });
+
+    window.addEventListener('resize', function() {
+        fitAddon.fit();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            var dims = {type: 'resize', cols: term.cols, rows: term.rows};
+            ws.send(JSON.stringify(dims));
+        }
+    });
+
+    connect();
+})();
+</script>
+{{end}}

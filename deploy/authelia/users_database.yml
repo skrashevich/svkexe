@@ -1,0 +1,18 @@
+---
+users:
+  admin:
+    displayname: "Admin User"
+    # Password: admin (bcrypt hash)
+    password: "$2b$12$lfEd3NJkLqLWBvSLUjS0reVCpXCxKuVRIVXBdADpJDTNZjDvmIw2W"
+    email: admin@example.com
+    groups:
+      - admins
+      - users
+
+  user:
+    displayname: "Regular User"
+    # Password: user (bcrypt hash)
+    password: "$2b$12$yUkv6hIaSSGHAGMNMKFhYuGXcT.5Nt9UoTI1K5MV8pZePnNFJlL6e"
+    email: user@example.com
+    groups:
+      - users

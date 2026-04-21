@@ -1,0 +1,14 @@
+{{define "vm_list_content"}}
+{{if .Containers}}
+<div class="grid">
+    {{range .Containers}}
+        {{template "vm_card" .}}
+    {{end}}
+</div>
+{{else}}
+<div class="empty-state">
+    <h3>No VMs yet</h3>
+    <p>Create your first virtual machine to get started.</p>
+</div>
+{{end}}
+{{end}}

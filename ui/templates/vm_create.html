@@ -1,0 +1,53 @@
+{{define "vm_create_form"}}
+<div class="modal-overlay" id="create-modal-inner"
+     hx-on:click="if(event.target===this){document.getElementById('create-modal').innerHTML=''}">
+    <div class="card modal">
+        <div class="modal-header">
+            <h2>New Virtual Machine</h2>
+            <button class="modal-close" onclick="document.getElementById('create-modal').innerHTML=''">&#x2715;</button>
+        </div>
+        <form hx-post="/dashboard/vms"
+              hx-target="#vm-list"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('create-modal').innerHTML=''">
+            <div class="form-group">
+                <label for="vm-name">Name</label>
+                <input type="text" id="vm-name" name="name" placeholder="my-vm" required
+                       pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, numbers and hyphens">
+            </div>
+            <div class="form-group">
+                <label for="vm-cpu">CPU</label>
+                <select id="vm-cpu" name="cpu_limit">
+                    <option value="1">1 vCPU</option>
+                    <option value="2" selected>2 vCPU</option>
+                    <option value="4">4 vCPU</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="vm-ram">RAM</label>
+                <select id="vm-ram" name="memory_mb">
+                    <option value="512">512 MB</option>
+                    <option value="1024">1024 MB</option>
+                    <option value="2048" selected>2048 MB</option>
+                    <option value="4096">4096 MB</option>
+                    <option value="8192">8192 MB</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="vm-disk">Disk</label>
+                <select id="vm-disk" name="disk_gb">
+                    <option value="5">5 GB</option>
+                    <option value="10" selected>10 GB</option>
+                    <option value="25">25 GB</option>
+                    <option value="50">50 GB</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('create-modal').innerHTML=''">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create VM</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}

@@ -123,12 +123,20 @@ else
     chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
 
     log "Re-executing installer from ${SCRIPT_DIR}/install.sh…"
-    exec env \
+    # Detach stdin from the curl pipe — helper tools (Incus, apt, etc.)
+    # otherwise read leftover script bytes and misinterpret them as YAML config.
+    exec </dev/null env \
         SVKEXE_REPO="${SVKEXE_REPO}" \
         SVKEXE_BRANCH="${SVKEXE_BRANCH}" \
         SVKEXE_SRC_DIR="${SVKEXE_SRC_DIR}" \
         _SVKEXE_BOOTSTRAPPED=1 \
         bash "${SCRIPT_DIR}/install.sh" "$@"
+fi
+
+# Defensive: if we reached here directly (local checkout) and stdin is a pipe,
+# detach it so subprocesses don't inherit noise.
+if [[ ! -t 0 ]]; then
+    exec </dev/null
 fi
 
 # ── Paths and constants ──────────────────────────────────────────────────────

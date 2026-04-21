@@ -3,6 +3,13 @@
 # Idempotent: safe to re-run. Creates storage pool, network bridge, and profile.
 set -euo pipefail
 
+# Detach from any inherited non-tty stdin. `incus` reads YAML config from stdin
+# when it's not a terminal, which breaks `storage create` when the script is
+# launched from a curl-piped installer.
+if [[ ! -t 0 ]]; then
+    exec </dev/null
+fi
+
 POOL_NAME="svkexe-pool"
 POOL_DRIVER="dir"          # Change to "zfs" if ZFS is available on the host
 POOL_DIR="/var/lib/incus/storage-pools/${POOL_NAME}"

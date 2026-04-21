@@ -3,6 +3,12 @@
 # Idempotent: safe to re-run. Cleans up the working container on exit.
 set -euo pipefail
 
+# Detach from any inherited non-tty stdin so `incus` doesn't try to parse it as
+# YAML config when launched from a piped installer.
+if [[ ! -t 0 ]]; then
+    exec </dev/null
+fi
+
 IMAGE_NAME="svkexe-base"
 CONTAINER_NAME="svkexe-build-$$"
 

@@ -116,11 +116,24 @@ func (d *Dashboard) render(w http.ResponseWriter, tmplName string, data interfac
 	}
 }
 
-// renderPage renders a full page by parsing layout + the named page file together,
-// so that each page's {{define "content"}} is isolated and does not conflict.
+// partialPatterns lists glob patterns for template files that only define
+// named snippets (no "content" block). renderPage includes all of them so
+// that pages can {{template "vm_list_content" .}} etc.
+var partialPatterns = []string{
+	"templates/vm_list.html",
+	"templates/vm_row.html",
+	"templates/vm_create.html",
+	"templates/key_row.html",
+}
+
+// renderPage renders a full page by parsing layout + the named page file
+// together with all partials, so that each page's {{define "content"}} is
+// isolated (no cross-page collision) but partial templates referenced by the
+// page are available.
 func (d *Dashboard) renderPage(w http.ResponseWriter, pageFile string, data interface{}) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tmpl, err := template.New("").Funcs(d.funcMap).ParseFS(ui.Templates, "templates/layout.html", "templates/"+pageFile)
+	files := append([]string{"templates/layout.html", "templates/" + pageFile}, partialPatterns...)
+	tmpl, err := template.New("").Funcs(d.funcMap).ParseFS(ui.Templates, files...)
 	if err != nil {
 		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 		return

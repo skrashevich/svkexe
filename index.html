@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-accent="amber" data-density="balanced">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>svkexe — Dev platform that lives on your server</title>
+  <meta name="description" content="Persistent Linux VMs with an AI coding agent inside each one. Spin them up from a dashboard, ssh in, and code. The whole stack is three Go binaries and a Caddyfile." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Tokens ─────────────────────────────────────────────────────────── */
+    :root {
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --bg: oklch(0.17 0.006 60); --bg-raised: oklch(0.21 0.007 60); --bg-inset: oklch(0.14 0.005 60);
+      --line: oklch(0.28 0.008 60); --line-soft: oklch(0.23 0.007 60);
+      --fg: oklch(0.96 0.006 80); --fg-dim: oklch(0.72 0.008 70); --fg-mute: oklch(0.52 0.008 70);
+      --accent: oklch(0.76 0.18 45); --accent-fg: oklch(0.18 0.04 45);
+      --ok: oklch(0.78 0.14 150); --warn: oklch(0.80 0.15 85);
+      --pad-x: 56px; --pad-y: 64px;
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+    [data-theme="light"] {
+      --bg: oklch(0.985 0.004 80); --bg-raised: oklch(0.97 0.005 80); --bg-inset: oklch(0.94 0.006 80);
+      --line: oklch(0.88 0.008 80); --line-soft: oklch(0.93 0.006 80);
+      --fg: oklch(0.20 0.01 60); --fg-dim: oklch(0.42 0.01 60); --fg-mute: oklch(0.60 0.008 60);
+      --accent: oklch(0.62 0.18 45); --accent-fg: oklch(0.985 0.004 80);
+    }
+    [data-accent="cyan"]   { --accent: oklch(0.78 0.14 200); --accent-fg: oklch(0.18 0.03 200); }
+    [data-accent="lime"]   { --accent: oklch(0.86 0.18 130); --accent-fg: oklch(0.18 0.03 130); }
+    [data-accent="violet"] { --accent: oklch(0.72 0.17 295); --accent-fg: oklch(0.98 0.01 295); }
+    [data-accent="rose"]   { --accent: oklch(0.74 0.17 15);  --accent-fg: oklch(0.18 0.03 15); }
+    [data-density="airy"]    { --pad-x: 80px; --pad-y: 96px; }
+    [data-density="balanced"]{ --pad-x: 56px; --pad-y: 64px; }
+    [data-density="compact"] { --pad-x: 36px; --pad-y: 36px; }
+
+    /* ── Reset ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { cursor: pointer; font-family: inherit; border: none; background: none; }
+
+    /* ── Typography ─────────────────────────────────────────────────────── */
+    .mono { font-family: var(--mono); }
+
+    /* ── Mark (wordmark) ────────────────────────────────────────────────── */
+    .mark {
+      font-family: var(--mono);
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: -0.02em;
+      color: var(--fg);
+    }
+    .mark .bracket { color: var(--accent); }
+
+    /* ── Tag / badge ────────────────────────────────────────────────────── */
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      color: var(--fg-dim);
+      background: var(--bg-raised);
+      border: 1px solid var(--line);
+      border-radius: 100px;
+      padding: 4px 10px;
+      letter-spacing: 0.03em;
+    }
+    .tag .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--ok);
+      flex-shrink: 0;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 700;
+      padding: 10px 20px;
+      border-radius: var(--radius);
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+    .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn-primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+    .btn-outline {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--line);
+    }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
+    .btn-sm {
+      font-size: 0.75rem;
+      padding: 7px 14px;
+    }
+
+    /* ── Layout helpers ─────────────────────────────────────────────────── */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 var(--pad-x);
+    }
+    .section {
+      padding: var(--pad-y) 0;
+    }
+    .section + .section {
+      border-top: 1px solid var(--line-soft);
+    }
+
+    /* ── Kicker ─────────────────────────────────────────────────────────── */
+    .kicker {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+    .kicker-label {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    .kicker-title {
+      font-size: 1.65rem;
+      font-weight: 600;
+      color: var(--fg);
+      letter-spacing: -0.02em;
+    }
+    .kicker-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--line);
+      flex-shrink: 0;
+    }
+
+    /* ── Nav ────────────────────────────────────────────────────────────── */
+    .lb-nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line-soft);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .lb-nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      padding: 0 var(--pad-x);
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .lb-nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      list-style: none;
+    }
+    .lb-nav-links a {
+      font-size: 0.84rem;
+      color: var(--fg-dim);
+      transition: color 0.15s;
+    }
+    .lb-nav-links a:hover { color: var(--fg); }
+    .lb-nav-links a.ext { color: var(--fg-mute); }
+    .lb-nav-links a.ext:hover { color: var(--fg-dim); }
+    .lb-nav-cta { margin-left: 8px; }
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      padding: 6px;
+      border-radius: 4px;
+    }
+    .hamburger span {
+      display: block;
+      width: 20px;
+      height: 2px;
+      background: var(--fg-dim);
+      border-radius: 2px;
+      transition: background 0.15s;
+    }
+    .hamburger:hover span { background: var(--fg); }
+    .lb-mobile-menu {
+      display: none;
+      flex-direction: column;
+      gap: 0;
+      background: var(--bg-raised);
+      border-top: 1px solid var(--line);
+      padding: 8px 0;
+    }
+    .lb-mobile-menu.open { display: flex; }
+    .lb-mobile-menu a {
+      display: block;
+      padding: 12px 24px;
+      font-size: 0.9rem;
+      color: var(--fg-dim);
+      border-bottom: 1px solid var(--line-soft);
+      transition: color 0.15s, background 0.15s;
+    }
+    .lb-mobile-menu a:hover { color: var(--fg); background: var(--bg-inset); }
+    .lb-mobile-menu a:last-child { border-bottom: none; }
+
+    /* ── Hero ───────────────────────────────────────────────────────────── */
+    .lb-hero {
+      text-align: center;
+      padding: calc(var(--pad-y) * 1.5) 0 var(--pad-y);
+    }
+    .lb-hero-tag { margin-bottom: 28px; }
+    .lb-hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+      max-width: 780px;
+      margin: 0 auto 20px;
+      color: var(--fg);
+    }
+    .lb-hero h1 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .lb-hero-sub {
+      font-size: 1.05rem;
+      color: var(--fg-dim);
+      max-width: 620px;
+      margin: 0 auto 36px;
+      line-height: 1.7;
+    }
+    .lb-hero-ctas {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 36px;
+    }
+    .lb-hero-meta {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .lb-hero-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--fg-mute);
+    }
+    .lb-hero-meta-item::before {
+      content: '';
+      display: block;
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: var(--line);
+      flex-shrink: 0;
+    }
+    .lb-hero-meta-item:first-child::before { display: none; }
+
+    /* ── Architecture ───────────────────────────────────────────────────── */
+    .lb-arch {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .arch-box {
+      width: 100%;
+      background: var(--bg-raised);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+      position: relative;
+    }
+    .arch-box-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: var(--accent);
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .arch-box-name {
+      font-family: var(--mono);
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--fg);
+      margin-bottom: 10px;
+    }
+    .arch-box-detail {
+      font-size: 0.78rem;
+      color: var(--fg-dim);
+      line-height: 1.5;
+    }
+    .arch-box-detail span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--fg-mute);
+      margin: 3px 3px 0 0;
+    }
+    .arch-pipe {
+      font-family: var(--mono);
+      font-size: 1.4rem;
+      color: var(--line);
+      line-height: 1;
+      padding: 4px 0;
+      user-select: none;
+    }
+    .arch-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      width: 100%;
+    }
+    .arch-row .arch-box {
+      padding: 14px 16px;
+    }
+    .arch-row .arch-box-name {
+      font-size: 0.82rem;
+      margin-bottom: 6px;
+    }
+    .arch-row .arch-box-detail {
+      font-size: 0.7rem;
+    }
+
+    /* ── Features ───────────────────────────────────────────────────────── */
+    .lb-features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      background: var(--line-soft);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .feat-item {
+      background: var(--bg);
+      padding: 28px 28px;
+      position: relative;
+    }
+    .feat-item:hover {
+      background: var(--bg-raised);
+    }
+    .feat-num {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.06em;
+      margin-bottom: 12px;
+    }
+    .feat-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--fg);
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+    .feat-desc {
+      font-size: 0.82rem;
+      color: var(--fg-dim);
+      line-height: 1.6;
+    }
+
+    /* ── Security ───────────────────────────────────────────────────────── */
+    .lb-security-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .sec-item {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      gap: 20px;
+      align-items: start;
+      padding: 22px 24px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--bg);
+      transition: background 0.15s;
+    }
+    .sec-item:last-child { border-bottom: none; }
+    .sec-item:hover { background: var(--bg-raised); }
+    .sec-id {
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+      padding-top: 1px;
+    }
+    .sec-content {}
+    .sec-title {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--fg);
+      margin-bottom: 4px;
+    }
+    .sec-note {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--fg-mute);
+    }
+    .sec-note code {
+      background: var(--bg-inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.7rem;
+      color: var(--fg-dim);
+    }
+
+    /* ── Terminal ───────────────────────────────────────────────────────── */
+    .term {
+      background: var(--bg-inset);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .term-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--bg-raised);
+    }
+    .term-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--line);
+    }
+    .term-dot:nth-child(1) { background: oklch(0.65 0.2 25); }
+    .term-dot:nth-child(2) { background: oklch(0.72 0.18 85); }
+    .term-dot:nth-child(3) { background: oklch(0.65 0.18 140); }
+    .term-title {
+      margin-left: 8px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--fg-mute);
+    }
+    .term-body {
+      padding: 20px 24px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.8;
+      color: var(--fg-dim);
+    }
+    .term-body .p { color: var(--ok); user-select: none; }
+    .term-body .c { color: var(--fg); }
+    .term-body .mu { color: var(--fg-mute); }
+    .term-body .ok { color: var(--ok); }
+    .term-body .warn { color: var(--warn); }
+    .term-line { display: block; }
+    .term-cursor {
+      display: inline-block;
+      width: 8px; height: 14px;
+      background: var(--accent);
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── FAQ ────────────────────────────────────────────────────────────── */
+    .lb-faq {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .lb-faq details {
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--bg);
+      transition: background 0.15s;
+    }
+    .lb-faq details:last-child { border-bottom: none; }
+    .lb-faq details[open] { background: var(--bg-raised); }
+    .lb-faq summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 24px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--fg);
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      transition: color 0.15s;
+    }
+    .lb-faq summary::-webkit-details-marker { display: none; }
+    .lb-faq summary:hover { color: var(--accent); }
+    .faq-icon {
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      color: var(--fg-mute);
+      flex-shrink: 0;
+      transition: transform 0.2s, color 0.15s;
+      line-height: 1;
+    }
+    .lb-faq details[open] .faq-icon {
+      transform: rotate(45deg);
+      color: var(--accent);
+    }
+    .faq-body {
+      padding: 0 24px 20px;
+      font-size: 0.85rem;
+      color: var(--fg-dim);
+      line-height: 1.7;
+    }
+    .faq-body code {
+      font-family: var(--mono);
+      background: var(--bg-inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.78rem;
+      color: var(--fg);
+    }
+
+    /* ── CTA Strip ──────────────────────────────────────────────────────── */
+    .lb-cta-strip {
+      text-align: center;
+      background: var(--bg-raised);
+      border-top: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+      padding: var(--pad-y) 0;
+    }
+    .lb-cta-strip h2 {
+      font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      margin-bottom: 14px;
+      color: var(--fg);
+    }
+    .lb-cta-strip p {
+      font-size: 0.92rem;
+      color: var(--fg-dim);
+      max-width: 520px;
+      margin: 0 auto 32px;
+      line-height: 1.7;
+    }
+    .lb-cta-btns {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────────────── */
+    .lb-footer {
+      padding: 32px 0;
+      border-top: 1px solid var(--line-soft);
+    }
+    .lb-footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .lb-footer-right {
+      font-size: 0.78rem;
+      color: var(--fg-mute);
+      font-family: var(--mono);
+    }
+    .lb-footer-right a {
+      color: var(--fg-dim);
+      transition: color 0.15s;
+    }
+    .lb-footer-right a:hover { color: var(--accent); }
+
+    /* ── Tweaks Panel ───────────────────────────────────────────────────── */
+    .tweaks-toggle {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 200;
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      background: var(--bg-raised);
+      border: 1px solid var(--line);
+      color: var(--fg-mute);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      box-shadow: 0 2px 12px oklch(0 0 0 / 0.25);
+    }
+    .tweaks-toggle:hover { background: var(--bg-inset); color: var(--fg); border-color: var(--accent); }
+    .tweaks-panel {
+      position: fixed;
+      bottom: 72px;
+      right: 24px;
+      z-index: 200;
+      background: var(--bg-raised);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      min-width: 220px;
+      box-shadow: 0 8px 32px oklch(0 0 0 / 0.35);
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .tweaks-panel.open { display: flex; }
+    .tweaks-group-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--fg-mute);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .tweaks-chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .chip {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--line);
+      background: var(--bg-inset);
+      color: var(--fg-dim);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .chip:hover { border-color: var(--accent); color: var(--fg); }
+    .chip.active {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: transparent;
+    }
+    .swatch {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s;
+      outline: none;
+    }
+    .swatch:hover { transform: scale(1.15); }
+    .swatch.active { border-color: var(--fg); }
+    .swatch-amber  { background: oklch(0.76 0.18 45); }
+    .swatch-cyan   { background: oklch(0.78 0.14 200); }
+    .swatch-lime   { background: oklch(0.86 0.18 130); }
+    .swatch-violet { background: oklch(0.72 0.17 295); }
+    .swatch-rose   { background: oklch(0.74 0.17 15); }
+    .tweaks-swatches { display: flex; gap: 8px; align-items: center; }
+
+    /* ── Responsive ─────────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      :root { --pad-x: 20px; --pad-y: 48px; }
+      [data-density="airy"]    { --pad-x: 24px; --pad-y: 56px; }
+      [data-density="balanced"]{ --pad-x: 20px; --pad-y: 48px; }
+      [data-density="compact"] { --pad-x: 16px; --pad-y: 32px; }
+
+      .lb-nav-links { display: none; }
+      .lb-nav-cta { display: none; }
+      .hamburger { display: flex; }
+
+      .lb-hero { padding: 48px 0 40px; }
+      .lb-hero h1 { font-size: 2rem; }
+      .lb-hero-sub { font-size: 0.92rem; }
+      .lb-hero-ctas { flex-direction: column; }
+      .lb-hero-ctas .btn { width: 100%; justify-content: center; }
+
+      .kicker { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .kicker-sep { display: none; }
+      .kicker-title { font-size: 1.3rem; }
+
+      .lb-features-grid { grid-template-columns: 1fr; }
+
+      .arch-row { grid-template-columns: 1fr; }
+
+      .sec-item { grid-template-columns: 44px 1fr; gap: 12px; }
+      .sec-id { font-size: 1rem; }
+
+      .lb-cta-strip h2 { font-size: 1.6rem; }
+      .lb-cta-btns { flex-direction: column; }
+      .lb-cta-btns .btn { width: 100%; justify-content: center; }
+
+      .lb-footer-inner { flex-direction: column; align-items: flex-start; gap: 12px; }
+
+      .tweaks-panel { right: 12px; bottom: 68px; }
+      .tweaks-toggle { right: 12px; bottom: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="lb-nav">
+    <div class="lb-nav-inner">
+      <a href="/" class="mark"><span class="bracket">[</span>svkexe<span class="bracket">]</span></a>
+      <ul class="lb-nav-links">
+        <li><a href="#features">Product</a></li>
+        <li><a href="#quickstart">Docs</a></li>
+        <li><a href="#changelog">Changelog</a></li>
+        <li><a href="https://github.com/skrashevich/svkexe" target="_blank" rel="noopener" class="ext">GitHub ↗</a></li>
+      </ul>
+      <a href="https://github.com/skrashevich/svkexe/releases" class="btn btn-primary btn-sm lb-nav-cta">Install →</a>
+      <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+    <div class="lb-mobile-menu" id="mobileMenu">
+      <a href="#features">Product</a>
+      <a href="#quickstart">Docs</a>
+      <a href="#changelog">Changelog</a>
+      <a href="https://github.com/skrashevich/svkexe" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/skrashevich/svkexe/releases">Install →</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="lb-hero section">
+    <div class="container">
+      <div class="lb-hero-tag">
+        <span class="tag"><span class="dot"></span>v0.1 — self-hostable today</span>
+      </div>
+      <h1>A dev platform that lives on <em>your</em> server.</h1>
+      <p class="lb-hero-sub">Persistent Linux VMs with an AI coding agent inside each one. Spin them up from a dashboard, ssh in, and code. The whole stack is three Go binaries and a Caddyfile.</p>
+      <div class="lb-hero-ctas">
+        <a href="https://github.com/skrashevich/svkexe/releases" class="btn btn-primary">Get the binary</a>
+        <a href="#architecture" class="btn btn-outline">Read the architecture</a>
+      </div>
+      <div class="lb-hero-meta">
+        <span class="lb-hero-meta-item">Go · SQLite · Incus</span>
+        <span class="lb-hero-meta-item">Apache 2.0</span>
+        <span class="lb-hero-meta-item">single-binary deploy</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="section" id="architecture">
+    <div class="container">
+      <div class="kicker">
+        <span class="kicker-label">Architecture</span>
+        <span class="kicker-sep"></span>
+        <span class="kicker-title">Three services. Zero surprises.</span>
+      </div>
+      <div class="lb-arch">
+
+        <div class="arch-box">
+          <div class="arch-box-label">Edge</div>
+          <div class="arch-box-name">Caddy</div>
+          <div class="arch-box-detail">
+            <span>wildcard TLS</span>
+            <span>header strip/inject</span>
+            <span>Authelia forward_auth</span>
+          </div>
+        </div>
+
+        <div class="arch-pipe">│</div>
+
+        <div class="arch-box">
+          <div class="arch-box-label">Control Plane</div>
+          <div class="arch-box-name">Go Gateway</div>
+          <div class="arch-box-detail">
+            <span>user → container ownership check</span>
+            <span>SQLite (WAL)</span>
+            <span>ContainerRuntime</span>
+          </div>
+        </div>
+
+        <div class="arch-pipe">│</div>
+
+        <div class="arch-box" style="background: transparent; border-color: var(--line-soft);">
+          <div class="arch-box-label" style="color: var(--fg-mute);">Incus · LXC</div>
+          <div class="arch-row" style="margin-top: 8px;">
+            <div class="arch-box">
+              <div class="arch-box-name">box-01</div>
+              <div class="arch-box-detail">
+                <span>systemd</span>
+                <span>shelley :9000</span>
+              </div>
+            </div>
+            <div class="arch-box">
+              <div class="arch-box-name">box-02</div>
+              <div class="arch-box-detail">
+                <span>systemd</span>
+                <span>shelley :9000</span>
+              </div>
+            </div>
+            <div class="arch-box">
+              <div class="arch-box-name">box-N</div>
+              <div class="arch-box-detail">
+                <span>systemd</span>
+                <span>shelley :9000</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="kicker">
+        <span class="kicker-label">Features</span>
+        <span class="kicker-sep"></span>
+        <span class="kicker-title">Built for people who host their own things.</span>
+      </div>
+      <div class="lb-features-grid">
+
+        <div class="feat-item">
+          <div class="feat-num">01</div>
+          <div class="feat-title">Persistent by design</div>
+          <p class="feat-desc">Boxes live on ZFS datasets. Power cycle the host, reboot containers — your work is exactly where you left it. No ephemeral filesystem nonsense.</p>
+        </div>
+
+        <div class="feat-item">
+          <div class="feat-num">02</div>
+          <div class="feat-title">AI agent per box</div>
+          <p class="feat-desc">Shelley runs inside each container on <code class="mono" style="font-size:0.78rem;">:9000</code>. It has full filesystem access to that container and nothing else. Your context, your CPU, your data.</p>
+        </div>
+
+        <div class="feat-item">
+          <div class="feat-num">03</div>
+          <div class="feat-title">Ownership enforced at the edge</div>
+          <p class="feat-desc">The gateway checks user→container mapping on every single proxy request. No amount of clever URL crafting gets you into someone else's box.</p>
+        </div>
+
+        <div class="feat-item">
+          <div class="feat-num">04</div>
+          <div class="feat-title">One-command backups</div>
+          <p class="feat-desc">Incus snapshots + SQLite dump, scripted to run on a cron. Restore to any point in time. No proprietary backup format, no cloud dependency.</p>
+        </div>
+
+        <div class="feat-item">
+          <div class="feat-num">05</div>
+          <div class="feat-title">Ships as one Go binary</div>
+          <p class="feat-desc">Gateway, dashboard, and SSH menu are the same process. Copy it to the server, drop a systemd unit, done. No node_modules, no Python runtime, no Docker-in-Docker.</p>
+        </div>
+
+        <div class="feat-item">
+          <div class="feat-num">06</div>
+          <div class="feat-title">Actually small</div>
+          <p class="feat-desc">~100 boxes on 64 GB RAM at idle. Containers share the host kernel. You're paying for what you use, not what the orchestrator hoards.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Security -->
+  <section class="section" id="security">
+    <div class="container">
+      <div class="kicker">
+        <span class="kicker-label">Security</span>
+        <span class="kicker-sep"></span>
+        <span class="kicker-title">Five invariants. Enforced at the edge.</span>
+      </div>
+      <div class="lb-security-list">
+
+        <div class="sec-item">
+          <div class="sec-id">S1</div>
+          <div class="sec-content">
+            <div class="sec-title">All incoming X-ExeDev-* headers are stripped.</div>
+            <div class="sec-note"><code>Caddy request_header -X-ExeDev-*</code></div>
+          </div>
+        </div>
+
+        <div class="sec-item">
+          <div class="sec-id">S2</div>
+          <div class="sec-content">
+            <div class="sec-title">user_id → container_id verified before every proxy.</div>
+            <div class="sec-note"><code>Gateway middleware</code></div>
+          </div>
+        </div>
+
+        <div class="sec-item">
+          <div class="sec-id">S3</div>
+          <div class="sec-content">
+            <div class="sec-title">Route denied to foreign workspace even on known hostname.</div>
+            <div class="sec-note"><code>Ownership check</code></div>
+          </div>
+        </div>
+
+        <div class="sec-item">
+          <div class="sec-id">S4</div>
+          <div class="sec-content">
+            <div class="sec-title">Shelley is not a multi-tenancy boundary. The LXC container is.</div>
+            <div class="sec-note">Architectural decision</div>
+          </div>
+        </div>
+
+        <div class="sec-item">
+          <div class="sec-id">S5</div>
+          <div class="sec-content">
+            <div class="sec-title">LLM keys isolated per container, unique tmpfs path.</div>
+            <div class="sec-note"><code>Read-only mount</code></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Quickstart -->
+  <section class="section" id="quickstart">
+    <div class="container">
+      <div class="kicker">
+        <span class="kicker-label">Quickstart</span>
+        <span class="kicker-sep"></span>
+        <span class="kicker-title">From bare metal to first box in ten minutes.</span>
+      </div>
+      <div class="term">
+        <div class="term-bar">
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <span class="term-title">bash — 80×24</span>
+        </div>
+        <div class="term-body">
+          <span class="term-line"><span class="mu"># 1. Download the binary</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">curl -fsSL https://github.com/skrashevich/svkexe/releases/latest/download/svkexe-linux-amd64 -o svkexe</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">chmod +x svkexe && sudo mv svkexe /usr/local/bin/</span></span>
+          <span class="term-line">&nbsp;</span>
+          <span class="term-line"><span class="mu"># 2. Bootstrap the database and config</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">svkexe init --data /var/lib/svkexe</span></span>
+          <span class="term-line"><span class="ok">✓ SQLite WAL database created at /var/lib/svkexe/svkexe.db</span></span>
+          <span class="term-line"><span class="ok">✓ Default Caddyfile written to /var/lib/svkexe/Caddyfile</span></span>
+          <span class="term-line">&nbsp;</span>
+          <span class="term-line"><span class="mu"># 3. Start the gateway</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">sudo systemctl enable --now svkexe</span></span>
+          <span class="term-line"><span class="ok">✓ svkexe.service active (running)</span></span>
+          <span class="term-line">&nbsp;</span>
+          <span class="term-line"><span class="mu"># 4. Create your first box</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">svkexe box create --name dev-01 --image ubuntu/24.04</span></span>
+          <span class="term-line"><span class="ok">✓ box-01 created  (shelley :9000 ready in ~8s)</span></span>
+          <span class="term-line">&nbsp;</span>
+          <span class="term-line"><span class="mu"># 5. SSH in</span></span>
+          <span class="term-line"><span class="p">$</span> <span class="c">svkexe ssh dev-01</span></span>
+          <span class="term-line"><span class="ok">Connecting to dev-01 via shelley...</span></span>
+          <span class="term-line"><span class="c">root@dev-01:~# <span class="term-cursor"></span></span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="container">
+      <div class="kicker">
+        <span class="kicker-label">FAQ</span>
+        <span class="kicker-sep"></span>
+        <span class="kicker-title">Questions you'd probably ask first.</span>
+      </div>
+      <div class="lb-faq">
+
+        <details>
+          <summary>
+            How is this different from a VPS?
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-body">
+            A VPS is a single VM you rent. svkexe lets you run <em>many</em> containers on hardware you own, with an AI coding agent pre-installed in each one and a shared control plane that handles routing, auth, and ownership. You get the multi-tenant ergonomics of a cloud platform without the cloud bill or the lock-in.
+          </div>
+        </details>
+
+        <details>
+          <summary>
+            Does it require Kubernetes or Docker?
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-body">
+            No. svkexe uses <code>Incus</code> (the community fork of LXD) to manage LXC containers. There is no Docker daemon, no container registry pull, and definitely no Kubernetes. The runtime dependency is Incus + a ZFS pool. That's it.
+          </div>
+        </details>
+
+        <details>
+          <summary>
+            What does "Shelley" do exactly?
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-body">
+            Shelley is a small Go process that runs inside each container on port <code>:9000</code>. It exposes a WebSocket interface for the AI coding agent, handles file reads/writes, and proxies terminal sessions. It is scoped entirely to that container's filesystem — it has no network reach outside the LXC boundary.
+          </div>
+        </details>
+
+        <details>
+          <summary>
+            Can I bring my own LLM provider?
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-body">
+            Yes. Shelley reads its provider config from a <code>tmpfs</code> mount at a path unique to each container (invariant S5). You can configure OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint. Keys never touch the gateway process and are never stored in SQLite.
+          </div>
+        </details>
+
+        <details>
+          <summary>
+            Is there a hosted version?
+            <span class="faq-icon">+</span>
+          </summary>
+          <div class="faq-body">
+            Not currently. The entire point of svkexe is that it runs on <em>your</em> server. There are no SaaS dependencies in the critical path — no auth cloud, no telemetry endpoint, no license server. If you want hosted, rent a bare-metal server and run this on it.
+          </div>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Strip -->
+  <section class="lb-cta-strip">
+    <div class="container">
+      <h2>Self-host it this weekend.</h2>
+      <p>It's a single Go binary, a Caddyfile, and a wildcard DNS record. No SaaS in the critical path.</p>
+      <div class="lb-cta-btns">
+        <a href="https://github.com/skrashevich/svkexe/releases" class="btn btn-primary">Get the binary</a>
+        <a href="https://github.com/skrashevich/svkexe" target="_blank" rel="noopener" class="btn btn-outline">&#9733; on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="lb-footer">
+    <div class="container">
+      <div class="lb-footer-inner">
+        <a href="/" class="mark"><span class="bracket">[</span>svkexe<span class="bracket">]</span></a>
+        <div class="lb-footer-right">
+          Apache 2.0 · <a href="https://github.com/skrashevich/svkexe" target="_blank" rel="noopener">github.com/skrashevich/svkexe</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Tweaks Panel -->
+  <button class="tweaks-toggle" id="tweaksToggle" aria-label="Open tweaks panel" title="Tweaks">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" fill="currentColor"/>
+      <path fill-rule="evenodd" clip-rule="evenodd" d="M8 0a.75.75 0 0 1 .75.75V2.1a5.975 5.975 0 0 1 2.06.854l.955-.955a.75.75 0 1 1 1.06 1.06l-.954.956A5.975 5.975 0 0 1 12.725 6H14a.75.75 0 0 1 0 1.5h-1.275a5.975 5.975 0 0 1-.854 2.061l.954.955a.75.75 0 1 1-1.06 1.06l-.956-.954A5.975 5.975 0 0 1 8.75 11.9v1.35a.75.75 0 0 1-1.5 0V11.9a5.975 5.975 0 0 1-2.061-.853l-.955.954a.75.75 0 1 1-1.06-1.06l.954-.956A5.975 5.975 0 0 1 3.274 7.5H2a.75.75 0 0 1 0-1.5h1.275a5.975 5.975 0 0 1 .853-2.06l-.954-.956a.75.75 0 1 1 1.06-1.06l.956.954A5.975 5.975 0 0 1 7.25 2.1V.75A.75.75 0 0 1 8 0Z" fill="currentColor"/>
+    </svg>
+  </button>
+
+  <div class="tweaks-panel" id="tweaksPanel" role="dialog" aria-label="Tweaks panel">
+    <div>
+      <div class="tweaks-group-label">Theme</div>
+      <div class="tweaks-chips">
+        <button class="chip active" data-tweaks-theme="dark">Dark</button>
+        <button class="chip" data-tweaks-theme="light">Light</button>
+      </div>
+    </div>
+    <div>
+      <div class="tweaks-group-label">Accent</div>
+      <div class="tweaks-swatches">
+        <button class="swatch swatch-amber active" data-tweaks-accent="amber" title="Amber" aria-label="Amber accent"></button>
+        <button class="swatch swatch-cyan" data-tweaks-accent="cyan" title="Cyan" aria-label="Cyan accent"></button>
+        <button class="swatch swatch-lime" data-tweaks-accent="lime" title="Lime" aria-label="Lime accent"></button>
+        <button class="swatch swatch-violet" data-tweaks-accent="violet" title="Violet" aria-label="Violet accent"></button>
+        <button class="swatch swatch-rose" data-tweaks-accent="rose" title="Rose" aria-label="Rose accent"></button>
+      </div>
+    </div>
+    <div>
+      <div class="tweaks-group-label">Density</div>
+      <div class="tweaks-chips">
+        <button class="chip" data-tweaks-density="compact">Compact</button>
+        <button class="chip active" data-tweaks-density="balanced">Balanced</button>
+        <button class="chip" data-tweaks-density="airy">Airy</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const html = document.documentElement;
+
+      /* ── Tweaks panel toggle ─────────────────────────────────────────── */
+      const toggleBtn = document.getElementById('tweaksToggle');
+      const panel = document.getElementById('tweaksPanel');
+
+      toggleBtn.addEventListener('click', function () {
+        const isOpen = panel.classList.toggle('open');
+        toggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+
+      document.addEventListener('click', function (e) {
+        if (!panel.contains(e.target) && e.target !== toggleBtn) {
+          panel.classList.remove('open');
+          toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+      });
+
+      /* ── Theme ───────────────────────────────────────────────────────── */
+      panel.querySelectorAll('[data-tweaks-theme]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const val = btn.dataset.tweaksTheme;
+          html.dataset.theme = val;
+          panel.querySelectorAll('[data-tweaks-theme]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.tweaksTheme === val);
+          });
+        });
+      });
+
+      /* ── Accent ──────────────────────────────────────────────────────── */
+      panel.querySelectorAll('[data-tweaks-accent]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const val = btn.dataset.tweaksAccent;
+          if (val === 'amber') {
+            delete html.dataset.accent;
+          } else {
+            html.dataset.accent = val;
+          }
+          panel.querySelectorAll('[data-tweaks-accent]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.tweaksAccent === val);
+          });
+        });
+      });
+
+      /* ── Density ─────────────────────────────────────────────────────── */
+      panel.querySelectorAll('[data-tweaks-density]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const val = btn.dataset.tweaksDensity;
+          html.dataset.density = val;
+          panel.querySelectorAll('[data-tweaks-density]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.tweaksDensity === val);
+          });
+        });
+      });
+
+      /* ── Mobile hamburger ────────────────────────────────────────────── */
+      const hamburger = document.getElementById('hamburger');
+      const mobileMenu = document.getElementById('mobileMenu');
+
+      hamburger.addEventListener('click', function () {
+        const isOpen = mobileMenu.classList.toggle('open');
+        hamburger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+
+      mobileMenu.querySelectorAll('a').forEach(function (link) {
+        link.addEventListener('click', function () {
+          mobileMenu.classList.remove('open');
+          hamburger.setAttribute('aria-expanded', 'false');
+        });
+      });
+
+    }());
+  </script>
+
+</body>
+</html>

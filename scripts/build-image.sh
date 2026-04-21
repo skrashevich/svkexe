@@ -132,15 +132,18 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
 
 log "Cloning and building Shelley from github.com/boldsoftware/shelley…"
 incus exec "${CONTAINER_NAME}" -- bash -c "
+    set -euo pipefail
     export PATH=\$PATH:/usr/local/go/bin
     export HOME=/root
+    export GOTOOLCHAIN=auto
 
-    # Fetch latest release tag
+    # Fetch latest release tag (tags like v0.423.943344423 are valid semver).
     SHELLEY_TAG=\$(
         git ls-remote --tags https://github.com/boldsoftware/shelley.git \
         | grep -oP 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+\$' \
         | sort -V | tail -1 | sed 's|refs/tags/||'
     )
+    [ -n \"\${SHELLEY_TAG}\" ] || { echo 'ERROR: no release tag found for Shelley' >&2; exit 1; }
     echo \"Pinning Shelley to \${SHELLEY_TAG}\"
 
     rm -rf /tmp/shelley
@@ -148,11 +151,29 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
         https://github.com/boldsoftware/shelley.git /tmp/shelley
 
     cd /tmp/shelley
-    go build -ldflags '-s -w' -o /usr/local/bin/shelley .
+
+    # Shelley's main package may live at the repo root or in cmd/shelley/ —
+    # autodetect. If neither, scan for the first package-main directory.
+    BUILD_DIR=''
+    if grep -qsE '^package main' *.go 2>/dev/null; then
+        BUILD_DIR='.'
+    elif [ -d cmd/shelley ]; then
+        BUILD_DIR='./cmd/shelley'
+    else
+        CAND=\$(grep -rlE '^package main' --include='*.go' . 2>/dev/null | head -1 || true)
+        if [ -n \"\${CAND}\" ]; then
+            BUILD_DIR=\"./\$(dirname \"\${CAND}\")\"
+        fi
+    fi
+    [ -n \"\${BUILD_DIR}\" ] || { echo 'ERROR: no main package found in Shelley repo' >&2; ls -la; exit 1; }
+    echo \"Building Shelley from \${BUILD_DIR}\"
+
+    go build -ldflags '-s -w' -o /usr/local/bin/shelley \"\${BUILD_DIR}\"
     chmod 755 /usr/local/bin/shelley
+    [ -x /usr/local/bin/shelley ] || { echo 'ERROR: shelley binary missing after build' >&2; exit 1; }
     rm -rf /tmp/shelley
 
-    echo \"Shelley installed: \$(/usr/local/bin/shelley --version 2>&1 || true)\"
+    echo \"Shelley installed: \$(/usr/local/bin/shelley --version 2>&1 || echo 'no --version flag')\"
 "
 
 # ── Create Shelley environment file ─────────────────────────────────────────

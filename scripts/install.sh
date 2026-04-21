@@ -382,16 +382,21 @@ fi
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     log "Building gateway binary…"
-    if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" &>/dev/null; then
-        # Let the operator's user own the module cache.
-        chown -R "${TARGET_USER}":"${TARGET_USER}" "${REPO_ROOT}" 2>/dev/null || true
-        sudo -u "${TARGET_USER}" -H bash -lc "cd '${REPO_ROOT}' && PATH='${GO_INSTALL_DIR}/bin:\$PATH' make build"
-    else
-        ( cd "${REPO_ROOT}" && make build )
-    fi
+    # Run as root with explicit PATH — sudo -u stripping user env was breaking
+    # `make` resolution. Module cache goes under /root/go; fine for a one-shot
+    # server install.
+    env \
+        PATH="${GO_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        HOME="/root" \
+        make -C "${REPO_ROOT}" build
 
     log "Installing binary to ${INSTALL_PREFIX}/bin/${BIN_NAME}…"
     install -m 0755 "${REPO_ROOT}/bin/gateway" "${INSTALL_PREFIX}/bin/${BIN_NAME}"
+
+    if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" &>/dev/null; then
+        # Let the operator's user own the checkout so future manual builds work.
+        chown -R "${TARGET_USER}":"${TARGET_USER}" "${REPO_ROOT}" 2>/dev/null || true
+    fi
 else
     log "SKIP_BUILD=1 — skipping gateway build."
 fi

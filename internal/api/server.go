@@ -62,6 +62,12 @@ func (s *Server) buildRouter() chi.Router {
 
 	// Unauthenticated endpoints. Keep these before the auth middleware is
 	// mounted — order matters for chi.
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		// Dashboard is behind auth; the auth middleware redirects to /login
+		// for unauthenticated browsers, so a single hop lands everyone on the
+		// right screen.
+		http.Redirect(w, r, "/dashboard/", http.StatusSeeOther)
+	})
 	r.Get("/login", s.loginGet)
 	r.Get("/logout", s.logoutPost)
 	r.Get("/register", s.registerGet)

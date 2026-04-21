@@ -474,12 +474,18 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
+# /run/shelley is managed by systemd: created on start, cleaned on stop,
+# owned by the service user. Avoids the 226/NAMESPACE failure that happens
+# when ReadWritePaths references a non-existent directory.
+RuntimeDirectory=shelley
+RuntimeDirectoryMode=0750
+
 # Hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${DATA_DIR} /run/shelley
+ReadWritePaths=${DATA_DIR}
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

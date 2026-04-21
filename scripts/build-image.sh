@@ -130,6 +130,16 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
 
 # ── Build and install Shelley ────────────────────────────────────────────────
 
+log "Installing pnpm (needed by Shelley's UI build) and python3…"
+incus exec "${CONTAINER_NAME}" -- bash -c "
+    set -euo pipefail
+    # Corepack ships with the NodeSource node package; activate the pnpm
+    # shim so Shelley's Makefile (\`pnpm install && pnpm run build\`) works.
+    corepack enable
+    corepack prepare pnpm@latest --activate
+    apt-get install -y --no-install-recommends python3 ca-certificates
+"
+
 log "Cloning and building Shelley from github.com/boldsoftware/shelley…"
 incus exec "${CONTAINER_NAME}" -- bash -c "
     set -euo pipefail
@@ -137,7 +147,6 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
     export HOME=/root
     export GOTOOLCHAIN=auto
 
-    # Fetch latest release tag (tags like v0.423.943344423 are valid semver).
     SHELLEY_TAG=\$(
         git ls-remote --tags https://github.com/boldsoftware/shelley.git \
         | grep -oP 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+\$' \
@@ -152,25 +161,19 @@ incus exec "${CONTAINER_NAME}" -- bash -c "
 
     cd /tmp/shelley
 
-    # Shelley's main package may live at the repo root or in cmd/shelley/ —
-    # autodetect. If neither, scan for the first package-main directory.
-    BUILD_DIR=''
-    if grep -qsE '^package main' *.go 2>/dev/null; then
-        BUILD_DIR='.'
-    elif [ -d cmd/shelley ]; then
-        BUILD_DIR='./cmd/shelley'
+    # Shelley's Makefile orchestrates UI build (pnpm) + template tarballs +
+    # go build. Prefer it — falling back to \`go build ./cmd/shelley\` would
+    # fail the //go:embed directives without the UI dist and template tarballs.
+    if [ -f Makefile ] && grep -qE '^build[[:space:]]*:' Makefile; then
+        echo 'Running Shelley make build…'
+        make build
     else
-        CAND=\$(grep -rlE '^package main' --include='*.go' . 2>/dev/null | head -1 || true)
-        if [ -n \"\${CAND}\" ]; then
-            BUILD_DIR=\"./\$(dirname \"\${CAND}\")\"
-        fi
+        echo 'Shelley Makefile has no build target — falling back to go build'
+        go build -ldflags '-s -w' -o bin/shelley ./cmd/shelley
     fi
-    [ -n \"\${BUILD_DIR}\" ] || { echo 'ERROR: no main package found in Shelley repo' >&2; ls -la; exit 1; }
-    echo \"Building Shelley from \${BUILD_DIR}\"
 
-    go build -ldflags '-s -w' -o /usr/local/bin/shelley \"\${BUILD_DIR}\"
-    chmod 755 /usr/local/bin/shelley
-    [ -x /usr/local/bin/shelley ] || { echo 'ERROR: shelley binary missing after build' >&2; exit 1; }
+    [ -x /tmp/shelley/bin/shelley ] || { echo 'ERROR: bin/shelley missing after Shelley build' >&2; exit 1; }
+    install -m 0755 /tmp/shelley/bin/shelley /usr/local/bin/shelley
     rm -rf /tmp/shelley
 
     echo \"Shelley installed: \$(/usr/local/bin/shelley --version 2>&1 || echo 'no --version flag')\"

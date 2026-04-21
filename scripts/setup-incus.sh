@@ -135,12 +135,7 @@ devices:
     path: /
     pool: ${POOL_NAME}
     type: disk
-    size: 20GB
-  data:
-    path: /data
-    pool: ${POOL_NAME}
-    type: disk
-    size: 10GB
+    size: 30GB
 EOF
 
 log ""

@@ -43,7 +43,7 @@ fi
 # ── Launch a fresh Ubuntu 24.04 container ───────────────────────────────────
 
 log "Launching build container '${CONTAINER_NAME}' from ubuntu:24.04…"
-incus launch images:ubuntu/24.04 "${CONTAINER_NAME}"
+incus launch images:ubuntu/24.04 "${CONTAINER_NAME}" --profile svkexe-default
 
 # Wait for cloud-init / network
 log "Waiting for container to be ready…"

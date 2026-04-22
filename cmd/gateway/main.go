@@ -139,18 +139,21 @@ func main() {
 			Models:        models,
 			InternalToken: llmInternalToken,
 		}
-		// Derive the LLM proxy URL for Shelley inside containers.
-		llmProxyURL := getenv("LLM_PROXY_URL", "")
-		if llmProxyURL == "" && domain != "" {
-			llmProxyURL = "https://" + domain + "/api/llm/v1"
-		}
-		if llmProxyURL != "" {
-			shelleyLLM = &shelley.LLMProxyConfig{
-				BaseURL: llmProxyURL,
-				Token:   llmInternalToken,
-			}
-		}
 		log.Printf("LLM proxy enabled with %d models", len(models))
+	}
+
+	// Derive the LLM proxy URL for Shelley inside containers.
+	// This is independent of OpenRouter — containers need it whenever
+	// the gateway exposes an LLM endpoint.
+	llmProxyURL := getenv("LLM_PROXY_URL", "")
+	if llmProxyURL == "" && domain != "" {
+		llmProxyURL = "https://" + domain + "/api/llm/v1"
+	}
+	if llmProxyURL != "" {
+		shelleyLLM = &shelley.LLMProxyConfig{
+			BaseURL: llmProxyURL,
+			Token:   llmInternalToken,
+		}
 	}
 
 	// Build API server and container proxy.

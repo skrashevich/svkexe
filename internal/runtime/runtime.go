@@ -44,6 +44,8 @@ type ExecInteractiveOpts struct {
 	IncusName string
 	// Command to run inside the container.
 	Command []string
+	// Env is an optional set of environment variables to pass to the command.
+	Env map[string]string
 	// Stdin is where the container reads input from.
 	Stdin io.Reader
 	// Stdout is where the container writes output to.

@@ -271,6 +271,7 @@ func (r *IncusRuntime) ExecInteractive(ctx context.Context, opts ExecInteractive
 		Interactive: true,
 		Width:       int(cols),
 		Height:      int(rows),
+		Environment: opts.Env,
 	}
 
 	// controlConn is set once the Control callback fires; protected by mu.

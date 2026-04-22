@@ -41,11 +41,12 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 	io.WriteString(sess, "Type \"help\" for available commands.\r\n\r\n")
 
 	ctx := sess.Context()
+	le := &lineEditor{}
 
 	for {
 		io.WriteString(sess, "svk ▶ ")
 
-		line, err := readLine(sess)
+		line, err := le.readLine(sess)
 		if err != nil {
 			return
 		}
@@ -379,9 +380,19 @@ func (s *Server) cmdSSH(ctx context.Context, sess gssh.Session, user *db.User, p
 		close(resizeCh)
 	}
 
+	env := map[string]string{}
+	if isPTY {
+		if ptyReq.Term != "" {
+			env["TERM"] = ptyReq.Term
+		} else {
+			env["TERM"] = "xterm-256color"
+		}
+	}
+
 	opts := runtime.ExecInteractiveOpts{
 		IncusName:   c.IncusName,
 		Command:     []string{"/bin/bash", "-l"},
+		Env:         env,
 		Stdin:       sess,
 		Stdout:      sess,
 		InitialCols: initialCols,
@@ -522,11 +533,42 @@ func formatGB(gb int) string {
 	return fmt.Sprintf("%dGB", gb)
 }
 
-// readLine reads a line of input from the SSH session with basic line editing
-// (backspace support). Returns the trimmed line on Enter, or error on EOF.
-func readLine(sess gssh.Session) (string, error) {
+// lineEditor provides line editing with command history for the SSH menu.
+type lineEditor struct {
+	history []string
+}
+
+// readLine reads a line of input with arrow-key navigation and command history.
+func (le *lineEditor) readLine(sess gssh.Session) (string, error) {
 	var buf []byte
+	pos := 0 // cursor position within buf
+	histIdx := len(le.history)
+	var savedLine []byte
 	b := make([]byte, 1)
+
+	// redraw rewrites the line from the start and repositions the cursor.
+	redraw := func() {
+		if pos > 0 {
+			fmt.Fprintf(sess, "\x1b[%dD", pos)
+		}
+		sess.Write(buf)
+		io.WriteString(sess, "\x1b[K")
+		if len(buf) > pos {
+			fmt.Fprintf(sess, "\x1b[%dD", len(buf)-pos)
+		}
+	}
+
+	// setLine replaces the buffer and moves cursor to end.
+	setLine := func(newBuf []byte) {
+		if pos > 0 {
+			fmt.Fprintf(sess, "\x1b[%dD", pos)
+		}
+		buf = newBuf
+		pos = len(buf)
+		sess.Write(buf)
+		io.WriteString(sess, "\x1b[K")
+	}
+
 	for {
 		_, err := sess.Read(b)
 		if err != nil {
@@ -536,26 +578,127 @@ func readLine(sess gssh.Session) (string, error) {
 		switch {
 		case ch == '\r' || ch == '\n':
 			io.WriteString(sess, "\r\n")
-			return strings.TrimSpace(string(buf)), nil
-		case ch == 127 || ch == 8: // backspace / delete
-			if len(buf) > 0 {
-				buf = buf[:len(buf)-1]
-				io.WriteString(sess, "\b \b")
+			line := strings.TrimSpace(string(buf))
+			if line != "" {
+				le.history = append(le.history, line)
 			}
+			return line, nil
+
+		case ch == 127 || ch == 8: // backspace
+			if pos > 0 {
+				buf = append(buf[:pos-1], buf[pos:]...)
+				pos--
+				redraw()
+			}
+
 		case ch == 3: // Ctrl-C
 			io.WriteString(sess, "^C\r\n")
 			return "", nil
+
 		case ch == 4: // Ctrl-D
 			if len(buf) == 0 {
 				io.WriteString(sess, "\r\n")
 				return "exit", nil
 			}
-		case ch == 0x1b: // ESC — consume escape sequence (e.g. arrow keys)
-			sess.Read(b) // '[' or other
-			sess.Read(b) // 'A'/'B'/'C'/'D' etc.
+
+		case ch == 1: // Ctrl-A — move to start
+			if pos > 0 {
+				fmt.Fprintf(sess, "\x1b[%dD", pos)
+				pos = 0
+			}
+
+		case ch == 5: // Ctrl-E — move to end
+			if pos < len(buf) {
+				fmt.Fprintf(sess, "\x1b[%dC", len(buf)-pos)
+				pos = len(buf)
+			}
+
+		case ch == 21: // Ctrl-U — clear line
+			if len(buf) > 0 {
+				if pos > 0 {
+					fmt.Fprintf(sess, "\x1b[%dD", pos)
+				}
+				io.WriteString(sess, "\x1b[K")
+				buf = nil
+				pos = 0
+			}
+
+		case ch == 0x1b: // ESC — parse escape sequence
+			if _, err := sess.Read(b); err != nil {
+				return "", err
+			}
+			if b[0] != '[' {
+				continue
+			}
+			if _, err := sess.Read(b); err != nil {
+				return "", err
+			}
+			switch b[0] {
+			case 'A': // Up arrow
+				if histIdx > 0 {
+					if histIdx == len(le.history) {
+						savedLine = make([]byte, len(buf))
+						copy(savedLine, buf)
+					}
+					histIdx--
+					setLine([]byte(le.history[histIdx]))
+				}
+			case 'B': // Down arrow
+				if histIdx < len(le.history) {
+					histIdx++
+					if histIdx == len(le.history) {
+						setLine(savedLine)
+					} else {
+						setLine([]byte(le.history[histIdx]))
+					}
+				}
+			case 'C': // Right arrow
+				if pos < len(buf) {
+					io.WriteString(sess, "\x1b[C")
+					pos++
+				}
+			case 'D': // Left arrow
+				if pos > 0 {
+					io.WriteString(sess, "\x1b[D")
+					pos--
+				}
+			case 'H': // Home
+				if pos > 0 {
+					fmt.Fprintf(sess, "\x1b[%dD", pos)
+					pos = 0
+				}
+			case 'F': // End
+				if pos < len(buf) {
+					fmt.Fprintf(sess, "\x1b[%dC", len(buf)-pos)
+					pos = len(buf)
+				}
+			case '3': // Delete key: \x1b[3~
+				if _, err := sess.Read(b); err != nil {
+					return "", err
+				}
+				if b[0] != '~' {
+					continue
+				}
+				if pos < len(buf) {
+					buf = append(buf[:pos], buf[pos+1:]...)
+					redraw()
+				}
+			}
+
 		case ch >= 32 && ch < 127: // printable ASCII
-			buf = append(buf, ch)
-			sess.Write([]byte{ch})
+			if pos == len(buf) {
+				buf = append(buf, ch)
+				pos++
+				sess.Write([]byte{ch})
+			} else {
+				buf = append(buf, 0)
+				copy(buf[pos+1:], buf[pos:])
+				buf[pos] = ch
+				pos++
+				// Write from new char to end, then move cursor back.
+				sess.Write(buf[pos-1:])
+				fmt.Fprintf(sess, "\x1b[%dD", len(buf)-pos)
+			}
 		}
 	}
 }

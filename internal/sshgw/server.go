@@ -1,7 +1,6 @@
 package sshgw
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -84,7 +83,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 }
 
 func (s *Server) connectToVM(sess gssh.Session, user *db.User, vmName string) {
-	ctx := context.Background()
+	ctx := sess.Context()
 
 	// Look up the container by incus name (or by name in DB).
 	containers, err := s.db.ListContainersByOwner(user.ID)
@@ -153,9 +152,19 @@ func (s *Server) connectToVM(sess gssh.Session, user *db.User, vmName string) {
 		cmd = []string{"/bin/bash", "-l"}
 	}
 
+	env := map[string]string{}
+	if isPTY {
+		if ptyReq.Term != "" {
+			env["TERM"] = ptyReq.Term
+		} else {
+			env["TERM"] = "xterm-256color"
+		}
+	}
+
 	opts := runtime.ExecInteractiveOpts{
 		IncusName:   target.IncusName,
 		Command:     cmd,
+		Env:         env,
 		Stdin:       sess,
 		Stdout:      sess,
 		InitialCols: initialCols,
@@ -168,6 +177,10 @@ func (s *Server) connectToVM(sess gssh.Session, user *db.User, vmName string) {
 		io.WriteString(sess.Stderr(), fmt.Sprintf("exec error: %v\n", err))
 		sess.Exit(1)
 		return
+	}
+	select {
+	case <-doneCh:
+	case <-ctx.Done():
 	}
 	sess.Exit(0)
 }

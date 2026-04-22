@@ -282,7 +282,7 @@ User=user
 Group=user
 WorkingDirectory=/home/user
 EnvironmentFile=/etc/shelley/env
-ExecStart=/usr/local/bin/shelley -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid --config /etc/shelley/shelley.json
+ExecStart=/usr/local/bin/shelley --config /etc/shelley/shelley.json -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid
 Restart=on-failure
 RestartSec=5
 

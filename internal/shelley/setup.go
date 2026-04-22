@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
@@ -34,14 +35,14 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
-	// Write shelley.json config so Shelley uses the gateway as its LLM backend.
+	// Write shelley.json config with llm_gateway and default_model.
 	shelleyCfg := map[string]string{}
 	if llmCfg != nil {
 		if llmCfg.BaseURL != "" {
 			shelleyCfg["llm_gateway"] = llmCfg.BaseURL
 		}
-		if llmCfg.DefaultModel != "" {
-			shelleyCfg["default_model"] = llmCfg.DefaultModel
+		if len(llmCfg.Models) > 0 {
+			shelleyCfg["default_model"] = llmCfg.Models[0]
 		}
 	}
 	cfgJSON, err := json.Marshal(shelleyCfg)
@@ -51,6 +52,30 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 	writeCfgCmd := []string{"sh", "-c", fmt.Sprintf("printf '%%s' %q > %s", string(cfgJSON), ConfigFilePath)}
 	if _, err := rt.Exec(ctx, incusName, writeCfgCmd); err != nil {
 		return fmt.Errorf("write shelley config: %w", err)
+	}
+
+	// Seed custom models into Shelley's SQLite database so they appear in the UI.
+	// Each model from OPENROUTER_MODELS is inserted as a custom model pointing
+	// to the gateway's LLM proxy endpoint. Uses INSERT OR REPLACE for idempotency.
+	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
+		var sqlStmts []string
+		for _, model := range llmCfg.Models {
+			// Derive display name from model ID: "anthropic/claude-sonnet-4" → "claude-sonnet-4"
+			displayName := model
+			if idx := strings.LastIndex(model, "/"); idx >= 0 {
+				displayName = model[idx+1:]
+			}
+			// All models go through the gateway's OpenAI-compatible endpoint.
+			stmt := fmt.Sprintf(
+				"INSERT OR REPLACE INTO models (model_id, display_name, provider_type, endpoint, api_key, model_name, max_tokens) VALUES ('svkexe-%s', '%s', 'openai', '%s', '%s', '%s', 200000);",
+				model, displayName, llmCfg.BaseURL, llmCfg.Token, model,
+			)
+			sqlStmts = append(sqlStmts, stmt)
+		}
+		seedSQL := strings.Join(sqlStmts, "\n")
+		seedCmd := []string{"sh", "-c", fmt.Sprintf("sqlite3 %s %q", DBPath, seedSQL)}
+		// Non-fatal: Shelley DB may not exist yet on first boot.
+		rt.Exec(ctx, incusName, seedCmd)
 	}
 
 	// Materialize per-user API keys to the gateway host, then push into the container.

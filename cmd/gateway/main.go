@@ -142,15 +142,16 @@ func main() {
 		llmProxyURL = "https://" + domain + "/api/llm/v1"
 	}
 	if llmProxyURL != "" {
-		// Use the first model from OPENROUTER_MODELS as Shelley's default.
-		defaultModel := ""
-		if models := strings.Split(openRouterModels, ","); len(models) > 0 {
-			defaultModel = strings.TrimSpace(models[0])
+		var models []string
+		for _, m := range strings.Split(openRouterModels, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				models = append(models, m)
+			}
 		}
 		shelleyLLM = &shelley.LLMProxyConfig{
-			BaseURL:      llmProxyURL,
-			Token:        llmInternalToken,
-			DefaultModel: defaultModel,
+			BaseURL: llmProxyURL,
+			Token:   llmInternalToken,
+			Models:  models,
 		}
 	}
 

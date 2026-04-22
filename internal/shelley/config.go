@@ -31,8 +31,8 @@ type LLMProxyConfig struct {
 	BaseURL string
 	// Token is the Bearer token Shelley uses to authenticate to the proxy.
 	Token string
-	// DefaultModel is the first model from OPENROUTER_MODELS (e.g. "anthropic/claude-sonnet-4").
-	DefaultModel string
+	// Models is the list of OpenRouter model IDs (e.g. ["anthropic/claude-sonnet-4", "openai/gpt-4o"]).
+	Models []string
 }
 
 // SystemdUnitContent returns the content of the systemd unit file for Shelley.
@@ -47,11 +47,11 @@ User=%s
 Group=%s
 WorkingDirectory=/home/%s
 EnvironmentFile=%s
-ExecStart=/usr/local/bin/shelley -db %s serve -port %d -require-header %s --config %s
+ExecStart=/usr/local/bin/shelley --config %s -db %s serve -port %d -require-header %s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, DBPath, Port, RequireHeader, ConfigFilePath)
+`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, ConfigFilePath, DBPath, Port, RequireHeader)
 }

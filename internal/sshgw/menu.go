@@ -704,6 +704,7 @@ func (le *lineEditor) readLine(sess gssh.Session) (string, error) {
 			if pos > 0 {
 				buf = append(buf[:pos-1], buf[pos:]...)
 				pos--
+				io.WriteString(sess, "\x1b[D") // sync screen cursor with new pos
 				redraw()
 			}
 

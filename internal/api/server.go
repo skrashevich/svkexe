@@ -97,6 +97,7 @@ func (s *Server) buildRouter() chi.Router {
 	// LLM proxy — token-based auth, not session-based.
 	if s.llmProxy != nil {
 		r.Post("/api/llm/v1/chat/completions", s.llmProxy.ServeHTTP)
+		r.Get("/api/llm/v1/models", s.llmProxy.ServeModels)
 	}
 
 	// Everything below requires a valid session cookie.

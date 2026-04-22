@@ -79,6 +79,43 @@ func (c *chatRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// checkAuth validates the Bearer token. Returns false and writes a 401 if
+// authentication fails.
+func (p *Proxy) checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	if p.cfg.InternalToken == "" {
+		return true
+	}
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != p.cfg.InternalToken {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// ServeModels returns the configured model list in OpenAI-compatible format.
+func (p *Proxy) ServeModels(w http.ResponseWriter, r *http.Request) {
+	if !p.checkAuth(w, r) {
+		return
+	}
+
+	type modelObj struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		OwnedBy string `json:"owned_by"`
+	}
+	models := make([]modelObj, len(p.cfg.Models))
+	for i, m := range p.cfg.Models {
+		models[i] = modelObj{ID: m, Object: "model", OwnedBy: "openrouter"}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"data":   models,
+	})
+}
+
 // ServeHTTP handles POST requests as OpenAI-compatible chat completions.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -86,13 +123,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth check.
-	if p.cfg.InternalToken != "" {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != p.cfg.InternalToken {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !p.checkAuth(w, r) {
+		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10 MB limit

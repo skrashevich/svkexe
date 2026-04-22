@@ -146,6 +146,18 @@ func (db *DB) ListAllContainers() ([]*Container, error) {
 	return containers, rows.Err()
 }
 
+// RenameContainer updates the display name of a container.
+func (db *DB) RenameContainer(id, newName string) error {
+	_, err := db.Exec(
+		`UPDATE containers SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		newName, id,
+	)
+	if err != nil {
+		return fmt.Errorf("rename container: %w", err)
+	}
+	return nil
+}
+
 // DeleteContainer removes a container record by ID.
 func (db *DB) DeleteContainer(id string) error {
 	_, err := db.Exec(`DELETE FROM containers WHERE id = ?`, id)

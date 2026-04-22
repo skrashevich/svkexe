@@ -201,8 +201,17 @@
         <div class="nav-user">{{.User.Email}}</div>
         {{end}}
     </nav>
+    <div id="toast" style="position:fixed;top:16px;right:16px;z-index:999;display:none;background:#c62828;color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;max-width:400px;box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
     <main>
         {{template "content" .}}
     </main>
+    <script>
+        document.body.addEventListener('htmx:responseError', function(e) {
+            var toast = document.getElementById('toast');
+            toast.textContent = e.detail.xhr.responseText || 'Something went wrong';
+            toast.style.display = 'block';
+            setTimeout(function() { toast.style.display = 'none'; }, 5000);
+        });
+    </script>
 </body>
 </html>

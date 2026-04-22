@@ -6,10 +6,16 @@
             <span class="badge badge-{{statusClass .Status}}">{{.Status}}</span>
         </div>
         {{if .IPAddress}}
-        <a href="https://{{.Name}}.{{$.Domain}}/" target="_blank"
-           style="font-size:12px; color:var(--text-muted); text-decoration:none; padding:4px 8px; border:1px solid var(--border); border-radius:5px; white-space:nowrap;">
-            Open &rarr;
-        </a>
+        <div style="display:flex; gap:6px;">
+            <a href="https://shelley.{{.Name}}.{{$.Domain}}/" target="_blank"
+               style="font-size:12px; color:var(--accent2); text-decoration:none; padding:4px 8px; border:1px solid var(--accent2); border-radius:5px; white-space:nowrap;">
+                Shelley
+            </a>
+            <a href="https://{{.Name}}.{{$.Domain}}/" target="_blank"
+               style="font-size:12px; color:var(--text-muted); text-decoration:none; padding:4px 8px; border:1px solid var(--border); border-radius:5px; white-space:nowrap;">
+                Open &rarr;
+            </a>
+        </div>
         {{end}}
     </div>
 

@@ -261,6 +261,13 @@ func (d *Dashboard) deleteVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if c.Status == "running" {
+		if err := d.runtime.Stop(r.Context(), c.IncusName); err != nil {
+			http.Error(w, "failed to stop VM before deletion: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	if err := d.runtime.Delete(r.Context(), c.IncusName); err != nil {
 		http.Error(w, "failed to delete VM: "+err.Error(), http.StatusInternalServerError)
 		return

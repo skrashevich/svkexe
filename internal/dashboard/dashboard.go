@@ -45,6 +45,9 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 				return "error"
 			}
 		},
+		"domain": func() string {
+			return domain
+		},
 		"maskKey": func(key string) string {
 			if len(key) <= 8 {
 				return "••••••••"

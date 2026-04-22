@@ -2,6 +2,7 @@ package shelley
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/skrashevich/svkexe/internal/runtime"
@@ -11,7 +12,7 @@ import (
 // SetupContainer prepares a container for running Shelley by:
 //  1. Creating the necessary directories inside the container.
 //  2. Writing the systemd unit file.
-//  3. Writing LLM proxy env file (if configured).
+//  3. Writing shelley.json config (llm_gateway + default_model).
 //  4. Materializing LLM API keys.
 //  5. Enabling and starting the service.
 //
@@ -33,13 +34,23 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
-	// Write LLM proxy env file so Shelley uses the gateway as its LLM backend.
-	if llmCfg != nil && llmCfg.BaseURL != "" {
-		envContent := fmt.Sprintf("OPENAI_BASE_URL=%s\nOPENAI_API_KEY=%s\n", llmCfg.BaseURL, llmCfg.Token)
-		writeEnvCmd := []string{"sh", "-c", fmt.Sprintf("cat > %s << 'LLM_ENV_EOF'\n%sLLM_ENV_EOF", LLMEnvFilePath, envContent)}
-		if _, err := rt.Exec(ctx, incusName, writeEnvCmd); err != nil {
-			return fmt.Errorf("write llm proxy env: %w", err)
+	// Write shelley.json config so Shelley uses the gateway as its LLM backend.
+	shelleyCfg := map[string]string{}
+	if llmCfg != nil {
+		if llmCfg.BaseURL != "" {
+			shelleyCfg["llm_gateway"] = llmCfg.BaseURL
 		}
+		if llmCfg.DefaultModel != "" {
+			shelleyCfg["default_model"] = llmCfg.DefaultModel
+		}
+	}
+	cfgJSON, err := json.Marshal(shelleyCfg)
+	if err != nil {
+		return fmt.Errorf("marshal shelley config: %w", err)
+	}
+	writeCfgCmd := []string{"sh", "-c", fmt.Sprintf("printf '%%s' %q > %s", string(cfgJSON), ConfigFilePath)}
+	if _, err := rt.Exec(ctx, incusName, writeCfgCmd); err != nil {
+		return fmt.Errorf("write shelley config: %w", err)
 	}
 
 	// Materialize per-user API keys to the gateway host, then push into the container.

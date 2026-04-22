@@ -282,8 +282,7 @@ User=user
 Group=user
 WorkingDirectory=/home/user
 EnvironmentFile=/etc/shelley/env
-EnvironmentFile=-/etc/shelley/llm-proxy.env
-ExecStart=/usr/local/bin/shelley -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid
+ExecStart=/usr/local/bin/shelley -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid --config /etc/shelley/shelley.json
 Restart=on-failure
 RestartSec=5
 
@@ -344,11 +343,9 @@ ENVEOF
     chmod 640 /etc/shelley/env
     chown root:${CONTAINER_USER} /etc/shelley/env
 
-    cat > /etc/shelley/llm-proxy.env <<'LLMEOF'
-# LLM proxy environment — populated by svkexe gateway.
-LLMEOF
-    chmod 640 /etc/shelley/llm-proxy.env
-    chown root:${CONTAINER_USER} /etc/shelley/llm-proxy.env
+    echo '{}' > /etc/shelley/shelley.json
+    chmod 640 /etc/shelley/shelley.json
+    chown root:${CONTAINER_USER} /etc/shelley/shelley.json
 "
 
 # ── MOTD ────────────────────────────────────────────────────────────────────

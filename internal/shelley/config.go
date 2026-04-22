@@ -18,8 +18,8 @@ const (
 	// EnvFilePath is where materialized env vars are written inside the container.
 	EnvFilePath = "/etc/shelley/env"
 
-	// LLMEnvFilePath is the optional env file for LLM proxy configuration.
-	LLMEnvFilePath = "/etc/shelley/llm-proxy.env"
+	// ConfigFilePath is the shelley.json config file inside the container.
+	ConfigFilePath = "/etc/shelley/shelley.json"
 
 	// ContainerUser is the non-root user inside svkexe containers.
 	ContainerUser = "user"
@@ -27,10 +27,12 @@ const (
 
 // LLMProxyConfig holds the gateway-level LLM proxy settings to pass to Shelley.
 type LLMProxyConfig struct {
-	// BaseURL is the OpenAI-compatible base URL (e.g. "https://svk.bar/api/llm/v1").
+	// BaseURL is the LLM gateway URL (e.g. "https://svk.bar/api/llm/v1").
 	BaseURL string
 	// Token is the Bearer token Shelley uses to authenticate to the proxy.
 	Token string
+	// DefaultModel is the first model from OPENROUTER_MODELS (e.g. "anthropic/claude-sonnet-4").
+	DefaultModel string
 }
 
 // SystemdUnitContent returns the content of the systemd unit file for Shelley.
@@ -45,12 +47,11 @@ User=%s
 Group=%s
 WorkingDirectory=/home/%s
 EnvironmentFile=%s
-EnvironmentFile=-%s
-ExecStart=/usr/local/bin/shelley -db %s serve -port %d -require-header %s
+ExecStart=/usr/local/bin/shelley -db %s serve -port %d -require-header %s --config %s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, LLMEnvFilePath, DBPath, Port, RequireHeader)
+`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, DBPath, Port, RequireHeader, ConfigFilePath)
 }

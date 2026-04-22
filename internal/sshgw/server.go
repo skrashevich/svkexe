@@ -9,21 +9,27 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/shelley"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 // Server is the SSH gateway server.
 type Server struct {
-	db      *db.DB
-	runtime runtime.ContainerRuntime
-	srv     *gssh.Server
+	db            *db.DB
+	runtime       runtime.ContainerRuntime
+	materializer  *secrets.Materializer
+	shelleyLLMCfg *shelley.LLMProxyConfig
+	srv           *gssh.Server
 }
 
 // New creates a new SSH gateway server bound to addr using hostKey.
-func New(addr string, hostKey gossh.Signer, database *db.DB, rt runtime.ContainerRuntime) *Server {
+func New(addr string, hostKey gossh.Signer, database *db.DB, rt runtime.ContainerRuntime, m *secrets.Materializer, shelleyLLM *shelley.LLMProxyConfig) *Server {
 	s := &Server{
-		db:      database,
-		runtime: rt,
+		db:            database,
+		runtime:       rt,
+		materializer:  m,
+		shelleyLLMCfg: shelleyLLM,
 	}
 
 	s.srv = &gssh.Server{

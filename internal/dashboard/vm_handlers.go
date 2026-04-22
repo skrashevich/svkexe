@@ -249,6 +249,122 @@ func (d *Dashboard) postStopVM(w http.ResponseWriter, r *http.Request) {
 	d.render(w, "vm_card", c)
 }
 
+// postRecreateVM handles POST /dashboard/vms/{id}/recreate.
+// Redeploys the container from the latest base image, preserving /data.
+func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	user := userFromCtx(r.Context())
+
+	c, err := d.db.GetContainerByID(id)
+	if err == sql.ErrNoRows {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if user == nil || c.OwnerID != user.ID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if c.Status == "creating" || c.Status == "recreating" {
+		http.Error(w, "VM is busy, please wait", http.StatusConflict)
+		return
+	}
+
+	_ = d.db.UpdateContainerStatus(id, "recreating", c.IPAddress)
+
+	go func() {
+		ctx := context.Background()
+
+		// Start the container if stopped so we can back up /data.
+		wasRunning := c.Status == "running"
+		if c.Status == "stopped" {
+			if err := d.runtime.Start(ctx, c.IncusName); err == nil {
+				wasRunning = true
+			}
+		}
+
+		// Back up /data.
+		var backupData []byte
+		if wasRunning {
+			if fr, ok := d.runtime.(runtime.FileRuntime); ok {
+				if _, err := d.runtime.Exec(ctx, c.IncusName, []string{"tar", "-czf", "/tmp/data-backup.tar.gz", "-C", "/", "data"}); err == nil {
+					backupData, _ = fr.PullFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz")
+				}
+			}
+		}
+
+		// Stop the container.
+		if wasRunning {
+			if err := d.runtime.Stop(ctx, c.IncusName); err != nil {
+				log.Printf("recreate: stop failed for %s: %v", c.IncusName, err)
+				_ = d.db.UpdateContainerStatus(id, "error", "")
+				return
+			}
+		}
+
+		// Delete old container.
+		if err := d.runtime.Delete(ctx, c.IncusName); err != nil {
+			log.Printf("recreate: delete failed for %s: %v", c.IncusName, err)
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
+		}
+
+		// Create fresh container.
+		if _, err := d.runtime.Create(ctx, runtime.CreateOpts{
+			Name:     c.Name,
+			OwnerID:  c.OwnerID,
+			Image:    shelley.DefaultImage,
+			CPULimit: c.CPULimit,
+			MemoryMB: c.MemoryMB,
+			DiskGB:   c.DiskGB,
+		}); err != nil {
+			log.Printf("recreate: create failed for %s: %v", c.IncusName, err)
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
+		}
+
+		// Start.
+		if err := d.runtime.Start(ctx, c.IncusName); err != nil {
+			log.Printf("recreate: start failed for %s: %v", c.IncusName, err)
+			_ = d.db.UpdateContainerStatus(id, "stopped", "")
+			return
+		}
+
+		// Fetch IP.
+		ip := ""
+		if rtc, err := d.runtime.Get(ctx, c.IncusName); err == nil {
+			ip = rtc.IP
+		}
+
+		// Shelley setup.
+		if d.materializer != nil {
+			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, id, c.OwnerID, d.shelleyLLMCfg); err != nil {
+				log.Printf("recreate: shelley setup failed for %s: %v", c.IncusName, err)
+			}
+		}
+
+		// Restore /data.
+		if len(backupData) > 0 {
+			if fr, ok := d.runtime.(runtime.FileRuntime); ok {
+				if err := fr.PushFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz", backupData); err == nil {
+					d.runtime.Exec(ctx, c.IncusName, []string{"tar", "-xzf", "/tmp/data-backup.tar.gz", "-C", "/"})
+					d.runtime.Exec(ctx, c.IncusName, []string{"rm", "-f", "/tmp/data-backup.tar.gz"})
+					d.runtime.Exec(ctx, c.IncusName, []string{"chown", "-R", "user:user", "/data"})
+				}
+			}
+		}
+
+		_ = d.db.UpdateContainerStatus(id, "running", ip)
+	}()
+
+	// Return updated card immediately with "recreating" status.
+	c.Status = "recreating"
+	d.render(w, "vm_card", c)
+}
+
 // deleteVM handles DELETE /dashboard/vms/{id}.
 func (d *Dashboard) deleteVM(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

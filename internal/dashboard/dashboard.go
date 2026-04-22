@@ -39,7 +39,7 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 				return "running"
 			case "stopped":
 				return "stopped"
-			case "starting", "pending", "creating":
+			case "starting", "pending", "creating", "recreating":
 				return "starting"
 			default:
 				return "error"
@@ -82,6 +82,7 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms", d.postCreateVM)
 	r.Post("/vms/{id}/start", d.postStartVM)
 	r.Post("/vms/{id}/stop", d.postStopVM)
+	r.Post("/vms/{id}/recreate", d.postRecreateVM)
 	r.Delete("/vms/{id}", d.deleteVM)
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)

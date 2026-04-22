@@ -70,3 +70,9 @@ type ResizeEvent struct {
 type ShellRuntime interface {
 	ExecInteractive(ctx context.Context, opts ExecInteractiveOpts) error
 }
+
+// FileRuntime is implemented by runtimes that support file push/pull.
+type FileRuntime interface {
+	PullFile(ctx context.Context, id, path string) ([]byte, error)
+	PushFile(ctx context.Context, id, path string, data []byte) error
+}

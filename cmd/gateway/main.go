@@ -121,14 +121,6 @@ func main() {
 		log.Fatalf("ssh host key: %v", err)
 	}
 
-	// Build and start SSH gateway.
-	sshGateway := sshgw.New(sshAddr, hostKey, database, rt)
-	go func() {
-		if err := sshGateway.ListenAndServe(); err != nil {
-			log.Printf("SSH gateway stopped: %v", err)
-		}
-	}()
-
 	// Build LLM proxy config.
 	var llmCfg *llmproxy.Config
 	var shelleyLLM *shelley.LLMProxyConfig
@@ -155,6 +147,14 @@ func main() {
 			Token:   llmInternalToken,
 		}
 	}
+
+	// Build and start SSH gateway.
+	sshGateway := sshgw.New(sshAddr, hostKey, database, rt, materializer, shelleyLLM)
+	go func() {
+		if err := sshGateway.ListenAndServe(); err != nil {
+			log.Printf("SSH gateway stopped: %v", err)
+		}
+	}()
 
 	// Build API server and container proxy.
 	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, shelleyLLM)

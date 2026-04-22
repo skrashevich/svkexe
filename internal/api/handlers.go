@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -147,6 +148,111 @@ func (s *Server) deleteContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recreateContainer handles POST /api/containers/{id}/recreate
+// It redeploys the container from the latest base image while preserving /data.
+func (s *Server) recreateContainer(w http.ResponseWriter, r *http.Request) {
+	id := containerIDFromURL(r)
+	c, err := s.db.GetContainerByID(id)
+	if err == sql.ErrNoRows {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if c.Status == "creating" || c.Status == "recreating" {
+		http.Error(w, "VM is busy, please wait", http.StatusConflict)
+		return
+	}
+
+	_ = s.db.UpdateContainerStatus(id, "recreating", c.IPAddress)
+	w.WriteHeader(http.StatusAccepted)
+
+	go s.doRecreate(c)
+}
+
+// doRecreate performs the actual recreate workflow in a background goroutine.
+func (s *Server) doRecreate(c *dbpkg.Container) {
+	ctx := context.Background()
+	id := c.ID
+
+	// Start the container if stopped so we can back up /data.
+	wasRunning := c.Status == "running"
+	if c.Status == "stopped" {
+		if err := s.runtime.Start(ctx, c.IncusName); err == nil {
+			wasRunning = true
+		}
+	}
+
+	// Back up /data.
+	var backupData []byte
+	if wasRunning {
+		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
+			if _, err := s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-czf", "/tmp/data-backup.tar.gz", "-C", "/", "data"}); err == nil {
+				backupData, _ = fr.PullFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz")
+			}
+		}
+	}
+
+	// Stop the container.
+	if wasRunning {
+		if err := s.runtime.Stop(ctx, c.IncusName); err != nil {
+			_ = s.db.UpdateContainerStatus(id, "error", "")
+			return
+		}
+	}
+
+	// Delete old container.
+	if err := s.runtime.Delete(ctx, c.IncusName); err != nil {
+		_ = s.db.UpdateContainerStatus(id, "error", "")
+		return
+	}
+
+	// Create new container from fresh image with same settings.
+	if _, err := s.runtime.Create(ctx, runtime.CreateOpts{
+		Name:     c.Name,
+		OwnerID:  c.OwnerID,
+		Image:    shelley.DefaultImage,
+		CPULimit: c.CPULimit,
+		MemoryMB: c.MemoryMB,
+		DiskGB:   c.DiskGB,
+	}); err != nil {
+		_ = s.db.UpdateContainerStatus(id, "error", "")
+		return
+	}
+
+	// Start the new container.
+	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
+		_ = s.db.UpdateContainerStatus(id, "stopped", "")
+		return
+	}
+
+	// Fetch new IP.
+	ip := ""
+	if rtc, err := s.runtime.Get(ctx, c.IncusName); err == nil {
+		ip = rtc.IP
+	}
+
+	// Run shelley setup.
+	if s.materializer != nil {
+		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, id, c.OwnerID, s.shelleyLLMCfg)
+	}
+
+	// Restore /data backup.
+	if len(backupData) > 0 {
+		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
+			if err := fr.PushFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz", backupData); err == nil {
+				s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-xzf", "/tmp/data-backup.tar.gz", "-C", "/"})
+				s.runtime.Exec(ctx, c.IncusName, []string{"rm", "-f", "/tmp/data-backup.tar.gz"})
+				s.runtime.Exec(ctx, c.IncusName, []string{"chown", "-R", "user:user", "/data"})
+			}
+		}
+	}
+
+	_ = s.db.UpdateContainerStatus(id, "running", ip)
 }
 
 // startContainer handles POST /api/containers/{id}/start

@@ -230,6 +230,37 @@ func (r *IncusRuntime) Snapshot(ctx context.Context, id string, name string) err
 	return nil
 }
 
+// PullFile reads a file from inside a container and returns its contents.
+func (r *IncusRuntime) PullFile(ctx context.Context, id, path string) ([]byte, error) {
+	reader, _, err := r.client.GetInstanceFile(id, path)
+	if err != nil {
+		return nil, fmt.Errorf("pull file %s from %s: %w", path, id, err)
+	}
+	defer reader.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(reader); err != nil {
+		return nil, fmt.Errorf("read file %s from %s: %w", path, id, err)
+	}
+	return buf.Bytes(), nil
+}
+
+// PushFile writes data to a file inside a container.
+func (r *IncusRuntime) PushFile(ctx context.Context, id, path string, data []byte) error {
+	args := incus.InstanceFileArgs{
+		Content:   bytes.NewReader(data),
+		UID:       0,
+		GID:       0,
+		Mode:      0644,
+		Type:      "file",
+		WriteMode: "overwrite",
+	}
+	if err := r.client.CreateInstanceFile(id, path, args); err != nil {
+		return fmt.Errorf("push file %s to %s: %w", path, id, err)
+	}
+	return nil
+}
+
 // extractIP returns the first IPv4 address from instance state network info.
 func extractIP(state *api.InstanceState) string {
 	if state == nil || state.Network == nil {

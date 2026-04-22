@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 const banner = "\r\n              _\r\n  _____   _| | __\r\n / __\\ \\ / / |/ /\r\n \\__ \\\\ V /|   <\r\n |___/ \\_/ |_|\\_\\\r\n\r\n"
@@ -26,6 +27,7 @@ const helpText = "\r\nSVK commands:\r\n\r\n" +
 	"  rename <old> <new>    - Rename a VM\r\n" +
 	"  stat <name>           - Show VM details\r\n" +
 	"  ssh <name>            - SSH into a VM\r\n" +
+	"  recreate <name>       - Recreate VM from latest image (preserves /data)\r\n" +
 	"  whoami                - Show your user information\r\n" +
 	"  ssh-key               - Manage SSH keys\r\n" +
 	"    ssh-key list          List all SSH keys\r\n" +
@@ -80,6 +82,8 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 			s.cmdStat(sess, user, params)
 		case "ssh":
 			s.cmdSSH(ctx, sess, user, params)
+		case "recreate":
+			s.cmdRecreate(ctx, sess, user, params)
 		case "whoami":
 			s.cmdWhoami(sess, user)
 		case "ssh-key":
@@ -411,6 +415,118 @@ func (s *Server) cmdSSH(ctx context.Context, sess gssh.Session, user *db.User, p
 	}
 
 	io.WriteString(sess, "\r\nSession ended.\r\n")
+}
+
+func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.User, params []string) {
+	if len(params) < 1 {
+		io.WriteString(sess, "Usage: recreate <name>\r\n")
+		return
+	}
+	c := s.findContainer(sess, user, params[0])
+	if c == nil {
+		return
+	}
+	if c.Status == "creating" || c.Status == "recreating" {
+		fmt.Fprintf(sess, "VM %q is busy (status: %s). Please wait.\r\n", c.Name, c.Status)
+		return
+	}
+
+	// Start the container if stopped so we can back up /data.
+	wasRunning := c.Status == "running"
+	if c.Status == "stopped" {
+		fmt.Fprintf(sess, "Starting %q for backup...\r\n", c.Name)
+		if err := s.runtime.Start(ctx, c.IncusName); err == nil {
+			wasRunning = true
+		}
+	}
+
+	// Back up /data.
+	var backupData []byte
+	if wasRunning {
+		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
+			fmt.Fprintf(sess, "Backing up /data from %q...\r\n", c.Name)
+			if _, err := s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-czf", "/tmp/data-backup.tar.gz", "-C", "/", "data"}); err == nil {
+				backupData, _ = fr.PullFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz")
+			}
+			if len(backupData) > 0 {
+				fmt.Fprintf(sess, "Backup complete (%d bytes).\r\n", len(backupData))
+			} else {
+				io.WriteString(sess, "Warning: /data backup is empty (no user data found).\r\n")
+			}
+		}
+	}
+
+	// Stop the container.
+	if wasRunning {
+		fmt.Fprintf(sess, "Stopping %q...\r\n", c.Name)
+		if err := s.runtime.Stop(ctx, c.IncusName); err != nil {
+			fmt.Fprintf(sess, "Error stopping VM: %v\r\n", err)
+			return
+		}
+	}
+
+	// Delete old container.
+	fmt.Fprintf(sess, "Deleting old container...\r\n")
+	if err := s.runtime.Delete(ctx, c.IncusName); err != nil {
+		fmt.Fprintf(sess, "Error deleting VM: %v\r\n", err)
+		return
+	}
+
+	// Create new container from fresh image.
+	fmt.Fprintf(sess, "Creating new container from %s image...\r\n", shelley.DefaultImage)
+	_, err := s.runtime.Create(ctx, runtime.CreateOpts{
+		Name:     c.Name,
+		OwnerID:  user.ID,
+		Image:    shelley.DefaultImage,
+		CPULimit: c.CPULimit,
+		MemoryMB: c.MemoryMB,
+		DiskGB:   c.DiskGB,
+	})
+	if err != nil {
+		fmt.Fprintf(sess, "Error creating VM: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", "")
+		return
+	}
+
+	// Start the new container.
+	fmt.Fprintf(sess, "Starting %q...\r\n", c.Name)
+	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
+		fmt.Fprintf(sess, "Error starting VM: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "stopped", "")
+		return
+	}
+
+	// Fetch IP.
+	ip := ""
+	if rtc, err := s.runtime.Get(ctx, c.IncusName); err == nil {
+		ip = rtc.IP
+	}
+
+	// Shelley setup.
+	if s.materializer != nil {
+		fmt.Fprintf(sess, "Setting up Shelley...\r\n")
+		if err := shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, user.ID, s.shelleyLLMCfg); err != nil {
+			fmt.Fprintf(sess, "Warning: Shelley setup failed: %v\r\n", err)
+		}
+	}
+
+	// Restore /data.
+	if len(backupData) > 0 {
+		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
+			fmt.Fprintf(sess, "Restoring /data...\r\n")
+			if err := fr.PushFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz", backupData); err == nil {
+				s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-xzf", "/tmp/data-backup.tar.gz", "-C", "/"})
+				s.runtime.Exec(ctx, c.IncusName, []string{"rm", "-f", "/tmp/data-backup.tar.gz"})
+				s.runtime.Exec(ctx, c.IncusName, []string{"chown", "-R", "user:user", "/data"})
+				io.WriteString(sess, "Data restored.\r\n")
+			} else {
+				fmt.Fprintf(sess, "Warning: failed to restore data: %v\r\n", err)
+			}
+		}
+	}
+
+	_ = s.db.UpdateContainerStatus(c.ID, "running", ip)
+	fmt.Fprintf(sess, "VM %q recreated successfully.\r\n", c.Name)
 }
 
 func (s *Server) cmdWhoami(sess gssh.Session, user *db.User) {

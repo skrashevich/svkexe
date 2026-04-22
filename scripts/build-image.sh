@@ -2,13 +2,14 @@
 # build-image.sh — Build Incus image 'svkexe-base' from Ubuntu 24.04.
 #
 # A developer-ready container image with systemd, Shelley, Claude Code, Codex,
-# Go, Node, Docker, Chrome, and common dev tools.
+# Go, Node, and common dev tools.
 #
 # Idempotent: safe to re-run. Cleans up the working container on exit.
 #
 # Environment overrides:
-#   SKIP_CHROME=1       Skip headless Chrome install
-#   SKIP_TAILSCALE=1    Skip Tailscale install
+#   INSTALL_CHROME=1    Install headless Chrome (skipped by default)
+#   INSTALL_TAILSCALE=1 Install Tailscale (skipped by default)
+#   INSTALL_DOCKER=1    Install Docker-in-Docker (skipped by default)
 #   SKIP_CLAUDE=1       Skip Claude Code install
 #   SKIP_CODEX=1        Skip Codex install
 set -euo pipefail
@@ -101,16 +102,11 @@ run_in "
         gnupg lsb-release \
         man-db manpages manpages-dev \
         systemd systemd-sysv dbus-user-session \
-        atop btop iotop ncdu \
-        docker.io docker-buildx docker-compose-v2 \
-        imagemagick ffmpeg \
-        bubblewrap gh \
-        nginx \
-        fonts-noto-color-emoji
+        btop ncdu \
+        bubblewrap gh
 
     # Allow non-root users to ping without sudo
     setcap cap_net_raw=+ep /usr/bin/ping || true
-    fc-cache -f -v || true
     rm -f /usr/sbin/policy-rc.d
 "
 
@@ -144,7 +140,7 @@ run_in "curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/loc
 
 # ── Install headless Chrome ────────────────────────────────────────────────
 
-if [[ "${SKIP_CHROME:-0}" != "1" ]]; then
+if [[ "${INSTALL_CHROME:-0}" == "1" ]]; then
     log "Installing headless Chrome…"
     run_in "
         apt-get install -y --no-install-recommends \
@@ -157,7 +153,7 @@ fi
 
 # ── Install Tailscale ──────────────────────────────────────────────────────
 
-if [[ "${SKIP_TAILSCALE:-0}" != "1" ]]; then
+if [[ "${INSTALL_TAILSCALE:-0}" == "1" ]]; then
     log "Installing Tailscale…"
     run_in "
         curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
@@ -166,6 +162,17 @@ if [[ "${SKIP_TAILSCALE:-0}" != "1" ]]; then
             -o /etc/apt/sources.list.d/tailscale.list
         apt-get update -q
         apt-get install -y --no-install-recommends tailscale
+    "
+fi
+
+# ── Install Docker (opt-in) ────────────────────────────────────────────────
+
+if [[ "${INSTALL_DOCKER:-0}" == "1" ]]; then
+    log "Installing Docker…"
+    run_in "
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y --no-install-recommends \
+            docker.io docker-buildx docker-compose-v2
     "
 fi
 
@@ -197,9 +204,6 @@ run_in "
 
     # Disable services that can be enabled later if needed.
     systemctl disable -- \
-        docker.service containerd.service \
-        nginx.service tailscaled.service \
-        atop.service atopacct.service \
         ufw.service \
         snapd.socket snapd.snap-repair.timer snapd.snap-repair.service \
         motd-news.timer motd-news.service \
@@ -232,7 +236,6 @@ run_in "
         useradd -m -s /bin/bash ${CONTAINER_USER}
     fi
     usermod -aG sudo ${CONTAINER_USER}
-    usermod -aG docker ${CONTAINER_USER} 2>/dev/null || true
     echo '${CONTAINER_USER} ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
     # Enable linger for systemd user services.
@@ -260,6 +263,32 @@ run_in "
     curl -fsSL \"\${SHELLEY_URL}\" -o /usr/local/bin/shelley
     chmod +x /usr/local/bin/shelley
     echo \"Shelley installed: \$(/usr/local/bin/shelley -help 2>&1 | head -1 || echo ok)\"
+"
+
+# ── Shelley systemd unit ──────────────────────────────────────────────────
+
+log "Installing shelley.service…"
+run_in "
+    cat > /etc/systemd/system/shelley.service <<'UNIT'
+[Unit]
+Description=Shelley LLM execution service
+After=network.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/home/user
+EnvironmentFile=/etc/shelley/env
+EnvironmentFile=-/etc/shelley/llm-proxy.env
+ExecStart=/usr/local/bin/shelley -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl enable shelley.service
 "
 
 # ── Install Claude Code ────────────────────────────────────────────────────
@@ -350,7 +379,7 @@ incus stop "${CONTAINER_NAME}"
 log "Publishing Incus image as '${IMAGE_NAME}'…"
 incus publish "${CONTAINER_NAME}" --alias "${IMAGE_NAME}" \
     --compression bzip2 \
-    description="svkexe base image — Ubuntu 24.04 with dev tools, Shelley, Claude Code, Codex"
+    description="svkexe base image — Ubuntu 24.04 with Shelley, dev tools, Claude Code, Codex"
 
 log "Done. Image '${IMAGE_NAME}' is ready."
 incus image list "${IMAGE_NAME}"

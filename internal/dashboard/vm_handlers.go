@@ -10,10 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/svkexe/platform/internal/ctxkeys"
-	dbpkg "github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
-	"github.com/svkexe/platform/internal/shelley"
+	"github.com/skrashevich/svkexe/internal/ctxkeys"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 // userFromCtx extracts the authenticated *db.User from context.

@@ -8,8 +8,8 @@ import (
 	"net"
 
 	gssh "github.com/gliderlabs/ssh"
-	"github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
 	gossh "golang.org/x/crypto/ssh"
 )
 

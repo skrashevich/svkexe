@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	dbpkg "github.com/svkexe/platform/internal/db"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
 )
 
 // newAuthTestServer creates a server with a single user who has a known

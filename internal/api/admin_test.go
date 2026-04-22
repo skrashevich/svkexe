@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	dbpkg "github.com/svkexe/platform/internal/db"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
 )
 
 // testAdminToken is the session cookie value for the admin seeded by

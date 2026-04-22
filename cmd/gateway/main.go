@@ -23,15 +23,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/svkexe/platform/internal/api"
-	"github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/llmproxy"
-	"github.com/svkexe/platform/internal/proxy"
-	"github.com/svkexe/platform/internal/shelley"
-	"github.com/svkexe/platform/internal/ratelimit"
-	"github.com/svkexe/platform/internal/runtime"
-	"github.com/svkexe/platform/internal/secrets"
-	"github.com/svkexe/platform/internal/sshgw"
+	"github.com/skrashevich/svkexe/internal/api"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/llmproxy"
+	"github.com/skrashevich/svkexe/internal/proxy"
+	"github.com/skrashevich/svkexe/internal/shelley"
+	"github.com/skrashevich/svkexe/internal/ratelimit"
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/sshgw"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-module github.com/svkexe/platform
+module github.com/skrashevich/svkexe
 
 go 1.26.2
 

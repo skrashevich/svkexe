@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/svkexe/platform/internal/ctxkeys"
-	"github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
-	"github.com/svkexe/platform/internal/secrets"
-	"github.com/svkexe/platform/internal/shelley"
-	"github.com/svkexe/platform/ui"
+	"github.com/skrashevich/svkexe/internal/ctxkeys"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/shelley"
+	"github.com/skrashevich/svkexe/ui"
 )
 
 // Dashboard holds dependencies for the web dashboard.

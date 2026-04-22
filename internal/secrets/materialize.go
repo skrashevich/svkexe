@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/svkexe/platform/internal/db"
+	"github.com/skrashevich/svkexe/internal/db"
 )
 
 // Materializer writes decrypted LLM keys to env files for containers.

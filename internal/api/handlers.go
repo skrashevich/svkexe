@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	dbpkg "github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
-	"github.com/svkexe/platform/internal/shelley"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 // containerIDFromURL returns the {id} URL parameter.

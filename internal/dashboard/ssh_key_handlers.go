@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/svkexe/platform/internal/ctxkeys"
-	"github.com/svkexe/platform/internal/db"
+	"github.com/skrashevich/svkexe/internal/ctxkeys"
+	"github.com/skrashevich/svkexe/internal/db"
 	gossh "golang.org/x/crypto/ssh"
 )
 

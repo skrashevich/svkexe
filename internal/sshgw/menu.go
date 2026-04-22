@@ -9,8 +9,8 @@ import (
 
 	gssh "github.com/gliderlabs/ssh"
 	"github.com/google/uuid"
-	"github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
 const banner = "\r\n              _\r\n  _____   _| | __\r\n / __\\ \\ / / |/ /\r\n \\__ \\\\ V /|   <\r\n |___/ \\_/ |_|\\_\\\r\n\r\n"

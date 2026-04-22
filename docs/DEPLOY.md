@@ -14,7 +14,7 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/svkexe/platform
+git clone https://github.com/skrashevich/svkexe
 cd platform
 
 # 2. Build the gateway binary

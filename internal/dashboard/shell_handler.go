@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"github.com/svkexe/platform/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
 var wsUpgrader = websocket.Upgrader{

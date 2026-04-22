@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	dbpkg "github.com/svkexe/platform/internal/db"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
 )
 
 // SessionCookieName is the name of the cookie carrying the session token.

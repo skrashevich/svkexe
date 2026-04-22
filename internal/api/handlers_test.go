@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	dbpkg "github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
 // mockRuntime is a test double for ContainerRuntime.

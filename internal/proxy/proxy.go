@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/svkexe/platform/internal/db"
-	"github.com/svkexe/platform/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
 const shelleyPort = 9000

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/svkexe/platform/internal/db"
+	"github.com/skrashevich/svkexe/internal/db"
 )
 
 func setupTestDB(t *testing.T) (*db.DB, []byte) {

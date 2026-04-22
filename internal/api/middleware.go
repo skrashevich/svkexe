@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/svkexe/platform/internal/ctxkeys"
-	dbpkg "github.com/svkexe/platform/internal/db"
+	"github.com/skrashevich/svkexe/internal/ctxkeys"
+	dbpkg "github.com/skrashevich/svkexe/internal/db"
 )
 
 // AuthMiddleware validates the session cookie, loads the user, and injects

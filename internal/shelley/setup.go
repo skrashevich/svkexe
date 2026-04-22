@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/svkexe/platform/internal/runtime"
-	"github.com/svkexe/platform/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
 )
 
 // SetupContainer prepares a container for running Shelley by:

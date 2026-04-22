@@ -56,7 +56,9 @@ export PATH="${GO_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
 
 # ── Step 1: Pull latest code ───────────────────────────────────────────────
 
+OLD_COMMIT=""
 if [[ -d "${REPO_ROOT}/.git" ]]; then
+    OLD_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
     log "Pulling latest changes (branch: ${SVKEXE_BRANCH})…"
     git -C "${REPO_ROOT}" fetch origin "${SVKEXE_BRANCH}"
     git -C "${REPO_ROOT}" checkout -q "${SVKEXE_BRANCH}"
@@ -65,6 +67,27 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
     log "Updated to commit ${COMMIT}."
 else
     warn "${REPO_ROOT} is not a git repo — skipping pull, building from current state."
+fi
+
+# ── Step 1.5: Rebuild base image if build-image.sh changed ────────────────
+
+if [[ -d "${REPO_ROOT}/.git" ]]; then
+    if [[ -z "${OLD_COMMIT}" ]]; then
+        log "No pre-pull commit recorded — skipping base image rebuild check."
+    else
+        NEW_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+        if [[ "${OLD_COMMIT}" == "${NEW_COMMIT}" ]]; then
+            log "No new commits — skipping base image rebuild check."
+        elif git -C "${REPO_ROOT}" diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
+             | grep -q '^scripts/build-image\.sh$'; then
+            log "scripts/build-image.sh changed — rebuilding svkexe-base image…"
+            "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
+        else
+            log "scripts/build-image.sh unchanged — skipping base image rebuild."
+        fi
+    fi
+else
+    log "No git history available — skipping base image rebuild check."
 fi
 
 # ── Step 2: Build ───────────────────────────────────────────────────────────

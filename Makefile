@@ -6,7 +6,7 @@ CMD_DIR=./cmd/gateway
 
 build:
 	mkdir -p $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
+	CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)

@@ -104,8 +104,14 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if container.IPAddress == "" {
-		http.Error(w, "container has no IP address", http.StatusServiceUnavailable)
-		return
+		// Try to fetch IP from runtime and persist it.
+		if rtc, err := p.runtime.Get(r.Context(), container.IncusName); err == nil && rtc.IP != "" {
+			container.IPAddress = rtc.IP
+			_ = p.db.UpdateContainerStatus(container.ID, container.Status, rtc.IP)
+		} else {
+			http.Error(w, "container has no IP address", http.StatusServiceUnavailable)
+			return
+		}
 	}
 
 	target := &url.URL{

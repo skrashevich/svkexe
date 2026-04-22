@@ -214,9 +214,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.Status = "running"
-	data := d.newData(r)
-	data.Container = c
-	d.render(w, "vm_card", data)
+	d.render(w, "vm_card", c)
 }
 
 // postStopVM handles POST /dashboard/vms/{id}/stop.
@@ -248,9 +246,7 @@ func (d *Dashboard) postStopVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.Status = "stopped"
-	data := d.newData(r)
-	data.Container = c
-	d.render(w, "vm_card", data)
+	d.render(w, "vm_card", c)
 }
 
 // deleteVM handles DELETE /dashboard/vms/{id}.

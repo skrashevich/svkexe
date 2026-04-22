@@ -25,12 +25,17 @@ const bcryptCost = 12
 // local HTTP testing works; production deployments behind TLS should set it.
 var CookieSecure = false
 
+// CookieDomain sets the Domain attribute on session cookies. When set to
+// ".example.com", the cookie is shared across all subdomains.
+var CookieDomain string
+
 // setSessionCookie writes an HttpOnly, SameSite=Lax session cookie.
 func setSessionCookie(w http.ResponseWriter, token string, maxAgeSeconds int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
+		Domain:   CookieDomain,
 		HttpOnly: true,
 		Secure:   CookieSecure,
 		SameSite: http.SameSiteLaxMode,

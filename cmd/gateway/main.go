@@ -77,6 +77,11 @@ func main() {
 	api.CookieSecure = strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", "0"), "1") ||
 		strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", ""), "true")
 
+	// Set cookie domain so sessions work across subdomains (e.g. shelley.vm.domain).
+	if domain != "" {
+		api.CookieDomain = "." + domain
+	}
+
 	// Bootstrap an admin account from env if requested (idempotent: updates the
 	// password if the user already exists).
 	if adminEmail := os.Getenv("BOOTSTRAP_ADMIN_EMAIL"); adminEmail != "" {

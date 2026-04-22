@@ -101,7 +101,7 @@ func newTestServer(t *testing.T) (*Server, *dbpkg.DB) {
 	}
 	testSessionToken = sess.Token
 
-	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil)
+	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil, nil, nil)
 	return srv, database
 }
 

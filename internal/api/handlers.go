@@ -96,7 +96,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.materializer != nil {
-		if err := shelley.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer.ID, userID); err != nil {
+		if err := shelley.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer.ID, userID, s.shelleyLLMCfg); err != nil {
 			// Non-fatal: container is created, log and continue.
 			_ = err
 		}

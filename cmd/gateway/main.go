@@ -25,7 +25,9 @@ import (
 
 	"github.com/svkexe/platform/internal/api"
 	"github.com/svkexe/platform/internal/db"
+	"github.com/svkexe/platform/internal/llmproxy"
 	"github.com/svkexe/platform/internal/proxy"
+	"github.com/svkexe/platform/internal/shelley"
 	"github.com/svkexe/platform/internal/ratelimit"
 	"github.com/svkexe/platform/internal/runtime"
 	"github.com/svkexe/platform/internal/secrets"
@@ -44,6 +46,9 @@ func main() {
 	sshHostKeyPath := getenv("SSH_HOST_KEY_PATH", "/var/lib/svkexe/ssh_host_key")
 	rateLimitRPS := getenv("RATE_LIMIT_RPS", "10")
 	rateLimitBurst := getenv("RATE_LIMIT_BURST", "20")
+	openRouterKey := getenv("OPENROUTER_API_KEY", "")
+	openRouterModels := getenv("OPENROUTER_MODELS", "anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash")
+	llmInternalToken := getenv("LLM_INTERNAL_TOKEN", "")
 
 	// Encryption key must be 32 bytes (AES-256).
 	encKey := deriveEncKey(encKeyHex)
@@ -119,8 +124,32 @@ func main() {
 		}
 	}()
 
+	// Build LLM proxy config.
+	var llmCfg *llmproxy.Config
+	var shelleyLLM *shelley.LLMProxyConfig
+	if openRouterKey != "" {
+		models := strings.Split(openRouterModels, ",")
+		llmCfg = &llmproxy.Config{
+			APIKey:        openRouterKey,
+			Models:        models,
+			InternalToken: llmInternalToken,
+		}
+		// Derive the LLM proxy URL for Shelley inside containers.
+		llmProxyURL := getenv("LLM_PROXY_URL", "")
+		if llmProxyURL == "" && domain != "" {
+			llmProxyURL = "https://" + domain + "/api/llm/v1"
+		}
+		if llmProxyURL != "" {
+			shelleyLLM = &shelley.LLMProxyConfig{
+				BaseURL: llmProxyURL,
+				Token:   llmInternalToken,
+			}
+		}
+		log.Printf("LLM proxy enabled with %d models", len(models))
+	}
+
 	// Build API server and container proxy.
-	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl)
+	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, shelleyLLM)
 	containerProxy := proxy.New(database, rt, domain)
 
 	// Top-level handler: route by Host header.

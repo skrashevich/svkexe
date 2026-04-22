@@ -15,24 +15,26 @@ func TestExtractSubdomain(t *testing.T) {
 	p := &ContainerProxy{domain: "example.com"}
 
 	cases := []struct {
-		host string
-		want string
-		ok   bool
+		host      string
+		wantName  string
+		wantSvc   string
+		ok        bool
 	}{
-		{"mybox.example.com", "mybox", true},
-		{"mybox.example.com:8080", "mybox", true},
-		{"example.com", "", false},
-		{"other.domain.com", "", false},
-		{"deep.sub.example.com", "", false}, // nested subdomains rejected
-		{"", "", false},
-		{".example.com", "", false},
+		{"mybox.example.com", "mybox", "", true},
+		{"mybox.example.com:8080", "mybox", "", true},
+		{"shelley.mybox.example.com", "mybox", "shelley", true},
+		{"example.com", "", "", false},
+		{"other.domain.com", "", "", false},
+		{"a.b.c.example.com", "", "", false}, // triple-nested rejected
+		{"", "", "", false},
+		{".example.com", "", "", false},
 	}
 
 	for _, tc := range cases {
 		got, ok := p.extractSubdomain(tc.host)
-		if ok != tc.ok || got != tc.want {
-			t.Errorf("extractSubdomain(%q) = (%q, %v), want (%q, %v)",
-				tc.host, got, ok, tc.want, tc.ok)
+		if ok != tc.ok || got.ContainerName != tc.wantName || got.Service != tc.wantSvc {
+			t.Errorf("extractSubdomain(%q) = (%+v, %v), want (name=%q svc=%q, %v)",
+				tc.host, got, ok, tc.wantName, tc.wantSvc, tc.ok)
 		}
 	}
 }
@@ -83,13 +85,13 @@ type fakeContainer struct {
 }
 
 func (tp *testProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	name, ok := (&ContainerProxy{domain: tp.domain}).extractSubdomain(r.Host)
+	info, ok := (&ContainerProxy{domain: tp.domain}).extractSubdomain(r.Host)
 	if !ok {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
 
-	fc, err := tp.lookupFn(name)
+	fc, err := tp.lookupFn(info.ContainerName)
 	if err == sql.ErrNoRows {
 		http.Error(w, "container not found", http.StatusNotFound)
 		return

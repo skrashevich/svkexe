@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -12,35 +13,26 @@ import (
 	"github.com/svkexe/platform/internal/runtime"
 )
 
-const banner = `
-              _
-  _____   _| | __
- / __\ \ / / |/ /
- \__ \\ V /|   <
- |___/ \_/ |_|\_\
+const banner = "\r\n              _\r\n  _____   _| | __\r\n / __\\ \\ / / |/ /\r\n \\__ \\\\ V /|   <\r\n |___/ \\_/ |_|\\_\\\r\n\r\n"
 
-`
+const helpText = "\r\nSVK commands:\r\n\r\n" +
+	"  help                  - Show help information\r\n" +
+	"  ls                    - List your VMs\r\n" +
+	"  new <name>            - Create a new VM\r\n" +
+	"  rm <name>             - Delete a VM\r\n" +
+	"  start <name>          - Start a VM\r\n" +
+	"  stop <name>           - Stop a VM\r\n" +
+	"  restart <name>        - Restart a VM\r\n" +
+	"  rename <old> <new>    - Rename a VM\r\n" +
+	"  stat <name>           - Show VM details\r\n" +
+	"  ssh <name>            - SSH into a VM\r\n" +
+	"  whoami                - Show your user information\r\n" +
+	"  ssh-key               - Manage SSH keys\r\n" +
+	"    ssh-key list          List all SSH keys\r\n" +
+	"    ssh-key remove <name> Remove an SSH key\r\n" +
+	"  exit                  - Exit\r\n\r\n"
 
-const helpText = `
-SVK commands:
-
-  help                  - Show help information
-  ls                    - List your VMs
-  new <name>            - Create a new VM
-  rm <name>             - Delete a VM
-  start <name>          - Start a VM
-  stop <name>           - Stop a VM
-  restart <name>        - Restart a VM
-  rename <old> <new>    - Rename a VM
-  stat <name>           - Show VM details
-  ssh <name>            - SSH into a VM
-  whoami                - Show your user information
-  ssh-key               - Manage SSH keys
-    ssh-key list          List all SSH keys
-    ssh-key remove <name> Remove an SSH key
-  exit                  - Exit
-
-`
+var validVMName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 
 // runMenu shows an interactive command shell on the SSH session.
 func (s *Server) runMenu(sess gssh.Session, user *db.User) {
@@ -48,7 +40,7 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 	fmt.Fprintf(sess, "Welcome, %s\r\n", user.Email)
 	io.WriteString(sess, "Type \"help\" for available commands.\r\n\r\n")
 
-	ctx := context.Background()
+	ctx := sess.Context()
 
 	for {
 		io.WriteString(sess, "svk ▶ ")
@@ -58,7 +50,7 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 			return
 		}
 
-		args := splitArgs(line)
+		args := strings.Fields(line)
 		if len(args) == 0 {
 			continue
 		}
@@ -84,7 +76,7 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 		case "rename":
 			s.cmdRename(sess, user, params)
 		case "stat":
-			s.cmdStat(ctx, sess, user, params)
+			s.cmdStat(sess, user, params)
 		case "ssh":
 			s.cmdSSH(ctx, sess, user, params)
 		case "whoami":
@@ -137,6 +129,11 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 		return
 	}
 	name := params[0]
+
+	if !validVMName.MatchString(name) {
+		io.WriteString(sess, "Error: invalid VM name. Use letters, digits, dots, hyphens, underscores (1-63 chars).\r\n")
+		return
+	}
 
 	// Check for duplicate name.
 	if _, err := s.db.GetContainerByName(name, user.ID); err == nil {
@@ -293,6 +290,10 @@ func (s *Server) cmdRename(sess gssh.Session, user *db.User, params []string) {
 	}
 
 	newName := params[1]
+	if !validVMName.MatchString(newName) {
+		io.WriteString(sess, "Error: invalid VM name. Use letters, digits, dots, hyphens, underscores (1-63 chars).\r\n")
+		return
+	}
 	if _, err := s.db.GetContainerByName(newName, user.ID); err == nil {
 		fmt.Fprintf(sess, "Error: VM %q already exists.\r\n", newName)
 		return
@@ -305,7 +306,7 @@ func (s *Server) cmdRename(sess gssh.Session, user *db.User, params []string) {
 	fmt.Fprintf(sess, "VM %q renamed to %q.\r\n", params[0], newName)
 }
 
-func (s *Server) cmdStat(ctx context.Context, sess gssh.Session, user *db.User, params []string) {
+func (s *Server) cmdStat(sess gssh.Session, user *db.User, params []string) {
 	if len(params) < 1 {
 		io.WriteString(sess, "Usage: stat <name>\r\n")
 		return
@@ -392,7 +393,10 @@ func (s *Server) cmdSSH(ctx context.Context, sess gssh.Session, user *db.User, p
 	if err := sr.ExecInteractive(ctx, opts); err != nil {
 		fmt.Fprintf(sess, "Exec error: %v\r\n", err)
 	} else {
-		<-doneCh
+		select {
+		case <-doneCh:
+		case <-ctx.Done():
+		}
 	}
 
 	io.WriteString(sess, "\r\nSession ended.\r\n")
@@ -546,6 +550,9 @@ func readLine(sess gssh.Session) (string, error) {
 				io.WriteString(sess, "\r\n")
 				return "exit", nil
 			}
+		case ch == 0x1b: // ESC — consume escape sequence (e.g. arrow keys)
+			sess.Read(b) // '[' or other
+			sess.Read(b) // 'A'/'B'/'C'/'D' etc.
 		case ch >= 32 && ch < 127: // printable ASCII
 			buf = append(buf, ch)
 			sess.Write([]byte{ch})
@@ -553,8 +560,3 @@ func readLine(sess gssh.Session) (string, error) {
 	}
 }
 
-// splitArgs splits a command line into args by whitespace.
-func splitArgs(line string) []string {
-	fields := strings.Fields(line)
-	return fields
-}

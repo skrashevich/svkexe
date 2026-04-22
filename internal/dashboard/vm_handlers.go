@@ -145,7 +145,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		_ = d.db.UpdateContainerStatus(c.ID, rtContainer.Status, rtContainer.IP)
 
 		if d.materializer != nil {
-			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, user.ID); err != nil {
+			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, user.ID, d.shelleyLLMCfg); err != nil {
 				log.Printf("shelley setup failed for %s: %v", incusName, err)
 			}
 		}

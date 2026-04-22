@@ -11,8 +11,12 @@ import (
 // SetupContainer prepares a container for running Shelley by:
 //  1. Creating the necessary directories inside the container.
 //  2. Writing the systemd unit file.
-//  3. Materializing LLM API keys.
-func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, ownerID string) error {
+//  3. Writing LLM proxy env file (if configured).
+//  4. Materializing LLM API keys.
+//  5. Enabling and starting the service.
+//
+// llmCfg may be nil if no gateway-level LLM proxy is configured.
+func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, ownerID string, llmCfg *LLMProxyConfig) error {
 	// Create required directories inside the container.
 	for _, dir := range []string{"/data", "/etc/shelley", "/etc/systemd/system"} {
 		if _, err := rt.Exec(ctx, containerID, []string{"mkdir", "-p", dir}); err != nil {
@@ -27,14 +31,26 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
-	// Enable the service.
+	// Write LLM proxy env file so Shelley uses the gateway as its LLM backend.
+	if llmCfg != nil && llmCfg.BaseURL != "" {
+		envContent := fmt.Sprintf("OPENAI_BASE_URL=%s\nOPENAI_API_KEY=%s\n", llmCfg.BaseURL, llmCfg.Token)
+		writeEnvCmd := []string{"sh", "-c", fmt.Sprintf("cat > %s << 'LLM_ENV_EOF'\n%sLLM_ENV_EOF", LLMEnvFilePath, envContent)}
+		if _, err := rt.Exec(ctx, containerID, writeEnvCmd); err != nil {
+			return fmt.Errorf("write llm proxy env: %w", err)
+		}
+	}
+
+	// Materialize per-user API keys.
+	if err := m.MaterializeKeys(containerID, ownerID); err != nil {
+		return fmt.Errorf("materialize keys: %w", err)
+	}
+
+	// Enable and start the service.
 	if _, err := rt.Exec(ctx, containerID, []string{"systemctl", "enable", "shelley.service"}); err != nil {
 		return fmt.Errorf("enable shelley service: %w", err)
 	}
-
-	// Materialize API keys.
-	if err := m.MaterializeKeys(containerID, ownerID); err != nil {
-		return fmt.Errorf("materialize keys: %w", err)
+	if _, err := rt.Exec(ctx, containerID, []string{"systemctl", "start", "shelley.service"}); err != nil {
+		return fmt.Errorf("start shelley service: %w", err)
 	}
 
 	return nil

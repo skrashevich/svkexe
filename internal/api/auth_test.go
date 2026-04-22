@@ -36,7 +36,7 @@ func newAuthTestServer(t *testing.T, email, password string, role string) (*Serv
 		t.Fatalf("create user: %v", err)
 	}
 
-	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil)
+	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil, nil, nil)
 	return srv, database, u.ID
 }
 
@@ -152,7 +152,7 @@ func TestRegister_FirstUserBecomesAdmin(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { database.Close() })
-	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil)
+	srv := NewServer(database, newMockRuntime(), testEncKey, "", nil, nil, nil, nil)
 
 	form := url.Values{}
 	form.Set("email", "first@example.com")

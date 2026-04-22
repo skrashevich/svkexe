@@ -40,14 +40,20 @@ func New(database *db.DB, rt runtime.ContainerRuntime, domain string) *Container
 // subdomain, enforcing ownership, and reverse-proxying to the container's
 // Shelley port.
 func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	name, ok := p.extractSubdomain(r.Host)
+	info, ok := p.extractSubdomain(r.Host)
 	if !ok {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
 
+	// Only "shelley" service prefix is supported; reject unknown services.
+	if info.Service != "" && info.Service != "shelley" {
+		http.Error(w, "unknown service", http.StatusNotFound)
+		return
+	}
+
 	// Look up container by name (ownership check follows).
-	container, err := p.db.GetContainerByNameOnly(name)
+	container, err := p.db.GetContainerByNameOnly(info.ContainerName)
 	if err == sql.ErrNoRows {
 		http.Error(w, "container not found", http.StatusNotFound)
 		return
@@ -111,9 +117,17 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// extractSubdomain parses "{name}.{domain}" from the Host header.
-// Returns the subdomain name and true on success.
-func (p *ContainerProxy) extractSubdomain(host string) (string, bool) {
+// subdomainInfo holds the result of parsing a subdomain.
+type subdomainInfo struct {
+	// ContainerName is the VM name portion of the subdomain.
+	ContainerName string
+	// Service is the optional service prefix (e.g. "shelley"). Empty for direct VM access.
+	Service string
+}
+
+// extractSubdomain parses "{name}.{domain}" or "{service}.{name}.{domain}"
+// from the Host header. Returns the parsed info and true on success.
+func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
 	// Strip port if present.
 	h := host
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
@@ -125,15 +139,25 @@ func (p *ContainerProxy) extractSubdomain(host string) (string, bool) {
 
 	suffix := "." + p.domain
 	if !strings.HasSuffix(h, suffix) {
-		return "", false
+		return subdomainInfo{}, false
 	}
 
-	name := strings.TrimSuffix(h, suffix)
-	if name == "" || strings.Contains(name, ".") {
-		// Empty prefix or nested subdomain — reject.
-		return "", false
+	prefix := strings.TrimSuffix(h, suffix)
+	if prefix == "" {
+		return subdomainInfo{}, false
 	}
-	return name, true
+
+	// Check for service.name pattern (e.g. "shelley.my-vm").
+	if idx := strings.IndexByte(prefix, '.'); idx != -1 {
+		service := prefix[:idx]
+		name := prefix[idx+1:]
+		if name == "" || strings.Contains(name, ".") {
+			return subdomainInfo{}, false
+		}
+		return subdomainInfo{ContainerName: name, Service: service}, true
+	}
+
+	return subdomainInfo{ContainerName: prefix}, true
 }
 
 // isRunning returns true for statuses considered "running".

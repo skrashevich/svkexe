@@ -11,6 +11,7 @@ import (
 	"github.com/svkexe/platform/internal/db"
 	"github.com/svkexe/platform/internal/runtime"
 	"github.com/svkexe/platform/internal/secrets"
+	"github.com/svkexe/platform/internal/shelley"
 	"github.com/svkexe/platform/ui"
 )
 
@@ -19,14 +20,15 @@ type Dashboard struct {
 	db           *db.DB
 	runtime      runtime.ContainerRuntime
 	materializer *secrets.Materializer
-	domain       string
-	encKey       []byte
-	templates    *template.Template
-	funcMap      template.FuncMap
+	domain        string
+	encKey        []byte
+	shelleyLLMCfg *shelley.LLMProxyConfig
+	templates     *template.Template
+	funcMap       template.FuncMap
 }
 
 // NewDashboard creates a Dashboard and parses all HTML templates.
-func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte) (*Dashboard, error) {
+func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, shelleyLLM *shelley.LLMProxyConfig) (*Dashboard, error) {
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
 			return t.Format("2006-01-02 15:04")
@@ -57,13 +59,14 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 	}
 
 	return &Dashboard{
-		db:           database,
-		runtime:      rt,
-		materializer: materializer,
-		domain:       domain,
-		encKey:       encKey,
-		templates:    tmpl,
-		funcMap:      funcMap,
+		db:            database,
+		runtime:       rt,
+		materializer:  materializer,
+		domain:        domain,
+		encKey:        encKey,
+		shelleyLLMCfg: shelleyLLM,
+		templates:     tmpl,
+		funcMap:       funcMap,
 	}, nil
 }
 

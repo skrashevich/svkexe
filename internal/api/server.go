@@ -9,11 +9,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/svkexe/platform/internal/dashboard"
 	"github.com/svkexe/platform/internal/db"
+	"github.com/svkexe/platform/internal/llmproxy"
 	"github.com/svkexe/platform/internal/metrics"
 	"github.com/svkexe/platform/internal/proxy"
 	"github.com/svkexe/platform/internal/ratelimit"
 	"github.com/svkexe/platform/internal/runtime"
 	"github.com/svkexe/platform/internal/secrets"
+	"github.com/svkexe/platform/internal/shelley"
 )
 
 // Server holds the HTTP server dependencies.
@@ -26,13 +28,15 @@ type Server struct {
 	containerProxy *proxy.ContainerProxy
 	materializer   *secrets.Materializer
 	rateLimiter    *ratelimit.Limiter
+	llmProxy       *llmproxy.Proxy
+	shelleyLLMCfg  *shelley.LLMProxyConfig
 }
 
 // NewServer constructs a Server with the given dependencies and registers routes.
 // domain is the base domain used for subdomain-based container routing (e.g. "example.com").
 // materializer may be nil, in which case key materialization is skipped.
 // rl may be nil, in which case rate limiting is disabled.
-func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter) *Server {
+func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, shelleyLLM *shelley.LLMProxyConfig) *Server {
 	s := &Server{
 		db:             database,
 		runtime:        rt,
@@ -41,6 +45,10 @@ func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, doma
 		containerProxy: proxy.New(database, rt, domain),
 		materializer:   materializer,
 		rateLimiter:    rl,
+		shelleyLLMCfg:  shelleyLLM,
+	}
+	if llmCfg != nil && llmCfg.APIKey != "" {
+		s.llmProxy = llmproxy.New(*llmCfg)
 	}
 	s.router = s.buildRouter()
 	return s
@@ -85,6 +93,11 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/logout", s.logoutPost)
 		r.Post("/register", s.registerPost)
 	})
+
+	// LLM proxy — token-based auth, not session-based.
+	if s.llmProxy != nil {
+		r.Post("/api/llm/v1/chat/completions", s.llmProxy.ServeHTTP)
+	}
 
 	// Everything below requires a valid session cookie.
 	r.Group(func(r chi.Router) {
@@ -140,7 +153,7 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 	})
 
 	// Dashboard routes
-	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey)
+	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.shelleyLLMCfg)
 	if err != nil {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}

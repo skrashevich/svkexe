@@ -9,6 +9,8 @@
         <form hx-post="/dashboard/vms"
               hx-target="#vm-list"
               hx-swap="innerHTML"
+              hx-disabled-elt="find .btn"
+              hx-indicator="find .htmx-indicator"
               hx-on::after-request="document.getElementById('create-modal').innerHTML=''">
             <div class="form-group">
                 <label for="vm-name">Name</label>
@@ -45,7 +47,13 @@
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary"
                         onclick="document.getElementById('create-modal').innerHTML=''">Cancel</button>
-                <button type="submit" class="btn btn-primary">Create VM</button>
+                <button type="submit" class="btn btn-primary">
+                    <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:6px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
+                        Creating…
+                    </span>
+                    <span class="btn-label">Create VM</span>
+                </button>
             </div>
         </form>
     </div>

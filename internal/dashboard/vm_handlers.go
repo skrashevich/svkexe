@@ -3,6 +3,8 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -101,26 +103,19 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	memoryMB := formInt(r, "memory_mb", 2048)
 	diskGB := formInt(r, "disk_gb", 10)
 
-	rtContainer, err := d.runtime.Create(r.Context(), runtime.CreateOpts{
-		Name:     name,
-		OwnerID:  user.ID,
-		Image:    shelley.DefaultImage,
-		CPULimit: cpuLimit,
-		MemoryMB: memoryMB,
-		DiskGB:   diskGB,
-	})
-	if err != nil {
-		http.Error(w, "failed to create VM: "+err.Error(), http.StatusInternalServerError)
+	if existing, _ := d.db.GetContainerByName(name, user.ID); existing != nil {
+		http.Error(w, "VM with this name already exists", http.StatusConflict)
 		return
 	}
+
+	incusName := fmt.Sprintf("svkexe-%s-%s", user.ID, name)
 
 	c := &dbpkg.Container{
 		ID:        uuid.New().String(),
 		Name:      name,
 		OwnerID:   user.ID,
-		IncusName: rtContainer.Name,
-		Status:    rtContainer.Status,
-		IPAddress: rtContainer.IP,
+		IncusName: incusName,
+		Status:    "creating",
 		CPULimit:  cpuLimit,
 		MemoryMB:  memoryMB,
 		DiskGB:    diskGB,
@@ -130,13 +125,33 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if d.materializer != nil {
-		if err := shelley.SetupContainer(r.Context(), d.runtime, d.materializer, c.ID, user.ID); err != nil {
-			_ = err
+	// Create the Incus container asynchronously — the UI polls every 5s and
+	// will pick up the status change from "creating" to "stopped".
+	go func() {
+		ctx := context.Background()
+		rtContainer, err := d.runtime.Create(ctx, runtime.CreateOpts{
+			Name:     name,
+			OwnerID:  user.ID,
+			Image:    shelley.DefaultImage,
+			CPULimit: cpuLimit,
+			MemoryMB: memoryMB,
+			DiskGB:   diskGB,
+		})
+		if err != nil {
+			log.Printf("async VM create failed for %s: %v", incusName, err)
+			_ = d.db.UpdateContainerStatus(c.ID, "error", "")
+			return
 		}
-	}
+		_ = d.db.UpdateContainerStatus(c.ID, rtContainer.Status, rtContainer.IP)
 
-	// Return updated VM list (htmx swaps #vm-list innerHTML).
+		if d.materializer != nil {
+			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, user.ID); err != nil {
+				log.Printf("shelley setup failed for %s: %v", incusName, err)
+			}
+		}
+	}()
+
+	// Return updated VM list immediately (VM visible with "creating" badge).
 	containers, err := d.db.ListContainersByOwner(user.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -238,6 +253,11 @@ func (d *Dashboard) deleteVM(w http.ResponseWriter, r *http.Request) {
 	}
 	if user == nil || c.OwnerID != user.ID {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	if c.Status == "creating" {
+		http.Error(w, "VM is still being created, please wait", http.StatusConflict)
 		return
 	}
 

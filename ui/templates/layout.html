@@ -184,6 +184,9 @@
         /* HTMX indicator */
         .htmx-indicator { opacity: 0; transition: opacity 200ms; }
         .htmx-request .htmx-indicator { opacity: 1; }
+        .htmx-request .btn-label { display: none; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>

@@ -1,7 +1,6 @@
 package sshgw
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -13,11 +12,11 @@ import (
 )
 
 const banner = `
- _____ _   ____  _____ _  __ _____  _____
-|  ___| | / /\ \/ / __| |/ /| ____||_   _|
-| |_  | |/ /  \  /|  _|| ' / |  _|   | |
-|  _| |   <   / / | |__| . \ | |___  | |
-|_|   |_|\_\ /_/  |____|_|\_\|_____| |_|
+              _
+  _____   _| | __
+ / __\ \ / / |/ /
+ \__ \\ V /|   <
+ |___/ \_/ |_|\_\
 
 `
 
@@ -51,13 +50,13 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 		io.WriteString(sess, "\n  [q] Quit\n\n")
 		io.WriteString(sess, "Select a VM: ")
 
-		line, err := readLine(sess)
+		key, err := readKey(sess)
 		if err != nil {
 			return
 		}
-		line = strings.TrimSpace(line)
+		fmt.Fprintf(sess, "%s\n", key)
 
-		if line == "q" || line == "Q" || line == "quit" || line == "exit" {
+		if key == "q" || key == "Q" {
 			io.WriteString(sess, "Goodbye.\n")
 			sess.Exit(0)
 			return
@@ -65,7 +64,7 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 
 		// Parse selection index.
 		var idx int
-		if _, err := fmt.Sscanf(line, "%d", &idx); err != nil || idx < 1 || idx > len(containers) {
+		if _, err := fmt.Sscanf(key, "%d", &idx); err != nil || idx < 1 || idx > len(containers) {
 			io.WriteString(sess, "Invalid selection.\n\n")
 			continue
 		}
@@ -130,8 +129,8 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 		}
 
 		// After session ends, loop back to menu.
-		io.WriteString(sess, "\nSession ended. Press Enter to return to menu.\n")
-		readLine(sess)
+		io.WriteString(sess, "\nSession ended. Press any key to return to menu.\n")
+		readKey(sess)
 	}
 }
 
@@ -146,10 +145,14 @@ func statusIcon(status string) string {
 	}
 }
 
-// readLine reads a line from the SSH session (handles both raw PTY and line-buffered input).
-func readLine(r io.Reader) (string, error) {
-	scanner := bufio.NewReader(r)
-	line, err := scanner.ReadString('\n')
-	line = strings.TrimRight(line, "\r\n")
-	return line, err
+// readKey reads a single byte from the SSH session and returns it as a string.
+// In PTY mode keys arrive one byte at a time without line buffering,
+// so this is the correct way to read interactive menu input.
+func readKey(r io.Reader) (string, error) {
+	buf := make([]byte, 1)
+	_, err := r.Read(buf)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }

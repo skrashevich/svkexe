@@ -431,6 +431,8 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 		return
 	}
 
+	_ = s.db.UpdateContainerStatus(c.ID, "recreating", c.IPAddress)
+
 	// Start the container if stopped so we can back up /data.
 	wasRunning := c.Status == "running"
 	if c.Status == "stopped" {

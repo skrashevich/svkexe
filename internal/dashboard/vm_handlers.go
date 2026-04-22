@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -391,8 +392,11 @@ func (d *Dashboard) deleteVM(w http.ResponseWriter, r *http.Request) {
 
 	if c.Status == "running" {
 		if err := d.runtime.Stop(r.Context(), c.IncusName); err != nil {
-			http.Error(w, "failed to stop VM before deletion: "+err.Error(), http.StatusInternalServerError)
-			return
+			// Ignore "already stopped" — the DB status may be stale.
+			if !strings.Contains(err.Error(), "already stopped") {
+				http.Error(w, "failed to stop VM before deletion: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 

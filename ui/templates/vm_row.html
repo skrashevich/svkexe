@@ -5,7 +5,7 @@
             <div style="font-size:15px; font-weight:600; margin-bottom:4px;">{{.Name}}</div>
             <span class="badge badge-{{statusClass .Status}}">{{.Status}}</span>
         </div>
-        {{if .IPAddress}}
+        {{if eq .Status "running"}}
         <div style="display:flex; gap:6px;">
             <a href="https://shelley.{{.Name}}.{{$.Domain}}/" target="_blank"
                style="font-size:12px; color:var(--accent2); text-decoration:none; padding:4px 8px; border:1px solid var(--accent2); border-radius:5px; white-space:nowrap;">

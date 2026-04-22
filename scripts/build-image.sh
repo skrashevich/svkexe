@@ -87,7 +87,9 @@ run_in "
     export DEBIAN_FRONTEND=noninteractive
     rm -f /etc/dpkg/dpkg.cfg.d/excludes /etc/dpkg/dpkg.cfg.d/01_nodoc
     echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
-    echo 'y' | unminimize || true
+    if command -v unminimize &>/dev/null; then
+        echo 'y' | unminimize
+    fi
 
     apt-get update -q
     apt-get install -y --no-install-recommends \

@@ -46,11 +46,11 @@ Group=%s
 WorkingDirectory=/home/%s
 EnvironmentFile=%s
 EnvironmentFile=-%s
-ExecStart=/usr/local/bin/shelley --port %d --db %s --require-header %s
+ExecStart=/usr/local/bin/shelley -db %s serve -port %d -require-header %s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, LLMEnvFilePath, Port, DBPath, RequireHeader)
+`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, LLMEnvFilePath, DBPath, Port, RequireHeader)
 }

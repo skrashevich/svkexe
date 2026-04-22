@@ -59,6 +59,12 @@ func (m *Materializer) MaterializeKeys(containerID, ownerID string) error {
 	return nil
 }
 
+// ReadKeys returns the content of the materialized env file for containerID.
+func (m *Materializer) ReadKeys(containerID string) ([]byte, error) {
+	envFile := filepath.Join(m.basePath, containerID, "env")
+	return os.ReadFile(envFile)
+}
+
 // RemoveKeys deletes the env file and its directory for containerID.
 func (m *Materializer) RemoveKeys(containerID string) error {
 	dir := filepath.Join(m.basePath, containerID)

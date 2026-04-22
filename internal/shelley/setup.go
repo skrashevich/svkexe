@@ -40,9 +40,19 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 		}
 	}
 
-	// Materialize per-user API keys.
+	// Materialize per-user API keys to the gateway host, then push into the container.
 	if err := m.MaterializeKeys(containerID, ownerID); err != nil {
 		return fmt.Errorf("materialize keys: %w", err)
+	}
+	envContent, err := m.ReadKeys(containerID)
+	if err != nil {
+		return fmt.Errorf("read materialized keys: %w", err)
+	}
+	if len(envContent) > 0 {
+		writeEnvCmd := []string{"sh", "-c", fmt.Sprintf("cat > %s << 'ENV_EOF'\n%sENV_EOF", EnvFilePath, string(envContent))}
+		if _, err := rt.Exec(ctx, containerID, writeEnvCmd); err != nil {
+			return fmt.Errorf("write env to container: %w", err)
+		}
 	}
 
 	// Enable and start the service.

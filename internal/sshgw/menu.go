@@ -126,6 +126,8 @@ func (s *Server) runMenu(sess gssh.Session, user *db.User) {
 
 		if err := sr.ExecInteractive(ctx, opts); err != nil {
 			fmt.Fprintf(sess.Stderr(), "exec error: %v\n", err)
+		} else {
+			<-doneCh
 		}
 
 		// After session ends, loop back to menu.

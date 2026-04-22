@@ -68,8 +68,9 @@ func (r *IncusRuntime) Create(ctx context.Context, opts CreateOpts) (*Container,
 			Alias: opts.Image,
 		},
 		InstancePut: api.InstancePut{
-			Config:  config,
-			Devices: devices,
+			Profiles: []string{"svkexe-default"},
+			Config:   config,
+			Devices:  devices,
 		},
 	}
 

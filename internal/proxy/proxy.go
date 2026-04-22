@@ -207,19 +207,14 @@ func newReverseProxy(target *url.URL) *httputil.ReverseProxy {
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = transport
-
-	// FlushInterval -1 enables immediate flushing, required for SSE and
-	// streaming responses. Go 1.20+ handles WebSocket upgrades natively
-	// inside ReverseProxy when FlushInterval is set.
-	proxy.FlushInterval = -1
-
-	proxy.Rewrite = func(pr *httputil.ProxyRequest) {
-		pr.SetURL(target)
-		pr.Out.Host = target.Host
-		// Preserve the original Host so the backend can log it.
-		pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+	proxy := &httputil.ReverseProxy{
+		Transport:     transport,
+		FlushInterval: -1,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
+			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
+		},
 	}
 
 	return proxy

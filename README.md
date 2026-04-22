@@ -84,6 +84,23 @@ Useful skip-flags (comma-combine via env): `SKIP_DOCKER=1`, `SKIP_INCUS=1`,
 Override repo source with `SVKEXE_REPO=...`, `SVKEXE_BRANCH=...`,
 `SVKEXE_SRC_DIR=...`.
 
+### Update
+
+To update a running instance to the latest version:
+
+```bash
+sudo /opt/svkexe/scripts/update.sh
+```
+
+Or remotely:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/update.sh | sudo bash
+```
+
+The script pulls the latest code, rebuilds the binary, and restarts the service.
+Optional env vars: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (build only).
+
 ### Deploy with Docker Compose
 
 ```bash

@@ -401,8 +401,11 @@ func (d *Dashboard) deleteVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := d.runtime.Delete(r.Context(), c.IncusName); err != nil {
-		http.Error(w, "failed to delete VM: "+err.Error(), http.StatusInternalServerError)
-		return
+		// Ignore "not found" — the Incus container may already be gone (e.g. failed recreate).
+		if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "Not Found") {
+			http.Error(w, "failed to delete VM: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := d.db.DeleteContainer(id); err != nil {
 		http.Error(w, "failed to remove VM record", http.StatusInternalServerError)

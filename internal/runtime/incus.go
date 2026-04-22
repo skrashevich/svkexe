@@ -15,6 +15,19 @@ import (
 
 const containerPrefix = "svkexe"
 
+// waitOp waits for an Incus operation to complete, respecting context cancellation.
+func waitOp(ctx context.Context, op incus.Operation) error {
+	done := make(chan error, 1)
+	go func() { done <- op.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = op.Cancel()
+		return ctx.Err()
+	}
+}
+
 // IncusRuntime implements ContainerRuntime using the Incus container runtime.
 type IncusRuntime struct {
 	client incus.InstanceServer
@@ -78,7 +91,7 @@ func (r *IncusRuntime) Create(ctx context.Context, opts CreateOpts) (*Container,
 	if err != nil {
 		return nil, fmt.Errorf("create container %s: %w", name, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return nil, fmt.Errorf("wait for container creation %s: %w", name, err)
 	}
 
@@ -95,7 +108,7 @@ func (r *IncusRuntime) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("start container %s: %w", id, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return fmt.Errorf("wait for container start %s: %w", id, err)
 	}
 	return nil
@@ -112,7 +125,7 @@ func (r *IncusRuntime) Stop(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("stop container %s: %w", id, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return fmt.Errorf("wait for container stop %s: %w", id, err)
 	}
 	return nil
@@ -124,7 +137,7 @@ func (r *IncusRuntime) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete container %s: %w", id, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return fmt.Errorf("wait for container deletion %s: %w", id, err)
 	}
 	return nil
@@ -224,7 +237,7 @@ func (r *IncusRuntime) Snapshot(ctx context.Context, id string, name string) err
 	if err != nil {
 		return fmt.Errorf("snapshot container %s: %w", id, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return fmt.Errorf("wait for snapshot %s on container %s: %w", name, id, err)
 	}
 	return nil

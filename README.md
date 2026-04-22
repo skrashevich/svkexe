@@ -33,6 +33,7 @@ Self-hosted platform for persistent Linux VMs with integrated [Shelley](https://
 - **Web Shell** (xterm.js) for browser-based terminal access
 - **SSH Gateway** with interactive VM menu and direct connect (`ssh vm@host`)
 - **Shared links** (Discord-style) for temporary container access
+- **LLM reverse proxy** to OpenRouter with automatic model fallback
 - **LLM key management** with AES-GCM encryption, per-container isolation
 - **Built-in web login** — cookie-based sessions, bcrypt password hashing, first-run admin bootstrap via env
 - **Admin panel** for user and container management
@@ -149,6 +150,10 @@ export GATEWAY_DB_PATH="/var/lib/svkexe/gateway.db"
 | `SECRETS_BASE_PATH` | `/run/shelley` | Key materialization directory |
 | `RATE_LIMIT_RPS` | `10` | Requests per second per user |
 | `RATE_LIMIT_BURST` | `20` | Burst size |
+| `OPENROUTER_API_KEY` | | OpenRouter API key (enables LLM proxy) |
+| `OPENROUTER_MODELS` | `anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash` | Models to try in order (comma-separated) |
+| `LLM_INTERNAL_TOKEN` | | Bearer token for Shelley → gateway auth |
+| `LLM_PROXY_URL` | `https://{DOMAIN}/api/llm/v1` | LLM proxy URL as seen from containers |
 
 ## Stack
 
@@ -172,6 +177,7 @@ internal/
   api/                 REST API, middleware, admin endpoints
   dashboard/           htmx pages (VMs, Keys, SSH Keys, Shell)
   db/                  SQLite with WAL, all CRUD operations
+  llmproxy/            LLM reverse proxy to OpenRouter with model fallback
   proxy/               Dynamic reverse proxy (WebSocket/SSE)
   runtime/             ContainerRuntime + ShellRuntime interfaces
   secrets/             LLM key materialization (encrypted DB -> env file)
@@ -198,6 +204,7 @@ DELETE /api/containers/{id}         Delete container
 GET    /api/keys                    List LLM API keys
 POST   /api/containers/{id}/share   Create shared link
 GET    /api/me                      Current user info
+POST   /api/llm/v1/chat/completions LLM proxy (OpenRouter)
 GET    /metrics                     Prometheus metrics
 ```
 

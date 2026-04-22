@@ -455,6 +455,13 @@ SSH_ADDR=:2222
 SSH_HOST_KEY_PATH=${DATA_DIR}/ssh_host_key
 RATE_LIMIT_RPS=10
 RATE_LIMIT_BURST=20
+
+# LLM reverse proxy — enables Shelley to use OpenRouter through the gateway.
+# Set OPENROUTER_API_KEY to enable. Models are tried in order until one works.
+OPENROUTER_API_KEY=
+OPENROUTER_MODELS=anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash
+LLM_INTERNAL_TOKEN=$(openssl rand -hex 16)
+# LLM_PROXY_URL=https://\${DOMAIN}/api/llm/v1  # auto-derived from DOMAIN
 EOF
     chown root:svkexe "${ENV_FILE}"
     chmod 0640 "${ENV_FILE}"

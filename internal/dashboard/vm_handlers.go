@@ -69,6 +69,16 @@ func (d *Dashboard) getVMList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Backfill missing IPs for running containers from the runtime.
+	for _, c := range containers {
+		if c.Status == "running" && c.IPAddress == "" {
+			if rtc, err := d.runtime.Get(r.Context(), c.IncusName); err == nil && rtc.IP != "" {
+				c.IPAddress = rtc.IP
+				_ = d.db.UpdateContainerStatus(c.ID, c.Status, rtc.IP)
+			}
+		}
+	}
+
 	data := d.newData(r)
 	data.Containers = containers
 	d.render(w, "vm_list_content", data)

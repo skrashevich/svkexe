@@ -173,6 +173,12 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to start container: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Fetch fresh IP from runtime after start.
+	if rtc, err := s.runtime.Get(r.Context(), c.IncusName); err == nil {
+		c.IPAddress = rtc.IP
+	}
+
 	if err := s.db.UpdateContainerStatus(id, "running", c.IPAddress); err != nil {
 		http.Error(w, "failed to update status", http.StatusInternalServerError)
 		return

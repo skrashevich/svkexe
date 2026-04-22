@@ -156,7 +156,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		_ = d.db.UpdateContainerStatus(c.ID, rtContainer.Status, rtContainer.IP)
 
 		if d.materializer != nil {
-			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, user.ID, d.shelleyLLMCfg); err != nil {
+			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, incusName, user.ID, d.shelleyLLMCfg); err != nil {
 				log.Printf("shelley setup failed for %s: %v", incusName, err)
 			}
 		}
@@ -206,7 +206,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 
 	// Re-apply Shelley config on every start.
 	if d.materializer != nil {
-		_ = shelley.SetupContainer(r.Context(), d.runtime, d.materializer, id, c.OwnerID, d.shelleyLLMCfg)
+		_ = shelley.SetupContainer(r.Context(), d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.shelleyLLMCfg)
 	}
 
 	// Fetch fresh IP from runtime after start.
@@ -347,7 +347,7 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 
 		// Shelley setup.
 		if d.materializer != nil {
-			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, id, c.OwnerID, d.shelleyLLMCfg); err != nil {
+			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.shelleyLLMCfg); err != nil {
 				log.Printf("recreate: shelley setup failed for %s: %v", c.IncusName, err)
 			}
 		}

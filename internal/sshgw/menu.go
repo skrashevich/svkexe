@@ -233,7 +233,7 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 
 	// Re-apply Shelley config on every start.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, user.ID, s.shelleyLLMCfg)
+		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -289,7 +289,7 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 
 	// Re-apply Shelley config on every start.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, user.ID, s.shelleyLLMCfg)
+		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -519,7 +519,7 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 	// Shelley setup.
 	if s.materializer != nil {
 		fmt.Fprintf(sess, "Setting up Shelley...\r\n")
-		if err := shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, user.ID, s.shelleyLLMCfg); err != nil {
+		if err := shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg); err != nil {
 			fmt.Fprintf(sess, "Warning: Shelley setup failed: %v\r\n", err)
 		}
 	}

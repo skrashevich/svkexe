@@ -15,11 +15,13 @@ import (
 //  4. Materializing LLM API keys.
 //  5. Enabling and starting the service.
 //
+// containerID is the database UUID (used for host-side key materialization).
+// incusName is the Incus container name (used for exec commands inside the container).
 // llmCfg may be nil if no gateway-level LLM proxy is configured.
-func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, ownerID string, llmCfg *LLMProxyConfig) error {
+func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, incusName, ownerID string, llmCfg *LLMProxyConfig) error {
 	// Create required directories inside the container.
 	for _, dir := range []string{"/data", "/etc/shelley", "/etc/systemd/system"} {
-		if _, err := rt.Exec(ctx, containerID, []string{"mkdir", "-p", dir}); err != nil {
+		if _, err := rt.Exec(ctx, incusName, []string{"mkdir", "-p", dir}); err != nil {
 			return fmt.Errorf("create dir %s: %w", dir, err)
 		}
 	}
@@ -27,7 +29,7 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 	// Write systemd unit file.
 	unitContent := SystemdUnitContent()
 	writeCmd := []string{"sh", "-c", fmt.Sprintf("cat > /etc/systemd/system/shelley.service << 'SHELLEY_UNIT_EOF'\n%sSHELLEY_UNIT_EOF", unitContent)}
-	if _, err := rt.Exec(ctx, containerID, writeCmd); err != nil {
+	if _, err := rt.Exec(ctx, incusName, writeCmd); err != nil {
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
@@ -35,7 +37,7 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 	if llmCfg != nil && llmCfg.BaseURL != "" {
 		envContent := fmt.Sprintf("OPENAI_BASE_URL=%s\nOPENAI_API_KEY=%s\n", llmCfg.BaseURL, llmCfg.Token)
 		writeEnvCmd := []string{"sh", "-c", fmt.Sprintf("cat > %s << 'LLM_ENV_EOF'\n%sLLM_ENV_EOF", LLMEnvFilePath, envContent)}
-		if _, err := rt.Exec(ctx, containerID, writeEnvCmd); err != nil {
+		if _, err := rt.Exec(ctx, incusName, writeEnvCmd); err != nil {
 			return fmt.Errorf("write llm proxy env: %w", err)
 		}
 	}
@@ -50,16 +52,16 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 	}
 	if len(envContent) > 0 {
 		writeEnvCmd := []string{"sh", "-c", fmt.Sprintf("cat > %s << 'ENV_EOF'\n%sENV_EOF", EnvFilePath, string(envContent))}
-		if _, err := rt.Exec(ctx, containerID, writeEnvCmd); err != nil {
+		if _, err := rt.Exec(ctx, incusName, writeEnvCmd); err != nil {
 			return fmt.Errorf("write env to container: %w", err)
 		}
 	}
 
 	// Enable and start the service.
-	if _, err := rt.Exec(ctx, containerID, []string{"systemctl", "enable", "shelley.service"}); err != nil {
+	if _, err := rt.Exec(ctx, incusName, []string{"systemctl", "enable", "shelley.service"}); err != nil {
 		return fmt.Errorf("enable shelley service: %w", err)
 	}
-	if _, err := rt.Exec(ctx, containerID, []string{"systemctl", "start", "shelley.service"}); err != nil {
+	if _, err := rt.Exec(ctx, incusName, []string{"systemctl", "start", "shelley.service"}); err != nil {
 		return fmt.Errorf("start shelley service: %w", err)
 	}
 

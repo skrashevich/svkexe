@@ -97,7 +97,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.materializer != nil {
-		if err := shelley.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer.ID, userID, s.shelleyLLMCfg); err != nil {
+		if err := shelley.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer.ID, dbContainer.IncusName, userID, s.shelleyLLMCfg); err != nil {
 			// Non-fatal: container is created, log and continue.
 			_ = err
 		}
@@ -238,7 +238,7 @@ func (s *Server) doRecreate(c *dbpkg.Container) {
 
 	// Run shelley setup.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, id, c.OwnerID, s.shelleyLLMCfg)
+		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, id, c.IncusName, c.OwnerID, s.shelleyLLMCfg)
 	}
 
 	// Restore /data backup.
@@ -283,7 +283,7 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 	// Re-apply Shelley config (env files, systemd unit) on every start so
 	// containers created before a config change pick up the new values.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(r.Context(), s.runtime, s.materializer, id, c.OwnerID, s.shelleyLLMCfg)
+		_ = shelley.SetupContainer(r.Context(), s.runtime, s.materializer, id, c.IncusName, c.OwnerID, s.shelleyLLMCfg)
 	}
 
 	// Fetch fresh IP from runtime after start.

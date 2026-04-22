@@ -280,6 +280,12 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-apply Shelley config (env files, systemd unit) on every start so
+	// containers created before a config change pick up the new values.
+	if s.materializer != nil {
+		_ = shelley.SetupContainer(r.Context(), s.runtime, s.materializer, id, c.OwnerID, s.shelleyLLMCfg)
+	}
+
 	// Fetch fresh IP from runtime after start.
 	if rtc, err := s.runtime.Get(r.Context(), c.IncusName); err == nil {
 		c.IPAddress = rtc.IP

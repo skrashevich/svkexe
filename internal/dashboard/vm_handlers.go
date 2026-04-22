@@ -204,6 +204,11 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-apply Shelley config on every start.
+	if d.materializer != nil {
+		_ = shelley.SetupContainer(r.Context(), d.runtime, d.materializer, id, c.OwnerID, d.shelleyLLMCfg)
+	}
+
 	// Fetch fresh IP from runtime after start.
 	if rtc, err := d.runtime.Get(r.Context(), c.IncusName); err == nil {
 		c.IPAddress = rtc.IP

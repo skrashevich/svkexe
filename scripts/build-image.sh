@@ -341,6 +341,12 @@ run_in "
 ENVEOF
     chmod 640 /etc/shelley/env
     chown root:${CONTAINER_USER} /etc/shelley/env
+
+    cat > /etc/shelley/llm-proxy.env <<'LLMEOF'
+# LLM proxy environment — populated by svkexe gateway.
+LLMEOF
+    chmod 640 /etc/shelley/llm-proxy.env
+    chown root:${CONTAINER_USER} /etc/shelley/llm-proxy.env
 "
 
 # ── MOTD ────────────────────────────────────────────────────────────────────

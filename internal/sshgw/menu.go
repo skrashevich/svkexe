@@ -230,6 +230,12 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 		fmt.Fprintf(sess, "Error: %v\r\n", err)
 		return
 	}
+
+	// Re-apply Shelley config on every start.
+	if s.materializer != nil {
+		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, user.ID, s.shelleyLLMCfg)
+	}
+
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
 	fmt.Fprintf(sess, "VM %q started.\r\n", c.Name)
 }

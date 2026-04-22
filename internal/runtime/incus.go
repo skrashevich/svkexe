@@ -46,6 +46,7 @@ func (r *IncusRuntime) Create(ctx context.Context, opts CreateOpts) (*Container,
 		devices["root"] = map[string]string{
 			"type": "disk",
 			"path": "/",
+			"pool": "svkexe-pool",
 			"size": fmt.Sprintf("%dGB", opts.DiskGB),
 		}
 	}

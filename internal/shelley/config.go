@@ -17,6 +17,9 @@ const (
 
 	// EnvFilePath is where materialized env vars are written inside the container.
 	EnvFilePath = "/etc/shelley/env"
+
+	// ContainerUser is the non-root user inside svkexe containers.
+	ContainerUser = "user"
 )
 
 // SystemdUnitContent returns the content of the systemd unit file for Shelley.
@@ -27,6 +30,9 @@ After=network.target
 
 [Service]
 Type=simple
+User=%s
+Group=%s
+WorkingDirectory=/home/%s
 EnvironmentFile=%s
 ExecStart=/usr/local/bin/shelley --port %d --db %s --require-header %s
 Restart=on-failure
@@ -34,5 +40,5 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, EnvFilePath, Port, DBPath, RequireHeader)
+`, ContainerUser, ContainerUser, ContainerUser, EnvFilePath, Port, DBPath, RequireHeader)
 }

@@ -104,6 +104,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	rtContainer, err := d.runtime.Create(r.Context(), runtime.CreateOpts{
 		Name:     name,
 		OwnerID:  user.ID,
+		Image:    shelley.DefaultImage,
 		CPULimit: cpuLimit,
 		MemoryMB: memoryMB,
 		DiskGB:   diskGB,

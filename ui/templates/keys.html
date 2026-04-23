@@ -5,14 +5,11 @@
     <h1>API Keys</h1>
 </div>
 
-<div class="card" style="margin-bottom:24px;">
-    <div style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-        Keys auto-sync to running containers after update.
-    </div>
-
+<div class="card" style="margin-bottom:20px;">
+    <div class="form-hint">Keys auto-sync to running containers after update.</div>
     <form hx-put="/dashboard/keys/new" hx-target="#key-table-body" hx-swap="beforeend" hx-on::after-request="this.reset()">
-        <div style="display:flex; gap:12px; align-items:flex-end;">
-            <div class="form-group" style="margin-bottom:0; flex:0 0 180px;">
+        <div class="form-inline">
+            <div class="form-group" style="flex:0 0 200px;">
                 <label>Provider</label>
                 <select name="provider" required>
                     <option value="">Select provider</option>
@@ -22,7 +19,7 @@
                     <option value="fireworks">Fireworks</option>
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom:0; flex:1;">
+            <div class="form-group" style="flex:1;">
                 <label>API Key</label>
                 <input type="password" name="key" placeholder="Paste your API key..." required autocomplete="off">
             </div>
@@ -33,14 +30,14 @@
     </form>
 </div>
 
-<div class="card">
-    <table style="width:100%; border-collapse:collapse; font-size:14px;">
+<div class="card" style="padding:0; overflow:hidden;">
+    <table class="data-table">
         <thead>
-            <tr style="border-bottom:1px solid var(--border);">
-                <th style="text-align:left; padding:10px 12px; color:var(--text-muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:0.5px;">Provider</th>
-                <th style="text-align:left; padding:10px 12px; color:var(--text-muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:0.5px;">Key</th>
-                <th style="text-align:left; padding:10px 12px; color:var(--text-muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:0.5px;">Added</th>
-                <th style="padding:10px 12px;"></th>
+            <tr>
+                <th>Provider</th>
+                <th>Key</th>
+                <th>Added</th>
+                <th></th>
             </tr>
         </thead>
         <tbody id="key-table-body">
@@ -48,7 +45,7 @@
                 {{template "key_row" .}}
             {{else}}
             <tr id="keys-empty">
-                <td colspan="4" style="padding:40px 12px; text-align:center; color:var(--text-muted);">No API keys saved yet.</td>
+                <td colspan="4" style="padding:48px 16px; text-align:center; color:var(--fg-mute);">No API keys saved yet.</td>
             </tr>
             {{end}}
         </tbody>

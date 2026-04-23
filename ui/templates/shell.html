@@ -1,13 +1,15 @@
 {{template "layout.html" .}}
 
 {{define "content"}}
-<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
-    <a href="/dashboard/vms" class="btn btn-secondary btn-sm">&larr; Back to VMs</a>
-    <h1 style="font-size:18px; font-weight:600;">Shell &mdash; {{.Container.Name}}</h1>
+<div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
+    <a href="/dashboard/vms" class="btn btn-secondary btn-sm">&larr; VMs</a>
+    <h1 style="font-size:1.1rem; font-weight:700; letter-spacing:-0.02em;">
+        <span style="font-family:var(--mono);">{{.Container.Name}}</span>
+    </h1>
     <span class="badge badge-{{statusClass .Container.Status}}">{{.Container.Status}}</span>
 </div>
 
-<div class="card" style="padding:0; overflow:hidden;">
+<div class="card" style="padding:0; overflow:hidden; border-radius:var(--radius-lg);">
     <div id="terminal" style="width:100%; height:calc(100vh - 180px);"></div>
 </div>
 
@@ -24,26 +26,28 @@
         fontSize: 14,
         fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
         theme: {
-            background: '#0d0d1a',
-            foreground: '#eaeaea',
-            cursor: '#e94560',
-            selectionBackground: 'rgba(233,69,96,0.3)',
-            black: '#1a1a2e',
-            brightBlack: '#4a4a6e',
-            red: '#ef5350',
-            brightRed: '#ff6b6b',
-            green: '#4caf50',
-            brightGreen: '#81c784',
-            yellow: '#ff9800',
-            brightYellow: '#ffb74d',
-            blue: '#42a5f5',
-            brightBlue: '#64b5f6',
-            magenta: '#ab47bc',
-            brightMagenta: '#ce93d8',
-            cyan: '#26c6da',
-            brightCyan: '#4dd0e1',
-            white: '#eaeaea',
-            brightWhite: '#ffffff'
+            background: '#1a1a26',
+            foreground: '#e8e8ee',
+            cursor: '#d4a040',
+            cursorAccent: '#1a1a26',
+            selectionBackground: 'rgba(212,160,64,0.2)',
+            selectionForeground: '#e8e8ee',
+            black:   '#2a2a3a',
+            brightBlack: '#555570',
+            red:     '#d06060',
+            brightRed: '#e87070',
+            green:   '#80b870',
+            brightGreen: '#a0d890',
+            yellow:  '#d4a040',
+            brightYellow: '#e8c060',
+            blue:    '#6090c0',
+            brightBlue: '#80b0e0',
+            magenta: '#a070b0',
+            brightMagenta: '#c090d0',
+            cyan:    '#60b0b0',
+            brightCyan: '#80d0d0',
+            white:   '#d0d0dc',
+            brightWhite: '#f0f0f8'
         }
     });
 
@@ -61,7 +65,6 @@
 
         ws.onopen = function() {
             reconnectDelay = 1000;
-            // Send initial terminal size
             var dims = {type: 'resize', cols: term.cols, rows: term.rows};
             ws.send(JSON.stringify(dims));
         };
@@ -75,7 +78,7 @@
         };
 
         ws.onclose = function() {
-            term.write('\r\n\x1b[33m[disconnected — reconnecting in ' + (reconnectDelay / 1000) + 's...]\x1b[0m\r\n');
+            term.write('\r\n\x1b[33m[disconnected \u2014 reconnecting in ' + (reconnectDelay / 1000) + 's...]\x1b[0m\r\n');
             setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         };

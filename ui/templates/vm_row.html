@@ -1,32 +1,30 @@
 {{define "vm_card"}}
 <div class="card" id="vm-{{.ID}}">
-    <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px;">
+    <div class="vm-card-head">
         <div>
-            <div style="font-size:15px; font-weight:600; margin-bottom:4px;">{{.Name}}</div>
+            <div class="vm-card-name">{{.Name}}</div>
             <span class="badge badge-{{statusClass .Status}}">{{.Status}}</span>
         </div>
         {{if eq .Status "running"}}
-        <div style="display:flex; gap:6px;">
-            <a href="https://shelley.{{.Name}}.{{domain}}/" target="_blank"
-               style="font-size:12px; color:var(--accent2); text-decoration:none; padding:4px 8px; border:1px solid var(--accent2); border-radius:5px; white-space:nowrap;">
+        <div class="vm-card-links">
+            <a href="https://shelley.{{.Name}}.{{domain}}/" target="_blank" class="vm-link vm-link-accent">
                 Shelley
             </a>
-            <a href="https://{{.Name}}.{{domain}}/" target="_blank"
-               style="font-size:12px; color:var(--text-muted); text-decoration:none; padding:4px 8px; border:1px solid var(--border); border-radius:5px; white-space:nowrap;">
+            <a href="https://{{.Name}}.{{domain}}/" target="_blank" class="vm-link">
                 Open &rarr;
             </a>
         </div>
         {{end}}
     </div>
 
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; font-size:12px; color:var(--text-muted);">
-        <div>CPU: <span style="color:var(--text)">{{.CPULimit}} vCPU</span></div>
-        <div>RAM: <span style="color:var(--text)">{{.MemoryMB}} MB</span></div>
-        <div>Disk: <span style="color:var(--text)">{{.DiskGB}} GB</span></div>
-        {{if .IPAddress}}<div>IP: <span style="color:var(--text)">{{.IPAddress}}</span></div>{{end}}
+    <div class="vm-card-specs">
+        <div class="vm-spec">CPU <span class="vm-spec-val">{{.CPULimit}} vCPU</span></div>
+        <div class="vm-spec">RAM <span class="vm-spec-val">{{.MemoryMB}} MB</span></div>
+        <div class="vm-spec">Disk <span class="vm-spec-val">{{.DiskGB}} GB</span></div>
+        {{if .IPAddress}}<div class="vm-spec">IP <span class="vm-spec-val">{{.IPAddress}}</span></div>{{end}}
     </div>
 
-    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+    <div class="vm-card-actions">
         {{if eq .Status "stopped"}}
         <button class="btn btn-secondary btn-sm"
             hx-post="/dashboard/vms/{{.ID}}/start"

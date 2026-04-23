@@ -1,9 +1,9 @@
 {{define "key_row"}}
-<tr id="key-row-{{.Provider}}" style="border-bottom:1px solid var(--border);">
-    <td style="padding:12px; font-weight:500; text-transform:capitalize;">{{.Provider}}</td>
-    <td style="padding:12px; font-family:monospace; color:var(--text-muted);">{{.Masked}}</td>
-    <td style="padding:12px; color:var(--text-muted); font-size:13px;">{{formatTime .CreatedAt}}</td>
-    <td style="padding:12px; text-align:right;">
+<tr id="key-row-{{.Provider}}">
+    <td class="cell-name">{{.Provider}}</td>
+    <td class="cell-mono">{{.Masked}}</td>
+    <td class="cell-muted">{{formatTime .CreatedAt}}</td>
+    <td class="cell-actions">
         <button class="btn btn-danger btn-sm"
             hx-delete="/dashboard/keys/{{.Provider}}"
             hx-target="#key-row-{{.Provider}}"

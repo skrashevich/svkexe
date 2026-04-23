@@ -4,7 +4,7 @@
     <div class="card modal">
         <div class="modal-header">
             <h2>New Virtual Machine</h2>
-            <button class="modal-close" onclick="document.getElementById('create-modal').innerHTML=''">&#x2715;</button>
+            <button class="modal-close" onclick="document.getElementById('create-modal').innerHTML=''">&times;</button>
         </div>
         <form hx-post="/dashboard/vms"
               hx-target="#vm-list"
@@ -49,8 +49,8 @@
                         onclick="document.getElementById('create-modal').innerHTML=''">Cancel</button>
                 <button type="submit" class="btn btn-primary">
                     <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:6px;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
-                        Creating…
+                        <svg width="14" height="14" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
+                        Creating...
                     </span>
                     <span class="btn-label">Create VM</span>
                 </button>

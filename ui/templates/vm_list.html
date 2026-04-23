@@ -9,6 +9,12 @@
 <div class="empty-state">
     <h3>No VMs yet</h3>
     <p>Create your first virtual machine to get started.</p>
+    <button class="btn btn-primary"
+        hx-get="/dashboard/vms/create"
+        hx-target="#create-modal"
+        hx-swap="innerHTML">
+        + New VM
+    </button>
 </div>
 {{end}}
 {{end}}

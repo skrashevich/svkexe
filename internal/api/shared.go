@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -68,6 +69,31 @@ func (s *Server) revokeSharedLink(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
 	if token == "" {
 		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	userID := userIDFromCtx(r.Context())
+	link, err := s.db.LookupSharedLink(token)
+	if err == sql.ErrNoRows {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	container, err := s.db.GetContainerByID(link.ContainerID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if container.OwnerID != userID {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

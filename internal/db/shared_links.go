@@ -55,6 +55,27 @@ func (db *DB) CreateSharedLink(containerID, createdBy string, expiresAt *time.Ti
 	return db.getSharedLinkByID(link.ID)
 }
 
+// LookupSharedLink returns a shared link by token without checking expiration.
+func (db *DB) LookupSharedLink(token string) (*SharedLink, error) {
+	link := &SharedLink{}
+	var expiresAt sql.NullTime
+	err := db.QueryRow(
+		`SELECT id, container_id, created_by, token, expires_at, created_at
+		 FROM shared_links WHERE token = ?`,
+		token,
+	).Scan(&link.ID, &link.ContainerID, &link.CreatedBy, &link.Token, &expiresAt, &link.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup shared link: %w", err)
+	}
+	if expiresAt.Valid {
+		link.ExpiresAt = &expiresAt.Time
+	}
+	return link, nil
+}
+
 // GetSharedLinkByToken returns a shared link by token, checking expiration.
 func (db *DB) GetSharedLinkByToken(token string) (*SharedLink, error) {
 	link := &SharedLink{}

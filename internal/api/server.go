@@ -79,7 +79,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/login", s.loginGet)
 	r.Get("/logout", s.logoutPost)
 	r.Get("/register", s.registerGet)
-	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+	r.Get("/metrics", metrics.ProtectHandler(promhttp.Handler()).ServeHTTP)
 
 	// Mutating auth endpoints: apply the rate limiter when available to make
 	// password brute-force expensive. The limiter keys by X-ExeDev-Userid

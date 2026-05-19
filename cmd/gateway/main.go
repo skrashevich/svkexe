@@ -26,6 +26,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/api"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
+	"github.com/skrashevich/svkexe/internal/metrics"
 	"github.com/skrashevich/svkexe/internal/proxy"
 	"github.com/skrashevich/svkexe/internal/shelley"
 	"github.com/skrashevich/svkexe/internal/ratelimit"
@@ -49,6 +50,7 @@ func main() {
 	openRouterKey := getenv("OPENROUTER_API_KEY", "")
 	openRouterModels := getenv("OPENROUTER_MODELS", "anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash")
 	llmInternalToken := getenv("LLM_INTERNAL_TOKEN", "")
+	metrics.BearerToken = getenv("METRICS_TOKEN", "")
 
 	// Encryption key must be 32 bytes (AES-256).
 	encKey := deriveEncKey(encKeyHex)

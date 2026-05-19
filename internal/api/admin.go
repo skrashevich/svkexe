@@ -14,7 +14,7 @@ func (s *Server) getMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, userToResponse(user))
 }
 
 // adminListUsers handles GET /api/admin/users — lists all users.
@@ -24,7 +24,7 @@ func (s *Server) adminListUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, usersToResponse(users))
 }
 
 // adminListContainers handles GET /api/admin/containers — lists all containers.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
@@ -42,12 +43,15 @@ func TestGetMe(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var user dbpkg.User
+	var user userResponse
 	if err := json.NewDecoder(w.Body).Decode(&user); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if user.ID != "user1" {
 		t.Errorf("want user ID 'user1', got %q", user.ID)
+	}
+	if strings.Contains(w.Body.String(), "PasswordHash") || strings.Contains(w.Body.String(), "password_hash") {
+		t.Errorf("/api/me must not expose password hash: %s", w.Body.String())
 	}
 }
 
@@ -83,9 +87,12 @@ func TestAdminListUsers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var users []*dbpkg.User
+	var users []userResponse
 	if err := json.NewDecoder(w.Body).Decode(&users); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	if strings.Contains(w.Body.String(), "password_hash") {
+		t.Errorf("/api/admin/users must not expose password_hash: %s", w.Body.String())
 	}
 	// At minimum user1 (from newTestServer) and admin1 should exist.
 	if len(users) < 2 {

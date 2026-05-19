@@ -119,6 +119,16 @@ func TestLogin_UnknownEmail(t *testing.T) {
 	}
 }
 
+func TestLogout_GETNotAllowed(t *testing.T) {
+	srv, _, _ := newAuthTestServer(t, "eve@example.com", "pw12345678", "user")
+	r := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /logout: want 405, got %d", w.Code)
+	}
+}
+
 func TestLogout_InvalidatesSession(t *testing.T) {
 	srv, database, userID := newAuthTestServer(t, "dave@example.com", "pw12345678", "user")
 

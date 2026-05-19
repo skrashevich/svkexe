@@ -51,7 +51,10 @@ func main() {
 	llmInternalToken := getenv("LLM_INTERNAL_TOKEN", "")
 
 	// Encryption key must be 32 bytes (AES-256).
-	encKey := deriveEncKey(encKeyHex)
+	encKey, err := deriveEncKey(encKeyHex)
+	if err != nil {
+		log.Fatalf("encryption key: %v", err)
+	}
 
 	// Parse rate limit configuration.
 	rps, err := strconv.ParseFloat(rateLimitRPS, 64)
@@ -230,14 +233,6 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// deriveEncKey converts the hex env var to a 32-byte key.
-// If empty or too short, falls back to a zeroed key (dev mode only).
-func deriveEncKey(hex string) []byte {
-	key := make([]byte, 32)
-	copy(key, []byte(hex))
-	return key
 }
 
 // loadOrGenerateHostKey loads an ed25519 host key from path, or generates and saves one.

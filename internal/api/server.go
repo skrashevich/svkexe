@@ -77,7 +77,6 @@ func (s *Server) buildRouter() chi.Router {
 		http.Redirect(w, r, "/dashboard/", http.StatusSeeOther)
 	})
 	r.Get("/login", s.loginGet)
-	r.Get("/logout", s.logoutPost)
 	r.Get("/register", s.registerGet)
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 

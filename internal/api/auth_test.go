@@ -75,7 +75,7 @@ func TestLogin_Success(t *testing.T) {
 	if w2.Code != http.StatusOK {
 		t.Fatalf("/api/me with valid session: want 200, got %d: %s", w2.Code, w2.Body.String())
 	}
-	if !strings.Contains(w2.Body.String(), `"Email":"alice@example.com"`) {
+	if !strings.Contains(w2.Body.String(), `"email":"alice@example.com"`) {
 		t.Errorf("me response missing email: %s", w2.Body.String())
 	}
 }

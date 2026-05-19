@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -16,6 +18,12 @@ import (
 // containerIDFromURL returns the {id} URL parameter.
 func containerIDFromURL(r *http.Request) string {
 	return chi.URLParam(r, "id")
+}
+
+var containerNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func validContainerName(name string) bool {
+	return len(name) >= 2 && len(name) <= 63 && containerNameRE.MatchString(name)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -57,6 +65,17 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if !validContainerName(req.Name) {
+		http.Error(w, "invalid container name: use lowercase letters, digits, and hyphens (2-63 chars)", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.db.GetContainerByName(req.Name, userID); err == nil {
+		http.Error(w, "container name already exists", http.StatusConflict)
+		return
+	} else if err != nil && err != sql.ErrNoRows {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if req.CPULimit == 0 {
 		req.CPULimit = 2
 	}
@@ -92,6 +111,10 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		DiskGB:    req.DiskGB,
 	}
 	if err := s.db.CreateContainer(dbContainer); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			http.Error(w, "container name already exists", http.StatusConflict)
+			return
+		}
 		http.Error(w, "failed to persist container", http.StatusInternalServerError)
 		return
 	}

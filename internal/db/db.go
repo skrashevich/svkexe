@@ -66,6 +66,9 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("add password_hash column: %w", err)
 		}
 	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS containers_owner_name_idx ON containers(owner_id, name)`); err != nil {
+		return fmt.Errorf("create containers_owner_name_idx: %w", err)
+	}
 	return nil
 }
 

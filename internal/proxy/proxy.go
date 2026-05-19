@@ -53,49 +53,48 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up container by name (ownership check follows).
-	container, err := p.db.GetContainerByNameOnly(info.ContainerName)
-	if err == sql.ErrNoRows {
-		http.Error(w, "container not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Security Invariant S2 / S3: verify caller owns this container. Identity
-	// comes from the session cookie — we never trust incoming X-ExeDev-*
-	// headers for subdomain traffic.
+	// Security Invariant S2 / S3: identity comes from the session cookie — we
+	// never trust incoming X-ExeDev-* headers for subdomain traffic.
 	userID := p.authenticate(r)
 	r.Header.Del("X-ExeDev-Userid")
 	r.Header.Del("X-ExeDev-Email")
 
-	if userID == "" || userID != container.OwnerID {
-		// If not owner, check for shared link token.
-		token := r.URL.Query().Get("share")
-		if token == "" {
-			if userID == "" {
-				// Redirect browsers to the login page; API clients get 401.
-				if strings.Contains(r.Header.Get("Accept"), "text/html") {
-					http.Redirect(w, r, "https://"+p.domain+"/login", http.StatusSeeOther)
-					return
-				}
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+	var container *db.Container
+	var err error
+
+	if token := r.URL.Query().Get("share"); token != "" {
+		link, linkErr := p.db.GetSharedLinkByToken(token)
+		if linkErr != nil {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		link, err := p.db.GetSharedLinkByToken(token)
-		if err != nil || link.ContainerID != container.ID {
+		container, err = p.db.GetContainerByID(link.ContainerID)
+		if err == sql.ErrNoRows || container.Name != info.ContainerName {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		// Valid shared link — proceed without injecting the user header.
-	} else {
-		// Forward the authenticated user ID to Shelley.
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	} else if userID != "" {
+		container, err = p.db.GetContainerByName(info.ContainerName, userID)
+		if err == sql.ErrNoRows {
+			http.Error(w, "container not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		r.Header.Set("X-ExeDev-Userid", userID)
+	} else {
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			http.Redirect(w, r, "https://"+p.domain+"/login", http.StatusSeeOther)
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	// Reject requests to stopped containers.

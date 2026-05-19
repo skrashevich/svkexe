@@ -32,6 +32,14 @@ type Proxy struct {
 	client *http.Client
 }
 
+// ValidateConfig returns an error when the proxy would accept unauthenticated requests.
+func ValidateConfig(cfg Config) error {
+	if cfg.APIKey != "" && cfg.InternalToken == "" {
+		return fmt.Errorf("InternalToken is required when APIKey is set")
+	}
+	return nil
+}
+
 // New creates a new LLM proxy.
 func New(cfg Config) *Proxy {
 	return &Proxy{

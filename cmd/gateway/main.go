@@ -131,6 +131,9 @@ func main() {
 			Models:        models,
 			InternalToken: llmInternalToken,
 		}
+		if err := llmproxy.ValidateConfig(*llmCfg); err != nil {
+			log.Fatalf("LLM proxy: %v (set LLM_INTERNAL_TOKEN)", err)
+		}
 		log.Printf("LLM proxy enabled with %d models", len(models))
 	}
 

@@ -230,3 +230,21 @@ func TestCreateAndListKeys(t *testing.T) {
 		t.Errorf("list keys: want 200, got %d", w2.Code)
 	}
 }
+
+func TestDeleteKey_Ownership(t *testing.T) {
+	srv, database := newTestServer(t)
+	_ = database.CreateUser(&dbpkg.User{ID: "other", Email: "other@example.com", Role: "user"})
+	_ = database.CreateAPIKey("victim-key", "other", "openai", "sk-victim", testEncKey)
+
+	r := authedRequest(http.MethodDelete, "/api/keys/victim-key", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("delete other user's key: want 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	_, err := database.GetAPIKeyPlaintext("victim-key", testEncKey)
+	if err != nil {
+		t.Fatalf("victim key should still exist: %v", err)
+	}
+}

@@ -84,6 +84,23 @@ func (db *DB) DeleteAPIKey(id string) error {
 	return nil
 }
 
+// DeleteAPIKeyForOwner removes an API key only when it belongs to ownerID.
+// Returns sql.ErrNoRows when no matching row was deleted.
+func (db *DB) DeleteAPIKeyForOwner(id, ownerID string) error {
+	res, err := db.Exec(`DELETE FROM api_keys WHERE id = ? AND owner_id = ?`, id, ownerID)
+	if err != nil {
+		return fmt.Errorf("delete api key for owner: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete api key for owner: rows affected: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // encryptAESGCM encrypts plaintext using AES-GCM. Returns nonce+ciphertext.
 func encryptAESGCM(key, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -69,7 +70,10 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r.Context())
 	id := chi.URLParam(r, "id")
-	if err := s.db.DeleteAPIKey(id); err != nil {
+	if err := s.db.DeleteAPIKeyForOwner(id, userID); err == sql.ErrNoRows {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
 		http.Error(w, "failed to delete key", http.StatusInternalServerError)
 		return
 	}

@@ -7,3 +7,4 @@ scrape_configs:
     static_configs:
       - targets: ["gateway:8080"]
     metrics_path: /metrics
+    # When METRICS_TOKEN is set on the gateway, configure bearer_token here.

@@ -179,6 +179,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `OPENROUTER_MODELS` | `anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash` | Models to try in order (comma-separated) |
 | `LLM_INTERNAL_TOKEN` | | Bearer token for Shelley → gateway auth |
 | `LLM_PROXY_URL` | *(derived from DOMAIN)* | LLM proxy URL as seen from containers. If unset and DOMAIN is configured, defaults to `https://$DOMAIN/api/llm/v1` |
+| `METRICS_TOKEN` | | Bearer token required for `GET /metrics` when set (recommended in production) |
 
 ## Architecture
 

@@ -12,8 +12,12 @@ import (
 	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
-var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+func (d *Dashboard) wsUpgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return allowedWebSocketOrigin(d.domain, r.Header.Get("Origin"))
+		},
+	}
 }
 
 // wsResizeMsg is the JSON control message sent by the browser for resize events.
@@ -88,7 +92,7 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	conn, err := d.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("ws upgrade error for vm %s: %v", id, err)
 		return

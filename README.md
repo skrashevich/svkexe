@@ -1,4 +1,9 @@
 # svkexe
+[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen?style=flat&logo=go)](https://goreportcard.com/report/github.com/skrashevich/svkexe)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/skrashevich/svkexe.svg)](https://pkg.go.dev/github.com/skrashevich/svkexe)
+[![GitHub release](https://img.shields.io/github/v/release/skrashevich/svkexe?include_prereleases)](https://github.com/skrashevich/svkexe/releases)
+
 
 Self-hosted platform for persistent Linux VMs with integrated [Shelley](https://github.com/boldsoftware/shelley) AI coding agent. A self-hosted alternative to [exe.dev](https://exe.dev).
 

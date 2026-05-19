@@ -153,11 +153,22 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	setSessionCookie(w, sess.Token, int(dbpkg.SessionTTL.Seconds()))
 
-	dest := r.URL.Query().Get("next")
-	if dest == "" || !strings.HasPrefix(dest, "/") {
-		dest = "/dashboard/"
+	http.Redirect(w, r, safeRedirectPath(r.URL.Query().Get("next")), http.StatusSeeOther)
+}
+
+// safeRedirectPath returns a same-origin relative path for post-login redirects.
+// Rejects protocol-relative URLs (//evil.com) and backslash tricks.
+func safeRedirectPath(next string) string {
+	if next == "" {
+		return "/dashboard/"
 	}
-	http.Redirect(w, r, dest, http.StatusSeeOther)
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		return "/dashboard/"
+	}
+	if strings.Contains(next, "\\") {
+		return "/dashboard/"
+	}
+	return next
 }
 
 // logoutPost invalidates the caller's session and clears the cookie.

@@ -193,6 +193,23 @@ func TestRegister_FirstUserBecomesAdmin(t *testing.T) {
 	}
 }
 
+func TestSafeRedirectPath(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"", "/dashboard/"},
+		{"/dashboard/vms", "/dashboard/vms"},
+		{"//evil.com", "/dashboard/"},
+		{"/\\evil.com", "/dashboard/"},
+		{"https://evil.com", "/dashboard/"},
+	}
+	for _, tc := range tests {
+		if got := safeRedirectPath(tc.in); got != tc.want {
+			t.Errorf("safeRedirectPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestAuthMiddleware_HTMLRedirect(t *testing.T) {
 	srv, _, _ := newAuthTestServer(t, "redir@example.com", "pass12345", "user")
 

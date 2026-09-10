@@ -68,7 +68,10 @@ else
     AGENT_GOOS="${AGENT_GOOS:-linux}"
     AGENT_GOARCH="${AGENT_GOARCH:-$(go env GOARCH)}"
     GOOS="$AGENT_GOOS" GOARCH="$AGENT_GOARCH" make exe-scroll
-    CGO_ENABLED=0 GOOS="$AGENT_GOOS" GOARCH="$AGENT_GOARCH" go build -trimpath \
+    # -buildvcs=false: the agent source tree is a throwaway git checkout whose
+    # owner depends on who ran the previous build, and go's VCS stamping fails
+    # on a repo owned by someone else. The version is set via -ldflags below.
+    CGO_ENABLED=0 GOOS="$AGENT_GOOS" GOARCH="$AGENT_GOARCH" go build -trimpath -buildvcs=false \
         -ldflags "-s -w -X shelley.exe.dev/version.Version=picoclaw-$PICOCLAW_VERSION-svkexe -X shelley.exe.dev/version.Customized=true" \
         -o "${AGENT_OUTPUT:-$ROOT/bin/picoclaw}" ./cmd/shelley
 fi

@@ -31,9 +31,13 @@ LDFLAGS := -s -w \
 
 build: gateway agent
 
+# -buildvcs=false: go build runs git itself to stamp VCS data, and that call
+# does not go through the safe.directory setting above — it fails outright when
+# root builds a checkout owned by another user, which is how the self-update
+# runs. The metadata it would embed is already stamped explicitly via LDFLAGS.
 gateway:
 	mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -trimpath -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -trimpath -buildvcs=false -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)

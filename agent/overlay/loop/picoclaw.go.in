@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -12,6 +13,33 @@ import (
 )
 
 const picoMaxIterations = 1024
+
+// picoEmptyTurnRetries bounds how often a turn that produced nothing is asked
+// again before the user is told why their task stopped.
+const picoEmptyTurnRetries = 2
+
+// isEmptyTurn reports whether a response carries nothing the turn can continue
+// from. Reasoning alone does not count: it is never shown as an answer and
+// never executed, so a turn that ends there has silently stalled.
+func isEmptyTurn(resp *llm.Response) bool {
+	if resp == nil {
+		return true
+	}
+	if resp.StopReason == llm.StopReasonToolUse {
+		return false
+	}
+	for _, c := range resp.Content {
+		switch c.Type {
+		case llm.ContentTypeToolUse:
+			return false
+		case llm.ContentTypeText:
+			if strings.TrimSpace(c.Text) != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // PicoClaw owns iteration and parallel dispatch. The provider bridge retains
 // Shelley's lossless history, system prompts, streaming, usage and persistence;
@@ -76,6 +104,24 @@ func (p *picoDriver) Chat(ctx context.Context, _ []providers.Message, _ []provid
 		return nil, err
 	}
 	resp, err := p.round(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// A turn that ends with nothing to show is not an answer: the model either
+	// produced only reasoning or wrote its tool call as prose instead of a real
+	// call, which weaker models do. Treating that as a finished turn abandons
+	// the task mid-way with an empty message. Ask again — a retry usually draws
+	// a model that can call tools — and only give up with a reason that names
+	// the cause.
+	for retries := 0; isEmptyTurn(resp) && err == nil; retries++ {
+		if retries == picoEmptyTurnRetries {
+			return nil, fmt.Errorf("the model returned neither an answer nor a tool call %d times; it may not support tool calling — switch this VM to a model that does", retries+1)
+		}
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		resp, err = p.round(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}

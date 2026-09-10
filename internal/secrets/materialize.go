@@ -44,6 +44,9 @@ func (m *Materializer) MaterializeKeys(containerID, ownerID string) error {
 		if err != nil {
 			return fmt.Errorf("decrypt key %s: %w", k.ID, err)
 		}
+		if k.BaseURL != "" {
+			continue
+		} // Custom models use protected DB credentials.
 		// Use provider name uppercased as env var name, e.g. OPENAI_API_KEY.
 		envName := strings.ToUpper(k.Provider) + "_API_KEY"
 		sb.WriteString(envName)
@@ -97,3 +100,29 @@ func (m *Materializer) RefreshKeys(containerID, ownerID string) error {
 	return m.MaterializeKeys(containerID, ownerID)
 }
 
+// ProviderModels returns decrypted connection settings for DB-backed models.
+// These values must only be written to the owner's protected guest configuration.
+func (m *Materializer) ProviderModels(owner string) ([]ProviderModel, error) {
+	keys, err := m.db.ListAPIKeysByOwner(owner)
+	if err != nil {
+		return nil, err
+	}
+	var result []ProviderModel
+	for _, k := range keys {
+		if k.BaseURL == "" {
+			continue
+		}
+		key, err := m.db.GetAPIKeyPlaintext(k.ID, m.encKey)
+		if err != nil {
+			return nil, err
+		}
+		for _, model := range strings.Split(k.Models, ",") {
+			if model != "" {
+				result = append(result, ProviderModel{Provider: k.Provider, Model: model, BaseURL: k.BaseURL, Key: key})
+			}
+		}
+	}
+	return result, nil
+}
+
+type ProviderModel struct{ Provider, Model, BaseURL, Key string }

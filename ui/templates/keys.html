@@ -6,8 +6,8 @@
 </div>
 
 <div class="card" style="margin-bottom:20px;">
-    <div class="form-hint">Keys auto-sync to running containers after update.</div>
-    <form hx-put="/dashboard/keys/new" hx-target="#key-table-body" hx-swap="beforeend" hx-on::after-request="this.reset()">
+    <div class="form-hint">Settings sync to running VMs after saving; the agent restarts to load them.</div>
+    <form hx-put="/dashboard/keys/new" hx-target="#key-table-body" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
         <div class="form-inline">
             <div class="form-group" style="flex:0 0 200px;">
                 <label>Provider</label>
@@ -17,15 +17,34 @@
                     <option value="openai">OpenAI</option>
                     <option value="gemini">Gemini</option>
                     <option value="fireworks">Fireworks</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="custom">Custom OpenAI-compatible</option>
                 </select>
             </div>
             <div class="form-group" style="flex:1;">
                 <label>API Key</label>
-                <input type="password" name="key" placeholder="Paste your API key..." required autocomplete="off">
+                <input type="password" name="key" placeholder="Paste your API key..." autocomplete="off">
             </div>
             <button type="submit" class="btn btn-primary" style="flex-shrink:0;">
                 Save Key
             </button>
+        </div>
+        <div class="form-inline">
+            <div class="form-group" style="flex:1;">
+                <label>Custom connection name</label>
+                <input name="name" pattern="[a-z0-9][a-z0-9-]{0,47}" placeholder="e.g. local or together">
+                <div class="form-hint">Required for Custom. Use lowercase letters, numbers and hyphens. Reuse a name to update it.</div>
+            </div>
+            <div class="form-group" style="flex:1;">
+                <label>Base URL</label>
+                <input name="base_url" type="url" placeholder="https://host.example/v1">
+                <div class="form-hint">Full API prefix, without /chat/completions. OpenRouter defaults to https://openrouter.ai/api/v1.</div>
+            </div>
+            <div class="form-group" style="flex:1;">
+                <label>Model IDs</label>
+                <input name="models" placeholder="vendor/model, another-model">
+                <div class="form-hint">Required for OpenRouter and custom endpoints. Comma-separated. Custom endpoints may omit the key.</div>
+            </div>
         </div>
     </form>
 </div>
@@ -35,19 +54,14 @@
         <thead>
             <tr>
                 <th>Provider</th>
+                <th>Endpoint / models</th>
                 <th>Key</th>
                 <th>Added</th>
                 <th></th>
             </tr>
         </thead>
         <tbody id="key-table-body">
-            {{range .Keys}}
-                {{template "key_row" .}}
-            {{else}}
-            <tr id="keys-empty">
-                <td colspan="4" style="padding:48px 16px; text-align:center; color:var(--fg-mute);">No API keys saved yet.</td>
-            </tr>
-            {{end}}
+            {{template "key_list" .Keys}}
         </tbody>
     </table>
 </div>

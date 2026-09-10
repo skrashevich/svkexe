@@ -3,32 +3,40 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 )
 
 // refreshKeysForUser re-materializes keys for all running containers owned by userID.
-// Errors are silently ignored since key refresh is best-effort.
-func (s *Server) refreshKeysForUser(userID string) {
-	if s.materializer == nil {
-		return
+// A sync failure is reported separately from successful persistence.
+func (s *Server) refreshKeysForUser(r *http.Request, userID string) error {
+	if s.materializer == nil || s.runtime == nil {
+		return nil
 	}
 	containers, err := s.db.ListContainersByOwner(userID)
 	if err != nil {
-		return
+		return err
 	}
+	var syncErr error
 	for _, c := range containers {
 		if c.Status == "running" {
-			_ = s.materializer.RefreshKeys(c.ID, userID)
+			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), s.runtime, s.materializer, c.ID, c.IncusName, userID))
 		}
 	}
+	return syncErr
 }
 
 // createKeyRequest is the JSON body for API key creation.
 type createKeyRequest struct {
 	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	Models   string `json:"models"`
 	Key      string `json:"key"`
 }
 
@@ -52,17 +60,22 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Provider == "" || req.Key == "" {
-		http.Error(w, "provider and key are required", http.StatusBadRequest)
+	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
+	baseURL, models, err := db.NormalizeProvider(req.Provider, req.BaseURL, req.Models, req.Key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	id := uuid.New().String()
-	if err := s.db.CreateAPIKey(id, userID, req.Provider, req.Key, s.encKey); err != nil {
+	if err := s.db.SaveProviderKey(id, userID, req.Provider, req.Key, baseURL, models, s.encKey); err != nil {
 		http.Error(w, "failed to store key", http.StatusInternalServerError)
 		return
 	}
-	s.refreshKeysForUser(userID)
+	if err := s.refreshKeysForUser(r, userID); err != nil {
+		http.Error(w, "Settings saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
@@ -70,13 +83,16 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r.Context())
 	id := chi.URLParam(r, "id")
-	if err := s.db.DeleteAPIKeyForOwner(id, userID); err == sql.ErrNoRows {
+	if err := s.db.DeleteAPIKeyForOwner(id, userID); errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to delete key", http.StatusInternalServerError)
 		return
 	}
-	s.refreshKeysForUser(userID)
+	if err := s.refreshKeysForUser(r, userID); err != nil {
+		http.Error(w, "Settings saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

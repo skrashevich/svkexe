@@ -69,6 +69,17 @@ func (db *DB) migrate() error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS containers_owner_name_idx ON containers(owner_id, name)`); err != nil {
 		return fmt.Errorf("create containers_owner_name_idx: %w", err)
 	}
+	for _, column := range []string{"base_url", "models"} {
+		exists, err := columnExists(db, "api_keys", column)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.Exec("ALTER TABLE api_keys ADD COLUMN " + column + " TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

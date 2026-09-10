@@ -97,6 +97,11 @@ systemctl daemon-reload
 	if err := SeedLLMModels(ctx, rt, incusName, llmCfg); err != nil {
 		return err
 	}
+	if m != nil {
+		if err := seedProviderModels(ctx, rt, m, incusName, ownerID); err != nil {
+			return err
+		}
+	}
 	// Custom models and the default model must be loaded with the current token.
 	if _, err := rt.Exec(ctx, incusName, []string{"systemctl", "restart", "picoclaw.service"}); err != nil {
 		return err

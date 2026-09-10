@@ -187,6 +187,29 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `LLM_INTERNAL_TOKEN` | | Bearer token for PicoClaw → gateway auth |
 | `LLM_PROXY_URL` | *(derived from DOMAIN)* | LLM proxy URL as seen from containers. If unset and DOMAIN is configured, defaults to `https://$DOMAIN/api/llm/v1` |
 
+### User LLM endpoints
+
+In **Dashboard → API Keys**, choose **OpenRouter** or **Custom OpenAI-compatible**.
+OpenRouter uses `https://openrouter.ai/api/v1` by default. For custom connections,
+enter a unique name (e.g. `local`), the complete API Base URL (e.g.
+`http://10.0.0.10:8000/v1`), and comma-separated model IDs. The URL must be reachable
+from the VM; `localhost` refers to that VM. Do not append `/chat/completions`.
+A custom endpoint may omit its API key. Model IDs must match the provider exactly.
+
+Multiple named custom connections can coexist. Save the same provider/name again
+to replace its settings. Keys remain encrypted in the gateway database. Saving or
+deleting settings reloads models and restarts the agent in running VMs; stopped
+VMs receive changes on their next start. Sync failures are reported and can be
+retried by restarting the VM. Select the resulting provider/model in the agent UI.
+
+The REST API accepts the same settings at `POST /api/keys`, for example:
+
+```json
+{"provider":"custom-local","base_url":"http://10.0.0.10:8000/v1","models":"local-model","key":""}
+```
+
+User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.
+
 ## Architecture
 
 ```

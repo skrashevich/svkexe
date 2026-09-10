@@ -16,6 +16,8 @@ type APIKey struct {
 	ID        string
 	OwnerID   string
 	Provider  string
+	BaseURL   string
+	Models    string
 	CreatedAt time.Time
 }
 
@@ -56,7 +58,7 @@ func (db *DB) GetAPIKeyPlaintext(id string, encKey []byte) (string, error) {
 // ListAPIKeysByOwner returns metadata (no plaintext) for all keys owned by ownerID.
 func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	rows, err := db.Query(
-		`SELECT id, owner_id, provider, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC`,
+		`SELECT id, owner_id, provider, base_url, models, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC`,
 		ownerID,
 	)
 	if err != nil {
@@ -67,7 +69,7 @@ func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	var keys []*APIKey
 	for rows.Next() {
 		k := &APIKey{}
-		if err := rows.Scan(&k.ID, &k.OwnerID, &k.Provider, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.OwnerID, &k.Provider, &k.BaseURL, &k.Models, &k.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
 		}
 		keys = append(keys, k)

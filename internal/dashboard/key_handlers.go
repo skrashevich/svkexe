@@ -1,24 +1,22 @@
 package dashboard
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 )
-
-var validProviders = map[string]bool{
-	"anthropic": true,
-	"openai":    true,
-	"gemini":    true,
-	"fireworks": true,
-}
 
 // keyRowData is passed to the key_row template.
 type keyRowData struct {
 	Provider  string
+	BaseURL   string
+	Models    string
 	Masked    string
 	CreatedAt time.Time
 }
@@ -70,41 +68,25 @@ func (d *Dashboard) putKey(w http.ResponseWriter, r *http.Request) {
 		provider = strings.ToLower(r.FormValue("provider"))
 	}
 
-	if !validProviders[provider] {
-		http.Error(w, "invalid provider", http.StatusBadRequest)
-		return
+	if provider == "custom" {
+		provider = "custom-" + strings.ToLower(strings.TrimSpace(r.FormValue("name")))
 	}
-
 	plaintext := r.FormValue("key")
-	if plaintext == "" {
-		http.Error(w, "key is required", http.StatusBadRequest)
-		return
-	}
-
-	// Delete existing key for this provider+owner before inserting.
-	existingKeys, err := d.db.ListAPIKeysByOwner(user.ID)
+	baseURL, models, err := db.NormalizeProvider(provider, r.FormValue("base_url"), r.FormValue("models"), plaintext)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	for _, k := range existingKeys {
-		if strings.ToLower(k.Provider) == provider {
-			_ = d.db.DeleteAPIKey(k.ID)
-		}
+	if err := d.db.SaveProviderKey(uuid.New().String(), user.ID, provider, plaintext, baseURL, models, d.encKey); err != nil {
+		http.Error(w, "failed to save settings", http.StatusInternalServerError)
+		return
 	}
-
-	id := uuid.New().String()
-	if err := d.db.CreateAPIKey(id, user.ID, provider, plaintext, d.encKey); err != nil {
-		http.Error(w, "failed to save key: "+err.Error(), http.StatusInternalServerError)
+	if err := d.refreshProviderKeys(r, user.ID); err != nil {
+		http.Error(w, "Settings saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
 		return
 	}
 
-	row := keyRowData{
-		Provider:  provider,
-		Masked:    maskKeyValue(plaintext),
-		CreatedAt: time.Now(),
-	}
-	d.render(w, "key_row", row)
+	d.getKeyList(w, r)
 }
 
 // deleteKey handles DELETE /dashboard/keys/{provider}.
@@ -116,7 +98,7 @@ func (d *Dashboard) deleteKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	provider := strings.ToLower(chi.URLParam(r, "provider"))
-	if !validProviders[provider] {
+	if !db.ValidProvider(provider) {
 		http.Error(w, "invalid provider", http.StatusBadRequest)
 		return
 	}
@@ -143,7 +125,11 @@ func (d *Dashboard) deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	if err := d.refreshProviderKeys(r, user.ID); err != nil {
+		http.Error(w, "Settings deleted, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
+		return
+	}
+	d.getKeyList(w, r)
 }
 
 // loadKeyRows returns masked key display rows for the given owner.
@@ -162,6 +148,8 @@ func (d *Dashboard) loadKeyRows(ownerID string) ([]keyRowData, error) {
 		}
 		rows = append(rows, keyRowData{
 			Provider:  k.Provider,
+			BaseURL:   k.BaseURL,
+			Models:    k.Models,
 			Masked:    masked,
 			CreatedAt: k.CreatedAt,
 		})
@@ -177,3 +165,28 @@ func maskKeyValue(key string) string {
 	return key[:4] + strings.Repeat("•", len(key)-8) + key[len(key)-4:]
 }
 
+func (d *Dashboard) getKeyList(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.loadKeyRows(userFromCtx(r.Context()).ID)
+	if err != nil {
+		http.Error(w, "failed to load settings", http.StatusInternalServerError)
+		return
+	}
+	d.render(w, "key_list", rows)
+}
+
+func (d *Dashboard) refreshProviderKeys(r *http.Request, owner string) error {
+	if d.materializer == nil || d.runtime == nil {
+		return nil
+	}
+	containers, err := d.db.ListContainersByOwner(owner)
+	if err != nil {
+		return err
+	}
+	var syncErr error
+	for _, c := range containers {
+		if c.Status == "running" {
+			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), d.runtime, d.materializer, c.ID, c.IncusName, owner))
+		}
+	}
+	return syncErr
+}

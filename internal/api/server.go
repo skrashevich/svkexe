@@ -16,6 +16,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/ratelimit"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/updater"
 )
 
 // Server holds the HTTP server dependencies.
@@ -30,13 +31,16 @@ type Server struct {
 	rateLimiter    *ratelimit.Limiter
 	llmProxy       *llmproxy.Proxy
 	picoclawLLMCfg *picoclaw.LLMProxyConfig
+	updater        *updater.Service
 }
 
 // NewServer constructs a Server with the given dependencies and registers routes.
 // domain is the base domain used for subdomain-based container routing (e.g. "example.com").
 // materializer may be nil, in which case key materialization is skipped.
 // rl may be nil, in which case rate limiting is disabled.
-func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, picoclawLLM *picoclaw.LLMProxyConfig) *Server {
+// upd may be nil, in which case the self-update endpoints report the
+// deployment as unable to update itself instead of failing.
+func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service) *Server {
 	s := &Server{
 		db:             database,
 		runtime:        rt,
@@ -46,6 +50,7 @@ func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, doma
 		materializer:   materializer,
 		rateLimiter:    rl,
 		picoclawLLMCfg: picoclawLLM,
+		updater:        upd,
 	}
 	if llmCfg != nil && llmCfg.APIKey != "" {
 		s.llmProxy = llmproxy.New(*llmCfg)
@@ -153,11 +158,15 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 			r.Get("/users", s.adminListUsers)
 			r.Delete("/users/{id}", s.adminDeleteUser)
 			r.Get("/containers", s.adminListContainers)
+			r.Get("/version", s.adminVersion)
+			r.Get("/update/check", s.adminUpdateCheck)
+			r.Get("/update/status", s.adminUpdateStatus)
+			r.Post("/update", s.adminUpdateStart)
 		})
 	})
 
 	// Dashboard routes
-	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.picoclawLLMCfg)
+	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.picoclawLLMCfg, s.updater)
 	if err != nil {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}

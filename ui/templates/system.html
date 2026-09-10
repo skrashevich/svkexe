@@ -1,0 +1,165 @@
+{{template "layout.html" .}}
+
+{{define "content"}}
+<style>
+    /* The component list is a plain key/value grid; two fixed columns like
+       .vm-card-specs would leave the long commit values wrapping in half a
+       card. */
+    .system-specs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 8px 24px;
+    }
+    .system-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .system-state {
+        font-size: 0.85rem;
+        color: var(--fg-dim);
+    }
+    .system-state + .system-state { margin-top: 6px; }
+    .system-ok { color: var(--ok); }
+    .system-bad { color: var(--danger); }
+    .system-note {
+        margin-top: 10px;
+        font-size: 0.75rem;
+        color: var(--fg-mute);
+    }
+    .system-actions { margin-top: 14px; }
+    /* The update log arrives as raw script output, so newlines have to survive
+       and a long build must not stretch the card. */
+    .system-log {
+        margin-top: 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 320px;
+        overflow-y: auto;
+        line-height: 1.6;
+    }
+    .system-link {
+        color: var(--accent);
+        border-bottom: 1px solid oklch(0.76 0.18 45 / 0.3);
+    }
+</style>
+
+<div class="page-header">
+    <h1>System</h1>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-title">Components</div>
+    <div class="vm-card-specs system-specs">
+        <div class="vm-spec">Gateway version <span class="vm-spec-val">{{.Version.Version}}</span></div>
+        <div class="vm-spec">Gateway commit <span class="vm-spec-val">{{.Version.Commit}}</span></div>
+        <div class="vm-spec">Build date <span class="vm-spec-val">{{.Version.BuildDate}}</span></div>
+        <div class="vm-spec">PicoClaw version <span class="vm-spec-val">{{.Version.PicoClawVersion}}</span></div>
+        <div class="vm-spec">Shelley commit <span class="vm-spec-val">{{.Version.ShelleyCommit}}</span></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Updates</div>
+
+    {{/* Check on load so the admin lands on an answer — and on the Update
+         button when there is one — instead of having to press a button to find
+         out anything. This request is served from the checker's cache; the
+         explicit re-check below forces a fresh lookup. */}}
+    <div id="update-check"
+         hx-get="/dashboard/system/check"
+         hx-trigger="load"
+         hx-target="this"
+         hx-swap="innerHTML">{{template "update_check" .}}</div>
+
+    <div class="system-actions">
+        <button class="btn btn-secondary"
+                hx-get="/dashboard/system/check?force=1"
+                hx-target="#update-check"
+                hx-swap="innerHTML"
+                hx-indicator="find .htmx-indicator">
+            <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
+                Checking...
+            </span>
+            <span class="btn-label">Check for updates</span>
+        </button>
+    </div>
+
+    <div id="update-status" style="margin-top:16px;">{{template "update_status" .}}</div>
+
+    {{if not .CanUpdate}}
+    {{/* The check still works without a runner, so say up front that the result
+         cannot be acted on here rather than only when the button is pressed. */}}
+    <div class="system-note">This deployment cannot install updates itself: {{.UnavailableReason}}</div>
+    {{end}}
+
+    <div class="system-note">Installing an update rebuilds the gateway and restarts it, so this page may be unreachable for a few seconds. Progress below resumes on its own once the gateway is back.</div>
+</div>
+{{end}}
+
+{{/* update_button is shared by the check result and by a refused start, so a
+     deployment that cannot self-update explains itself in both places. */}}
+{{define "update_button"}}
+{{if .CanUpdate}}
+<button class="btn btn-primary"
+        hx-post="/dashboard/system/update"
+        hx-target="#update-status"
+        hx-swap="innerHTML"
+        hx-confirm="This rebuilds and restarts the whole platform. Running VMs keep running, but the dashboard, the SSH gateway and the proxy will be unavailable for a few minutes. Continue?">
+    Update now
+</button>
+{{else}}
+<button class="btn btn-primary" disabled>Update now</button>
+<div class="system-note">{{.UnavailableReason}}</div>
+{{end}}
+{{end}}
+
+{{define "update_check"}}
+{{if not .Checked}}
+<div class="system-state">Checking for updates...</div>
+{{else if .CheckError}}
+<div class="system-state system-bad">Update check failed: {{.CheckError}}</div>
+{{else if .Status}}
+{{if .Status.Reason}}
+<div class="system-state">Cannot compare this build with upstream: {{.Status.Reason}}</div>
+{{else if .UpdateAvailable}}
+{{with .Status.Latest}}
+<div class="system-state system-ok">Update available: <span class="cell-mono">{{.Version}}</span></div>
+<div class="system-state">Published {{formatTime .PublishedAt}}{{if .URL}} &middot; <a class="system-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">view on GitHub</a>{{end}}</div>
+{{end}}
+<div class="system-state">Running <span class="cell-mono">{{.Version.Short}}</span>, checked {{formatTime .Status.CheckedAt}}.</div>
+<div class="system-actions">{{template "update_button" .}}</div>
+{{else}}
+<div class="system-state system-ok">Up to date: <span class="cell-mono">{{.Version.Short}}</span></div>
+<div class="system-state">Checked {{formatTime .Status.CheckedAt}}.</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{/* update_status carries its own poller so that it stops by itself: the
+     attributes are only emitted while the run is active, and a terminal state
+     swaps them away. A poll that fails while the gateway restarts does not
+     swap at all, so this element — and its trigger — survive to retry. */}}
+{{define "update_status"}}
+<div class="update-status"{{if eq .Run.State "running"}} hx-get="/dashboard/system/status" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML"{{end}}>
+{{if .StartError}}
+<div class="system-state system-bad">Could not start the update: {{.StartError}}</div>
+<div class="system-actions">{{template "update_button" .}}</div>
+{{end}}
+{{if eq .Run.State "running"}}
+<div class="system-row">
+    <div class="vm-busy-spinner"></div>
+    <div class="system-state">Update in progress{{if not .Run.StartedAt.IsZero}}, started {{formatTime .Run.StartedAt}}{{end}}.</div>
+</div>
+<div class="system-note">The gateway restarts itself as part of the update; this page may briefly fail to load. It picks the progress back up automatically.</div>
+{{if .Run.Log}}<div class="code-block system-log">{{.Run.Log}}</div>{{end}}
+{{else if eq .Run.State "success"}}
+<div class="system-state system-ok">Update finished{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}.{{if .Run.Commit}} Now running <span class="cell-mono">{{.Run.Commit}}</span>.{{end}}</div>
+{{else if eq .Run.State "failed"}}
+<div class="system-state system-bad">Update failed{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}{{if .Run.Error}}: {{.Run.Error}}{{end}}</div>
+{{if .Run.Log}}<div class="code-block system-log">{{.Run.Log}}</div>{{end}}
+{{end}}
+</div>
+{{end}}

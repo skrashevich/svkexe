@@ -149,7 +149,28 @@ Requires a running Incus daemon with the `svkexe-base` image (see `scripts/setup
 
 ## Update
 
-To update a running instance to the latest version:
+### From the dashboard (admin)
+
+Admins get a **System** entry in the dashboard navigation (`/dashboard/system`). It shows the installed
+versions of every component — gateway binary, its git commit and build date, the PicoClaw agent version
+and the pinned Shelley commit — and offers two controls:
+
+- **Check for updates** — asks the GitHub API whether `skrashevich/svkexe` has a newer build than the
+  running binary, and links to the remote commit or release.
+- **Update now** — starts the same `scripts/update.sh` run as the command line, with live progress and a
+  log tail on the page.
+
+The gateway restarts itself as part of the update, so the page briefly becomes unreachable and then
+resumes polling on its own. Progress survives that restart because the update writes its state to
+`/var/lib/svkexe/update-status.json` rather than reporting it over the HTTP request that started it.
+
+**How the privileged part works.** The gateway service runs as the unprivileged `svkexe` user with
+`NoNewPrivileges=true`, so it cannot elevate — and it cannot be the parent of a process that restarts it.
+Instead it writes a trigger file, `/var/lib/svkexe/update.trigger`. A root-owned `svkexe-update.path`
+systemd unit watches that file and starts the oneshot `svkexe-update.service`, which removes the trigger
+and runs `scripts/update.sh`. Both units are installed by `scripts/install.sh`.
+
+### From the command line
 
 ```bash
 sudo /opt/svkexe/scripts/update.sh
@@ -162,6 +183,13 @@ curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/upd
 ```
 
 The script pulls the latest code, rebuilds the gateway and PicoClaw agent, rebuilds the base image when agent/build sources change, and restarts the service. Running VM agents are migrated on gateway startup; stopped VMs migrate on their next start. Optional: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (build only).
+
+### Docker deployments
+
+A container image is updated by pulling a new image, not by rebuilding in place, so the **Update now**
+button reports the deployment as unable to self-update. Set `SVKEXE_UPDATE_COMMAND` to a command that
+performs the update for your setup if you want the button to work there; the update check and the version
+listing work regardless.
 
 ## Configuration
 
@@ -186,6 +214,25 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `OPENROUTER_MODELS` | `anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash` | Models to try in order (comma-separated) |
 | `LLM_INTERNAL_TOKEN` | | Bearer token for PicoClaw → gateway auth |
 | `LLM_PROXY_URL` | *(derived from DOMAIN)* | LLM proxy URL as seen from containers. If unset and DOMAIN is configured, defaults to `https://$DOMAIN/api/llm/v1` |
+
+### Self-update
+
+| Variable | Default | Description |
+|---|---|---|
+| `SVKEXE_UPDATE_OWNER` | `skrashevich` | GitHub account checked for new builds |
+| `SVKEXE_UPDATE_REPO` | `svkexe` | GitHub repository checked for new builds |
+| `SVKEXE_UPDATE_BRANCH` | `main` | Branch tracked by the `branch` channel |
+| `SVKEXE_UPDATE_CHANNEL` | `branch` | `branch` (compare commit SHAs) or `release` (compare release tags; falls back to `branch` when the repo has no releases) |
+| `SVKEXE_UPDATE_API_BASE` | `https://api.github.com` | GitHub API root |
+| `SVKEXE_UPDATE_CACHE_TTL` | `15m` | How long an update check result is reused before hitting the API again |
+| `SVKEXE_GITHUB_TOKEN` | *(falls back to `GITHUB_TOKEN`)* | Optional token; unauthenticated GitHub API calls are limited to 60/hour per IP |
+| `SVKEXE_UPDATE_TRIGGER` | `/var/lib/svkexe/update.trigger` | File the gateway writes to request an update; watched by `svkexe-update.path` |
+| `SVKEXE_UPDATE_STATUS` | `/var/lib/svkexe/update-status.json` | Machine-readable progress file written by `update.sh` and read by the dashboard |
+| `SVKEXE_UPDATE_LOG` | `/var/lib/svkexe/update.log` | Full update log; the status file carries a bounded tail of it |
+| `SVKEXE_UPDATE_COMMAND` | | Run this command directly instead of using the trigger file. For deployments where the gateway is already privileged (Docker, development) |
+
+The gateway reports its own build metadata from ldflags stamped by `make`; a binary built with plain
+`go build` reports version `dev` and the update check says it has no commit to compare against.
 
 ### User LLM endpoints
 

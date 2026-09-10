@@ -693,6 +693,7 @@
                 <a href="/dashboard/vms">VMs</a>
                 <a href="/dashboard/keys">Keys</a>
                 <a href="/dashboard/ssh-keys">SSH</a>
+                {{if .IsAdmin}}<a href="/dashboard/system">System</a>{{end}}
             </div>
             {{if .User}}
             <div class="dash-nav-user">{{.User.Email}}</div>

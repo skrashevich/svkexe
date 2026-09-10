@@ -32,6 +32,7 @@
 #   5. Builds the gateway binary, installs /usr/local/bin/svkexe-gateway.
 #   6. Creates svkexe user, /var/lib/svkexe, /etc/svkexe/gateway.env.
 #   7. Installs and enables the svkexe-gateway.service systemd unit.
+#   8. Installs svkexe-update.path/.service so the web UI can self-update.
 #
 # Idempotent: re-running is safe; completed steps are skipped.
 
@@ -147,6 +148,17 @@ DATA_DIR="/var/lib/svkexe"
 CONF_DIR="/etc/svkexe"
 ENV_FILE="${CONF_DIR}/gateway.env"
 SERVICE_FILE="/etc/systemd/system/${BIN_NAME}.service"
+
+# Self-update plumbing. The gateway runs unprivileged with NoNewPrivileges, so
+# it can never invoke update.sh itself; it drops a trigger file into DATA_DIR
+# and a root-owned .path unit picks it up. The status file is how the gateway
+# learns the outcome — update.sh restarts the gateway halfway through.
+UPDATE_PATH_FILE="/etc/systemd/system/svkexe-update.path"
+UPDATE_SERVICE_FILE="/etc/systemd/system/svkexe-update.service"
+UPDATE_TRIGGER="${DATA_DIR}/update.trigger"
+UPDATE_STATUS_FILE="${DATA_DIR}/update-status.json"
+UPDATE_LOG_FILE="${DATA_DIR}/update.log"
+
 GO_FALLBACK_VERSION="1.23.4"
 GO_INSTALL_DIR="/usr/local/go"
 
@@ -418,7 +430,11 @@ if ! id svkexe &>/dev/null; then
     log "Creating system user 'svkexe'…"
     useradd --system --home-dir "${DATA_DIR}" --shell /usr/sbin/nologin svkexe
 fi
+# DATA_DIR must stay writable by the service user: besides the database and
+# secrets, the gateway creates ${UPDATE_TRIGGER} there to ask systemd for a
+# self-update, and reads ${UPDATE_STATUS_FILE} written back by update.sh.
 chown -R svkexe:svkexe "${DATA_DIR}"
+chmod 0750 "${DATA_DIR}"
 chown root:svkexe "${CONF_DIR}"
 
 if getent group incus-admin &>/dev/null; then
@@ -523,9 +539,68 @@ LockPersonality=true
 [Install]
 WantedBy=multi-user.target
 EOF
+    # ── Self-update units ───────────────────────────────────────────────────
+    #
+    # PathExists (not PathChanged): the trigger is created by the gateway,
+    # which may write it while the .path unit is stopped or mid-daemon-reload.
+    # PathExists fires on activation too if the file is already there, so no
+    # click is ever lost. The unit re-arms as soon as the file disappears —
+    # svkexe-update.service removes it in ExecStartPre, before doing any work,
+    # so a single click can't loop.
+    log "Installing systemd unit ${UPDATE_PATH_FILE}…"
+    cat >"${UPDATE_PATH_FILE}" <<EOF
+[Unit]
+Description=Watch for svkexe self-update requests
+Documentation=https://github.com/skrashevich/svkexe
+
+[Path]
+PathExists=${UPDATE_TRIGGER}
+Unit=svkexe-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # This unit deliberately carries none of the gateway's hardening: it runs
+    # apt-get, rebuilds Incus images and calls systemctl, so it needs real root
+    # with an unrestricted filesystem view. It is started by the .path unit
+    # only, hence no [Install] section.
+    log "Installing systemd unit ${UPDATE_SERVICE_FILE}…"
+    cat >"${UPDATE_SERVICE_FILE}" <<EOF
+[Unit]
+Description=svkexe self-update
+Documentation=https://github.com/skrashevich/svkexe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=${REPO_ROOT}
+Environment=HOME=/root
+Environment=SVKEXE_SRC_DIR=${REPO_ROOT}
+Environment=SVKEXE_BRANCH=${SVKEXE_BRANCH}
+Environment=SVKEXE_UPDATE_STATUS=${UPDATE_STATUS_FILE}
+Environment=SVKEXE_UPDATE_LOG=${UPDATE_LOG_FILE}
+Environment=SVKEXE_SERVICE_USER=svkexe
+# Remove the trigger before doing anything else so the .path unit re-arms and
+# one request produces exactly one run.
+ExecStartPre=/bin/rm -f ${UPDATE_TRIGGER}
+ExecStart=/bin/bash ${REPO_ROOT}/scripts/update.sh
+# A cold run rebuilds the Go binary and the agent UI from scratch.
+TimeoutStartSec=3600
+EOF
+
+    # A trigger left over from an interrupted run would fire the moment the
+    # path unit starts; drop it so installing never kicks off an update.
+    rm -f "${UPDATE_TRIGGER}"
+
     systemctl daemon-reload
     systemctl enable "${BIN_NAME}.service"
+    systemctl enable --now svkexe-update.path
     log "Unit enabled. Start it with: sudo systemctl start ${BIN_NAME}"
+    log "Self-update watcher active: touch ${UPDATE_TRIGGER} to trigger an update."
 else
     log "SKIP_SERVICE=1 — skipping systemd unit install."
 fi
@@ -542,6 +617,10 @@ cat <<EOF
  Data dir   : ${DATA_DIR}
  Config     : ${ENV_FILE}
  Service    : ${BIN_NAME}.service (enabled, not started)
+ Self-update: svkexe-update.path → svkexe-update.service (enabled, active)
+              trigger  ${UPDATE_TRIGGER}
+              status   ${UPDATE_STATUS_FILE}
+              log      ${UPDATE_LOG_FILE}
 
  Next steps:
    1. Review and edit: sudo \$EDITOR ${ENV_FILE}

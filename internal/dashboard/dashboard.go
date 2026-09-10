@@ -12,6 +12,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
+	"github.com/skrashevich/svkexe/internal/updater"
 	"github.com/skrashevich/svkexe/ui"
 )
 
@@ -23,12 +24,15 @@ type Dashboard struct {
 	domain         string
 	encKey         []byte
 	picoclawLLMCfg *picoclaw.LLMProxyConfig
+	updater        *updater.Service
 	templates      *template.Template
 	funcMap        template.FuncMap
 }
 
 // NewDashboard creates a Dashboard and parses all HTML templates.
-func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, picoclawLLM *picoclaw.LLMProxyConfig) (*Dashboard, error) {
+// upd may be nil, in which case the system page reports that this deployment
+// cannot update itself.
+func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service) (*Dashboard, error) {
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
 			return t.Format("2006-01-02 15:04")
@@ -68,6 +72,7 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 		domain:         domain,
 		encKey:         encKey,
 		picoclawLLMCfg: picoclawLLM,
+		updater:        upd,
 		templates:      tmpl,
 		funcMap:        funcMap,
 	}, nil
@@ -95,6 +100,13 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Get("/ssh-keys", d.getSSHKeys)
 	r.Post("/ssh-keys", d.postSSHKey)
 	r.Delete("/ssh-keys/{id}", d.deleteSSHKey)
+
+	// Admin-only; the role is enforced inside the handlers because this router
+	// sits behind the session middleware but not behind AdminMiddleware.
+	r.Get("/system", d.getSystem)
+	r.Get("/system/check", d.getUpdateCheck)
+	r.Post("/system/update", d.postUpdate)
+	r.Get("/system/status", d.getUpdateStatus)
 }
 
 // redirectToVMs handles GET /dashboard/
@@ -108,13 +120,18 @@ type templateData struct {
 	Domain     string
 	Containers []*db.Container
 	Container  *db.Container
+	// IsAdmin gates admin-only chrome such as the System nav link. The layout
+	// cannot derive it from User alone without hardcoding the role string in
+	// the template.
+	IsAdmin bool
 }
 
 func (d *Dashboard) newData(r *http.Request) templateData {
 	user, _ := r.Context().Value(ctxkeys.User).(*db.User)
 	return templateData{
-		User:   user,
-		Domain: d.domain,
+		User:    user,
+		Domain:  d.domain,
+		IsAdmin: user != nil && user.Role == "admin",
 	}
 }
 
@@ -128,6 +145,12 @@ func (d *Dashboard) render(w http.ResponseWriter, tmplName string, data interfac
 // partialPatterns lists glob patterns for template files that only define
 // named snippets (no "content" block). renderPage includes all of them so
 // that pages can {{template "vm_list_content" .}} etc.
+//
+// templates/system.html is deliberately absent: it carries its own "content"
+// block, and renderPage appends the partials after the page file, so listing it
+// here would let the System page's content override every other page's. Its
+// named fragments are rendered through d.render from the shared template set
+// instead, the way vm_card is.
 var partialPatterns = []string{
 	"templates/vm_list.html",
 	"templates/vm_row.html",

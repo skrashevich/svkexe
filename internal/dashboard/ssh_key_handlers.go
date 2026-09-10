@@ -25,15 +25,15 @@ func (d *Dashboard) getSSHKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// templateData is embedded rather than restated so the layout's admin-only
+	// chrome (.IsAdmin) resolves on this page too.
 	data := struct {
-		User    *db.User
-		Domain  string
+		templateData
 		SSHKeys []*db.SSHKey
 		Error   string
 	}{
-		User:    user,
-		Domain:  d.domain,
-		SSHKeys: keys,
+		templateData: d.newData(r),
+		SSHKeys:      keys,
 	}
 	d.renderPage(w, "ssh_keys.html", data)
 }
@@ -52,15 +52,13 @@ func (d *Dashboard) postSSHKey(w http.ResponseWriter, r *http.Request) {
 	renderError := func(msg string) {
 		keys, _ := d.db.ListSSHKeysByUser(user.ID)
 		data := struct {
-			User    *db.User
-			Domain  string
+			templateData
 			SSHKeys []*db.SSHKey
 			Error   string
 		}{
-			User:    user,
-			Domain:  d.domain,
-			SSHKeys: keys,
-			Error:   msg,
+			templateData: d.newData(r),
+			SSHKeys:      keys,
+			Error:        msg,
 		}
 		d.renderPage(w, "ssh_keys.html", data)
 	}

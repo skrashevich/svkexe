@@ -26,7 +26,7 @@ func TestProviderSettingsLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	enc := []byte("01234567890123456789012345678901")
-	d, err := NewDashboard(database, nil, nil, "test", enc, nil)
+	d, err := NewDashboard(database, nil, nil, "test", enc, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

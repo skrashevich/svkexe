@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -32,9 +33,20 @@ import (
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
 	"github.com/skrashevich/svkexe/internal/sshgw"
+	"github.com/skrashevich/svkexe/internal/updater"
+	"github.com/skrashevich/svkexe/internal/version"
 )
 
 func main() {
+	// -version short-circuits before any env-based configuration is read, so
+	// it works even in an environment missing required vars like DOMAIN.
+	showVersion := flag.Bool("version", false, "print version information and exit")
+	flag.Parse()
+	if *showVersion {
+		printVersion()
+		os.Exit(0)
+	}
+
 	// Configuration from environment variables.
 	listenAddr := getenv("GATEWAY_ADDR", ":8080")
 	dbPath := getenv("GATEWAY_DB_PATH", "/var/lib/svkexe/gateway.db")
@@ -173,8 +185,13 @@ func main() {
 		}
 	}()
 
+	// Self-update: the GitHub source and the local trigger paths are entirely
+	// environment-driven, so a deployment that cannot self-update simply ends
+	// up with a service that reports itself unavailable.
+	updateSvc := updater.NewServiceFromEnv()
+
 	// Build API server and container proxy.
-	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM)
+	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM, updateSvc)
 	containerProxy := proxy.New(database, rt, domain)
 
 	// Top-level handler: route by Host header.
@@ -243,6 +260,17 @@ func buildTopHandler(domain string, apiSrv http.Handler, cp http.Handler) http.H
 		}
 		apiSrv.ServeHTTP(w, r)
 	})
+}
+
+// printVersion writes the build metadata in a human-readable form for the
+// -version flag.
+func printVersion() {
+	info := version.Get()
+	fmt.Printf("Version: %s\n", info.Version)
+	fmt.Printf("Commit: %s\n", info.Commit)
+	fmt.Printf("Build date: %s\n", info.BuildDate)
+	fmt.Printf("PicoClaw version: %s\n", info.PicoClawVersion)
+	fmt.Printf("Shelley commit: %s\n", info.ShelleyCommit)
 }
 
 func getenv(key, fallback string) string {

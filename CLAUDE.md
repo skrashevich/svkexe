@@ -51,6 +51,8 @@ Caddy (TLS, header strip) → Go Gateway (:8080) → Incus containers (LXC)
 | `internal/picoclaw` | PicoClaw setup, migration and retained application contract |
 | `internal/ratelimit` | Per-user token bucket rate limiter |
 | `internal/auth` | Session management, bcrypt (cost 12) |
+| `internal/version` | Build metadata stamped in via `-ldflags -X` from the Makefile |
+| `internal/updater` | GitHub update check + trigger-file handoff to the root-owned `svkexe-update` systemd units |
 
 ### UI layer
 

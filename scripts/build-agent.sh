@@ -48,7 +48,9 @@ if [[ ! -f "$BUILD_DIR/.svkexe-fingerprint" ]] || [[ "$(cat "$BUILD_DIR/.svkexe-
 fi
 cd "$BUILD_DIR"
 [[ "$MODE" != prepare ]] || exit 0
-UI_KEY="$SHELLEY_COMMIT:$NODE_VERSION:$PNPM_VERSION"
+# The fingerprint covers the overlay, so patched UI sources rebuild the bundle
+# instead of silently reusing the carried-over dist directory.
+UI_KEY="$SHELLEY_COMMIT:$NODE_VERSION:$PNPM_VERSION:$FINGERPRINT"
 if [[ ! -f ui/dist/.svkexe-commit ]] || [[ "$(cat ui/dist/.svkexe-commit)" != "$UI_KEY" ]]; then
     # Use the pinned build-time Node even on Debian/Ubuntu with older Node.
     # Bootstrap from the project root, outside the upstream npm configuration.

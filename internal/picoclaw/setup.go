@@ -34,20 +34,29 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets
 	if err := waitForGuestSystemd(ctx, rt, incusName); err != nil {
 		return err
 	}
-	if _, err := rt.Exec(ctx, incusName, []string{"mkdir", "-p", "/data", "/etc/shelley", "/etc/systemd/system"}); err != nil {
+	if _, err := rt.Exec(ctx, incusName, []string{"mkdir", "-p", "/data", ConfigDir, "/etc/systemd/system"}); err != nil {
 		return err
 	}
 	if err := installBinary(ctx, rt, incusName); err != nil {
 		return err
 	}
-	// Stop both names before touching configuration or the database. Preserve a
-	// one-time SQLite backup so rollback does not depend on newer schema support.
-	stop := `set -eu
-if systemctl cat shelley.service >/dev/null 2>&1; then systemctl disable --now shelley.service; fi
-if systemctl cat picoclaw.service >/dev/null 2>&1; then systemctl stop picoclaw.service; fi
-if [ -f /data/shelley.db ] && [ ! -f /data/shelley.pre-picoclaw.db ]; then sqlite3 /data/shelley.db '.backup /data/shelley.pre-picoclaw.db'; fi
-ln -sfn picoclaw /usr/local/bin/shelley
-`
+	// Stop every historical unit name before touching configuration or the
+	// database, preserve a one-time SQLite backup so rollback does not depend on
+	// newer schema support, then move pre-rename state to the PicoClaw paths.
+	// The moves are conditional so repeated setups stay idempotent.
+	stop := fmt.Sprintf(`set -eu
+for unit in shelley.service picoclaw.service; do
+ if systemctl cat "$unit" >/dev/null 2>&1; then systemctl disable --now "$unit"; fi
+done
+if [ -f %[1]s ] && [ ! -f /data/picoclaw.pre-rename.db ]; then sqlite3 %[1]s '.backup /data/picoclaw.pre-rename.db'; fi
+if [ -f %[1]s ] && [ ! -f %[2]s ]; then mv %[1]s %[2]s; fi
+for suffix in -wal -shm; do
+ if [ -f %[1]s$suffix ] && [ ! -f %[2]s$suffix ]; then mv %[1]s$suffix %[2]s$suffix; fi
+done
+if [ -f %[3]s/env ] && [ ! -f %[4]s ]; then mv %[3]s/env %[4]s; fi
+rm -f /usr/local/bin/shelley /etc/systemd/system/shelley.service
+rm -rf %[3]s
+`, LegacyDBPath, DBPath, LegacyConfigDir, EnvFilePath)
 	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", stop}); err != nil {
 		return fmt.Errorf("stop old agent: %w", err)
 	}
@@ -81,13 +90,12 @@ ln -sfn picoclaw /usr/local/bin/shelley
 	if err := writeGuestFile(ctx, rt, incusName, EnvFilePath, env); err != nil {
 		return err
 	}
-	configure := `set -eu
+	configure := fmt.Sprintf(`set -eu
 chown -R user:user /data
-chown root:user /etc/shelley/env /etc/shelley/shelley.json
-chmod 640 /etc/shelley/env /etc/shelley/shelley.json
-ln -sfn picoclaw.service /etc/systemd/system/shelley.service
+chown root:user %[1]s %[2]s
+chmod 640 %[1]s %[2]s
 systemctl daemon-reload
-`
+`, EnvFilePath, ConfigFilePath)
 	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", configure}); err != nil {
 		return err
 	}

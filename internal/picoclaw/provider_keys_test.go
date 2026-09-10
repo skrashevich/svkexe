@@ -44,7 +44,7 @@ func TestProviderModelsSync(t *testing.T) {
 	}
 	apply := func() {
 		t.Helper()
-		if _, err := local.Exec(string(guest.files["/etc/shelley/provider-models.sql"])); err != nil {
+		if _, err := local.Exec(string(guest.files[ConfigDir+"/provider-models.sql"])); err != nil {
 			t.Fatal(err)
 		}
 	}

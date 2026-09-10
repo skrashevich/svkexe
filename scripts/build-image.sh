@@ -257,7 +257,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log "Building PicoClaw agent…"
 AGENT_GOOS=linux "$REPO_ROOT/scripts/build-agent.sh"
 incus file push "$REPO_ROOT/bin/picoclaw" "${CONTAINER_NAME}/usr/local/bin/picoclaw"
-run_in "chmod 755 /usr/local/bin/picoclaw; ln -sfn picoclaw /usr/local/bin/shelley; mkdir -p /usr/local/share/licenses/svkexe-agent"
+run_in "chmod 755 /usr/local/bin/picoclaw; mkdir -p /usr/local/share/licenses/svkexe-agent"
 for license in "$REPO_ROOT"/agent/licenses/*; do
     incus file push "$license" "${CONTAINER_NAME}/usr/local/share/licenses/svkexe-agent/$(basename "$license")"
 done
@@ -307,17 +307,17 @@ fi
 
 log "Creating svkexe directories…"
 run_in "
-    mkdir -p /data /etc/shelley
+    mkdir -p /data /etc/picoclaw
     chown ${CONTAINER_USER}:${CONTAINER_USER} /data
-    cat > /etc/shelley/env <<'ENVEOF'
+    cat > /etc/picoclaw/env <<'ENVEOF'
 # Agent runtime environment — populated by svkexe gateway.
 ENVEOF
-    chmod 640 /etc/shelley/env
-    chown root:${CONTAINER_USER} /etc/shelley/env
+    chmod 640 /etc/picoclaw/env
+    chown root:${CONTAINER_USER} /etc/picoclaw/env
 
-    echo '{}' > /etc/shelley/shelley.json
-    chmod 640 /etc/shelley/shelley.json
-    chown root:${CONTAINER_USER} /etc/shelley/shelley.json
+    echo '{}' > /etc/picoclaw/picoclaw.json
+    chmod 640 /etc/picoclaw/picoclaw.json
+    chown root:${CONTAINER_USER} /etc/picoclaw/picoclaw.json
 "
 
 # ── MOTD ────────────────────────────────────────────────────────────────────

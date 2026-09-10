@@ -156,3 +156,46 @@ index 83ffa0b..e374cfa 100644
  		// The server accepts a per-request thinking_level override
  		// (off, minimal, low, medium, high, xhigh) on converse and
  		// distill endpoints. Clients can expose a picker; older
+diff --git a/ui/src/assets/manifest.json b/ui/src/assets/manifest.json
+index 2d0fc8b..9a6af3f 100644
+--- a/ui/src/assets/manifest.json
++++ b/ui/src/assets/manifest.json
+@@ -1,6 +1,6 @@
+ {
+-  "name": "Shelley",
+-  "short_name": "Shelley",
++  "name": "svkexe",
++  "short_name": "svkexe",
+   "description": "AI coding assistant",
+   "start_url": "/",
+   "display": "standalone",
+diff --git a/ui/src/index.html b/ui/src/index.html
+index 9f3d678..64a49c5 100644
+--- a/ui/src/index.html
++++ b/ui/src/index.html
+@@ -9,10 +9,10 @@
+     <meta name="theme-color" content="#1f2937" />
+     <meta name="apple-mobile-web-app-capable" content="yes" />
+     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+-    <meta name="apple-mobile-web-app-title" content="Shelley" />
++    <meta name="apple-mobile-web-app-title" content="svkexe" />
+     <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
+     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+-    <title>Shelley Agent</title>
++    <title>svkexe</title>
+     <link rel="stylesheet" href="/styles.css" />
+     <link rel="stylesheet" href="/main.css" />
+     <script type="module" src="/main.js"></script>
+diff --git a/ui/src/vue/App.vue b/ui/src/vue/App.vue
+index 4cbf9c0..1091732 100644
+--- a/ui/src/vue/App.vue
++++ b/ui/src/vue/App.vue
+@@ -307,7 +307,7 @@ function updatePageTitle(conversation: Conversation | undefined) {
+   const parts: string[] = [];
+   if (conversation?.slug && !isGeneratedId(conversation.slug)) parts.push(conversation.slug);
+   if (hostname) parts.push(hostname);
+-  parts.push("Shelley Agent");
++  parts.push("svkexe");
+   document.title = parts.join(" - ");
+ }
+ 

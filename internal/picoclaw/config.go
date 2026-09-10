@@ -9,17 +9,27 @@ const (
 	// RequireHeader is the HTTP header PicoClaw requires for user identification.
 	RequireHeader = "X-ExeDev-Userid"
 
-	// DBPath retains the existing Shelley database, including conversations and models.
-	DBPath = "/data/shelley.db"
+	// DBPath holds conversations and models. The schema is still the one the
+	// preserved application shell created, but the name follows the runtime.
+	DBPath = "/data/picoclaw.db"
+
+	// LegacyDBPath is the pre-rename location, migrated on setup.
+	LegacyDBPath = "/data/shelley.db"
 
 	// DefaultImage is the base container image used for PicoClaw containers.
 	DefaultImage = "svkexe-base"
 
-	// EnvFilePath is where materialized env vars are written inside the container.
-	EnvFilePath = "/etc/shelley/env"
+	// ConfigDir holds the agent configuration and materialized credentials.
+	ConfigDir = "/etc/picoclaw"
 
-	// ConfigFilePath retains the existing application-shell config location.
-	ConfigFilePath = "/etc/shelley/shelley.json"
+	// LegacyConfigDir is the pre-rename location, migrated on setup.
+	LegacyConfigDir = "/etc/shelley"
+
+	// EnvFilePath is where materialized env vars are written inside the container.
+	EnvFilePath = ConfigDir + "/env"
+
+	// ConfigFilePath is the agent configuration file.
+	ConfigFilePath = ConfigDir + "/picoclaw.json"
 
 	// ContainerUser is the non-root user inside svkexe containers.
 	ContainerUser = "user"

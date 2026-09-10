@@ -26,10 +26,12 @@ func seedProviderModels(ctx context.Context, rt runtime.ContainerRuntime, m *sec
 	if err != nil {
 		return err
 	}
-	if err := writeGuestFile(ctx, rt, name, "/etc/shelley/provider-models.sql", []byte(providerModelsSQL(models))); err != nil {
+	sqlPath := ConfigDir + "/provider-models.sql"
+	if err := writeGuestFile(ctx, rt, name, sqlPath, []byte(providerModelsSQL(models))); err != nil {
 		return err
 	}
-	_, err = rt.Exec(ctx, name, []string{"sh", "-c", "sqlite3 -bail /data/shelley.db < /etc/shelley/provider-models.sql; result=$?; rm -f /etc/shelley/provider-models.sql; exit $result"})
+	apply := fmt.Sprintf("sqlite3 -bail %s < %s; result=$?; rm -f %s; exit $result", DBPath, sqlPath, sqlPath)
+	_, err = rt.Exec(ctx, name, []string{"sh", "-c", apply})
 	return err
 }
 
@@ -59,7 +61,8 @@ func RefreshProviderKeys(ctx context.Context, rt runtime.ContainerRuntime, m *se
 	if err := seedProviderModels(ctx, rt, m, name, owner); err != nil {
 		return err
 	}
-	if _, err := rt.Exec(ctx, name, []string{"sh", "-c", "chown root:user /etc/shelley/env && chmod 640 /etc/shelley/env && systemctl restart picoclaw.service"}); err != nil {
+	protect := fmt.Sprintf("chown root:user %[1]s && chmod 640 %[1]s && systemctl restart picoclaw.service", EnvFilePath)
+	if _, err := rt.Exec(ctx, name, []string{"sh", "-c", protect}); err != nil {
 		return err
 	}
 	return waitForAgentHTTP(ctx, rt, name)

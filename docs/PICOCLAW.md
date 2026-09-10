@@ -6,10 +6,11 @@ Each VM runs `/usr/local/bin/picoclaw` on port 9000. This is svkexe's integratio
 
 - The complete Shelley web application: conversations, history, model selection, terminal, file/tool widgets, streaming, cancellation, retry, hooks and coding tools.
 - The original rich prompt/history representation, including images, reasoning blocks, tool IDs, usage accounting and ordered tool-result persistence. A provider adapter avoids converting these into plain text.
-- `/data/shelley.db`, `/etc/shelley/shelley.json`, `/etc/shelley/env` and the existing application API. Keeping the paths is intentional: an upgrade must not create an empty history.
+- The existing application API and database schema. Conversation history survives the upgrade; only the file names change (see below).
+- Guest state lives at `/data/picoclaw.db`, `/etc/picoclaw/picoclaw.json` and `/etc/picoclaw/env`. Pre-rename VMs carried `/data/shelley.db` and `/etc/shelley/`; setup moves them, including any `-wal`/`-shm` sidecars, and the move is conditional so repeated setups stay idempotent.
 - `https://<vm>.<domain>/`, `https://picoclaw.<vm>.<domain>/` and old `https://shelley.<vm>.<domain>/` links use the same ownership-checked proxy.
 - The dashboard uses `<vm>.<domain>` so a normal `*.<domain>` TLS certificate covers agent links. Service-prefixed aliases require additional certificate coverage at the external reverse proxy.
-- `/usr/local/bin/shelley` and `shelley.service` become aliases of the new binary/service, so existing local commands invoke PicoClaw too.
+- The former `/usr/local/bin/shelley` symlink and `shelley.service` alias are removed during migration, so the guest exposes only the name that actually runs.
 - Provider keys configured by the user still use the retained model adapters. The gateway's custom models use the exact `/api/llm/v1` endpoint and internal bearer token. `llm_gateway` is deliberately not set: that Shelley setting expects exe.dev's provider-specific API.
 
 The adapter lives in `agent/overlay/loop/picoclaw.go.in`; the narrowly scoped changes to the preserved application are in `agent/runtime.patch`. Its private per-call dispatch identifiers preserve raw JSON arguments and original tool-use IDs; those identifiers are never exposed to the model or the UI. The agent advertises `picoclaw-engine` in `/version`. Upstream self-updates are disabled by marking the binary customized, preventing an accidental replacement with the Shelley engine.
@@ -43,8 +44,8 @@ The integration test launches the real agent server and verifies its UI/API, ide
 On gateway startup, existing running VMs are reconciled. This restarts their agent services, so finish active agent work before updating. Stopped VMs migrate at their next API/dashboard/SSH start. Setup is serialized per VM and bounded by a timeout:
 
 1. Verify/install the agent artifact, then stop the old service.
-2. Save a one-time SQLite backup at `/data/shelley.pre-picoclaw.db` before opening it with the new application.
-3. Write config/keys with restrictive permissions, install `picoclaw.service`, and retain the old service/CLI aliases.
+2. Save a one-time SQLite backup at `/data/picoclaw.pre-rename.db`, then move pre-rename database and credentials to the PicoClaw paths.
+3. Write config/keys with restrictive permissions and install `picoclaw.service`.
 4. Start the agent to initialize/migrate the database; seed current gateway models and token; restart to load them.
 5. Require successful HTTP `/api/models` readiness before reporting success.
 
@@ -52,7 +53,7 @@ Create, start, restart and recreate paths use the same setup. VM recreation stop
 
 ## Rollback
 
-Keep a VM snapshot or the recreation archive before deployment. To roll back, stop the new agent, reinstall the previous gateway/image/agent and restore the pre-upgrade SQLite database with the service stopped (also remove any newer `shelley.db-wal`/`shelley.db-shm`). The one-time `shelley.pre-picoclaw.db` contains history up to the first migration, not conversations created afterward. Do not point an older Shelley binary at a database already migrated by a newer application without restoring its backup.
+Keep a VM snapshot or the recreation archive before deployment. To roll back, stop the new agent, reinstall the previous gateway/image/agent and restore the pre-upgrade SQLite database at its original `/data/shelley.db` path with the service stopped (also remove any newer `picoclaw.db-wal`/`picoclaw.db-shm`). The one-time `/data/picoclaw.pre-rename.db` contains history up to the first migration, not conversations created afterward. Do not point an older Shelley binary at a database already migrated by a newer application without restoring its backup.
 
 ## Attribution
 

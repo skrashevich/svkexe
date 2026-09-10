@@ -8,7 +8,7 @@
 (gateway_backend) {
 	# Always strip spoofable identity headers before they reach the gateway;
 	# the gateway sets them from its own session store for downstream services
-	# (Shelley rate limiter, proxy).
+	# (PicoClaw rate limiter, proxy).
 	request_header -X-ExeDev-Userid
 	request_header -X-ExeDev-Email
 

@@ -83,15 +83,25 @@ func TestSetupMigrationAndGatewayConfiguration(t *testing.T) {
 	if strings.Contains(script, cfg.Token) {
 		t.Fatal("token interpolated into shell")
 	}
-	for _, want := range []string{"shelley.pre-picoclaw.db", "systemctl daemon-reload", "restart picoclaw.service", "http://127.0.0.1:9000/api/models"} {
+	for _, want := range []string{
+		"/data/picoclaw.pre-rename.db",
+		"mv " + LegacyDBPath + " " + DBPath,
+		"rm -f /usr/local/bin/shelley /etc/systemd/system/shelley.service",
+		"systemctl daemon-reload",
+		"restart picoclaw.service",
+		"http://127.0.0.1:9000/api/models",
+	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("missing migration step %s", want)
 		}
 	}
-	if !strings.Contains(string(guest.files["/etc/shelley/models.sql"]), sqlQuote(cfg.Token)) {
+	if strings.Contains(script, LegacyConfigDir+"/env "+LegacyConfigDir) {
+		t.Error("legacy config directory removed before its credentials were moved")
+	}
+	if !strings.Contains(string(guest.files[ConfigDir+"/models.sql"]), sqlQuote(cfg.Token)) {
 		t.Fatal("gateway token not seeded losslessly")
 	}
-	if strings.Index(script, "disable --now shelley.service") > strings.Index(script, "enable picoclaw.service") {
+	if strings.Index(script, "disable --now") > strings.Index(script, "enable picoclaw.service") {
 		t.Fatal("old agent stopped after new agent started")
 	}
 }

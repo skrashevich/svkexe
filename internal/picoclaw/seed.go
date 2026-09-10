@@ -33,10 +33,12 @@ func SeedLLMModels(ctx context.Context, rt runtime.ContainerRuntime, incusName s
 	}
 
 	seedSQL := buildSeedSQL(llmCfg.Models, llmCfg.BaseURL, llmCfg.Token)
-	if err := writeGuestFile(ctx, rt, incusName, "/etc/shelley/models.sql", []byte(seedSQL)); err != nil {
+	sqlPath := ConfigDir + "/models.sql"
+	if err := writeGuestFile(ctx, rt, incusName, sqlPath, []byte(seedSQL)); err != nil {
 		return err
 	}
-	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", "sqlite3 -bail /data/shelley.db < /etc/shelley/models.sql; result=$?; rm -f /etc/shelley/models.sql; exit $result"}); err != nil {
+	apply := fmt.Sprintf("sqlite3 -bail %s < %s; result=$?; rm -f %s; exit $result", DBPath, sqlPath, sqlPath)
+	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", apply}); err != nil {
 		return fmt.Errorf("seed models: %w", err)
 	}
 

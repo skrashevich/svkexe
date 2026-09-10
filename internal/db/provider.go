@@ -148,7 +148,7 @@ func UserModelID(provider, model string) string {
 func ownerModelIDs(q interface {
 	Query(string, ...any) (*sql.Rows, error)
 }, owner string) ([]string, error) {
-	rows, err := q.Query(`SELECT provider, models FROM api_keys WHERE owner_id = ? AND base_url != '' ORDER BY created_at DESC`, owner)
+	rows, err := q.Query(`SELECT provider, models FROM api_keys WHERE owner_id = ? AND base_url != '' ORDER BY created_at DESC, id`, owner)
 	if err != nil {
 		return nil, fmt.Errorf("list owner models: %w", err)
 	}
@@ -215,33 +215,51 @@ var ErrUnknownModel = errors.New("unknown model")
 // default_model naming a model with no connection behind it. Writing first also
 // keeps the transaction from having to upgrade a read snapshot to a write lock,
 // which SQLite refuses outright once anyone else has committed.
-func (db *DB) SetUserDefaultModel(owner, model string) error {
+//
+// It reports whether the stored choice actually moved. Applying a choice means
+// restarting the agent on every running VM, which kills whatever it is in the
+// middle of, so re-submitting the model that is already stored must not.
+func (db *DB) SetUserDefaultModel(owner, model string) (changed bool, err error) {
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("set default model: begin tx: %w", err)
+		return false, fmt.Errorf("set default model: begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET default_model = ? WHERE id = ?`, model, owner)
+	// The update matches nothing when the value is already stored, which is
+	// exactly the signal wanted — RETURNING cannot supply it, since for an
+	// UPDATE it reports the row as it is afterwards.
+	res, err := tx.Exec(`UPDATE users SET default_model = ? WHERE id = ? AND default_model != ?`, model, owner, model)
 	if err != nil {
-		return fmt.Errorf("set default model: %w", err)
+		return false, fmt.Errorf("set default model: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("set default model: rows affected: %w", err)
+		return false, fmt.Errorf("set default model: rows affected: %w", err)
 	}
-	if n == 0 {
-		return sql.ErrNoRows
+	changed = n > 0
+	if !changed {
+		// Nothing moved because the value was already there, or because there is
+		// no such account. Only the second is an error. The read is safe to do
+		// here: the statement above has already taken the write lock, so this
+		// transaction is not upgrading a read snapshot.
+		var one int
+		if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, owner).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, sql.ErrNoRows
+			}
+			return false, fmt.Errorf("set default model: %w", err)
+		}
 	}
 	if model != "" {
 		ids, err := ownerModelIDs(tx, owner)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !slices.Contains(ids, model) {
-			return fmt.Errorf("%w %q", ErrUnknownModel, model)
+			return false, fmt.Errorf("%w %q", ErrUnknownModel, model)
 		}
 	}
-	return tx.Commit()
+	return changed, tx.Commit()
 }
 
 // UserDefaultModel returns the owner's chosen default, or the empty string when

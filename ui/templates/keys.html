@@ -132,5 +132,10 @@
     });
     document.getElementById("llm-connection-form").addEventListener("change", syncProtocolState);
     syncProtocolState();
+    // Firefox restores field values on pageshow after a back/forward, and fires
+    // neither input nor change while doing it — without this the user sees a
+    // filled Base URL beside a disabled Protocol, and the protocol they can read
+    // on screen is silently left out of the submission.
+    window.addEventListener("pageshow", syncProtocolState);
 </script>
 {{end}}

@@ -164,7 +164,8 @@ func (d *Dashboard) postDefaultModel(w http.ResponseWriter, r *http.Request) {
 	// Only an unreachable model is the caller's mistake. Anything else is ours,
 	// and reporting it as a validation message would render a driver error into
 	// the page as if the owner had chosen badly.
-	switch err := d.db.SetUserDefaultModel(user.ID, r.FormValue("model")); {
+	changed, err := d.db.SetUserDefaultModel(user.ID, r.FormValue("model"))
+	switch {
 	case errors.Is(err, db.ErrUnknownModel):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -175,9 +176,13 @@ func (d *Dashboard) postDefaultModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save the default model", http.StatusInternalServerError)
 		return
 	}
-	if err := d.refreshProviderKeys(r, user.ID); err != nil {
-		http.Error(w, "Default model saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
-		return
+	// Syncing restarts the agent on every running VM, killing whatever it is in
+	// the middle of. Re-submitting the model already stored is not worth that.
+	if changed {
+		if err := d.refreshProviderKeys(r, user.ID); err != nil {
+			http.Error(w, "Default model saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
+			return
+		}
 	}
 	d.getLLMBody(w, r)
 }
@@ -261,7 +266,7 @@ func (d *Dashboard) refreshProviderKeys(r *http.Request, owner string) error {
 	var syncErr error
 	for _, c := range containers {
 		if c.Status == "running" {
-			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), d.runtime, d.materializer, c.ID, c.IncusName, owner, chosen, d.picoclawLLMCfg))
+			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), d.runtime, d.materializer, c.ID, c.IncusName, owner, chosen))
 		}
 	}
 	return syncErr

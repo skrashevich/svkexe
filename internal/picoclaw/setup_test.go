@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -71,7 +72,7 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 		if g.models != "" {
 			return []byte(g.models), nil
 		}
-		return []byte("svkexe-test/model\n"), nil
+		return g.seededModels(text), nil
 	case strings.Contains(text, "/api/conversations/new"):
 		if g.newConversation != "" {
 			return []byte(g.newConversation), nil
@@ -103,6 +104,41 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	}
 	return nil, nil
 }
+
+// seededModels answers a model-listing query from the SQL the gateway actually
+// applied, rather than from a list the test hands it. The code under test now
+// picks the VM's model from what the VM has, so a fake that invented that list
+// could report a VM opening on a model the seeding never created.
+func (g *guestRuntime) seededModels(query string) []byte {
+	var ids []string
+	applied := false
+	for _, path := range []string{ConfigDir + "/models.sql", ConfigDir + "/provider-models.sql"} {
+		if _, ok := g.files[path]; ok {
+			applied = true
+		}
+		for _, stmt := range strings.Split(string(g.files[path]), "\n") {
+			_, values, found := strings.Cut(stmt, "VALUES ('")
+			if !strings.HasPrefix(stmt, "INSERT") || !found {
+				continue
+			}
+			id, _, _ := strings.Cut(values, "'")
+			if !strings.Contains(query, "LIKE 'svkexe-%'") || strings.HasPrefix(id, gatewayModelPrefix) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	if !applied {
+		// Nothing has been seeded in this test, so the VM is one that was set up
+		// on some earlier run and already holds the deployment's models.
+		return []byte("svkexe-test/model\n")
+	}
+	slices.Sort(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(ids, "\n") + "\n")
+}
+
 func (g *guestRuntime) PushFile(_ context.Context, _, path string, data []byte) error {
 	g.files[path] = data
 	return nil
@@ -133,7 +169,7 @@ func TestSetupPrefersOwnerModelOverGatewayList(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := secrets.NewMaterializer(database, enc, t.TempDir())
-	guest := &guestRuntime{files: map[string][]byte{}, models: "svkexe-cohere/north-mini-code:free\n"}
+	guest := &guestRuntime{files: map[string][]byte{}}
 	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token", Models: []string{"cohere/north-mini-code:free"}}
 
 	if err := SetupContainer(t.Context(), guest, nil, m, testContainer(owner.ID), cfg); err != nil {

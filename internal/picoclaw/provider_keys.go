@@ -34,55 +34,73 @@ func seedProviderModels(ctx context.Context, rt runtime.ContainerRuntime, name s
 	return err
 }
 
-// gatewaySeeded reports whether the gateway is the one that put this model in
-// the VM. Anything else the guest names is the owner's own creation inside the
-// agent, which the gateway has no business moving them off.
-func gatewaySeeded(id string) bool {
-	return strings.HasPrefix(id, db.UserModelPrefix) || strings.HasPrefix(id, gatewayModelPrefix)
+// providerModelIDs are the agent-side IDs of the owner's own models, in the
+// order their settings list them.
+func providerModelIDs(models []secrets.ProviderModel) []string {
+	ids := make([]string, 0, len(models))
+	for _, m := range models {
+		ids = append(ids, m.ID())
+	}
+	return ids
 }
 
-// stillReachable reports whether the VM can still open on the model it names.
-func stillReachable(current string, models []secrets.ProviderModel, llmCfg *LLMProxyConfig) bool {
-	if current == "" {
-		return false
+// ownModels are the owner's own models among the ones a VM holds. It recovers
+// the set from the VM itself, for callers that know what the VM has but not
+// what the owner's settings list.
+func ownModels(available []string) []string {
+	var own []string
+	for _, id := range available {
+		if strings.HasPrefix(id, db.UserModelPrefix) {
+			own = append(own, id)
+		}
 	}
-	if !gatewaySeeded(current) {
-		return true
-	}
-	if slices.ContainsFunc(models, func(m secrets.ProviderModel) bool { return m.ID() == current }) {
-		return true
-	}
-	if llmCfg == nil {
-		return false
-	}
-	return slices.ContainsFunc(llmCfg.Models, func(m string) bool { return gatewayModelPrefix+m == current })
+	return own
 }
 
-// resolveGuestDefaultModel decides what a guest's default_model should become,
-// given what it currently names. It returns the new value — empty meaning the
-// setting is removed — and whether anything has to change.
+// desiredModel picks the model a VM should open on, choosing only from the
+// models it actually has.
 //
-// An explicit choice is authoritative: the owner made it in their LLM settings
-// precisely so that every VM of theirs would honour it, so a different model
-// left in the guest is replaced.
+//	available — every model ID in the VM's agent database
+//	own       — the owner's own model IDs, in the order their settings list them
+//	chosen    — the model the owner picked in their LLM settings, empty for Auto
+//	current   — the model the VM names today
 //
-// Without one the gateway is only guessing, and whatever the guest already
-// names is a better guess than any list position: it is the owner's own in-agent
-// preference. So it stands as long as it still resolves — and only when it does
-// not is a replacement picked. That is the case that has to be acted on rather
-// than skipped: removing the last connection deletes those models from the agent
-// database, and a guest still naming one would open on a model it does not have.
-func resolveGuestDefaultModel(current string, models []secrets.ProviderModel, chosen string, llmCfg *LLMProxyConfig) (value string, changed bool) {
-	if chosen != "" && slices.ContainsFunc(models, func(m secrets.ProviderModel) bool { return m.ID() == chosen }) {
-		return chosen, chosen != current
+// The owner's own models replace the platform's: that list is deployment-wide
+// and can name models this account cannot reach, while a connection the owner
+// configured is one they chose and pay for. Among their own, whatever the VM
+// already names is their in-agent preference and stands — but a platform model
+// does not get that protection, or adding a first connection would leave every
+// running VM on the platform's key.
+func desiredModel(available, own []string, chosen, current string) string {
+	reachable := func(id string) bool { return id != "" && slices.Contains(available, id) }
+	if reachable(chosen) {
+		return chosen
 	}
-	if stillReachable(current, models, llmCfg) {
-		return current, false
+	var mine []string
+	for _, id := range own {
+		if reachable(id) {
+			mine = append(mine, id)
+		}
 	}
-	// defaultModelID is asked for a fallback, not for the choice: a choice that
-	// survived to here is one the owner can no longer reach.
-	want := defaultModelID(models, "", llmCfg)
-	return want, want != current
+	if len(mine) > 0 {
+		if slices.Contains(mine, current) {
+			return current
+		}
+		return mine[0]
+	}
+	// Nothing of their own to move them to. Whatever the VM runs on keeps
+	// working, including a model the gateway never seeded — that one is the
+	// owner's own creation inside the agent.
+	if reachable(current) {
+		return current
+	}
+	if gateway := firstWithPrefix(available, gatewayModelPrefix); gateway != "" {
+		return gateway
+	}
+	if len(available) > 0 {
+		return available[0]
+	}
+	return ""
 }
 
 // readGuestConfig returns the agent configuration as it stands in the VM.
@@ -136,15 +154,25 @@ func writeGuestConfig(ctx context.Context, rt runtime.ContainerRuntime, name str
 	return writeGuestFile(ctx, rt, name, ConfigFilePath, data)
 }
 
-// applyDefaultModel points a running VM at the model its owner should be on,
-// leaving the file untouched when it already names it.
-func applyDefaultModel(ctx context.Context, rt runtime.ContainerRuntime, name string, models []secrets.ProviderModel, chosen string, llmCfg *LLMProxyConfig) error {
-	cfg := readGuestConfig(ctx, rt, name)
-	value, changed := resolveGuestDefaultModel(guestDefaultModelOf(cfg), models, chosen, llmCfg)
-	if !changed {
-		return nil
+// applyDefaultModel points a VM at the model its owner should be on, leaving the
+// file untouched when it already names it. It must run after the models have
+// been seeded, since it chooses from what the VM actually has.
+//
+// It reports whether the file changed, so a caller that restarts the agent can
+// decline to do so for a no-op — a restart kills whatever the agent is in the
+// middle of.
+func applyDefaultModel(ctx context.Context, rt runtime.ContainerRuntime, name string, models []secrets.ProviderModel, chosen string) (bool, error) {
+	available, err := listGuestModels(ctx, rt, name)
+	if err != nil {
+		return false, err
 	}
-	return writeGuestConfig(ctx, rt, name, cfg, value)
+	cfg := readGuestConfig(ctx, rt, name)
+	current := guestDefaultModelOf(cfg)
+	want := desiredModel(available, providerModelIDs(models), chosen, current)
+	if want == current {
+		return false, nil
+	}
+	return true, writeGuestConfig(ctx, rt, name, cfg, want)
 }
 
 // RefreshProviderKeys applies provider changes to the running agent, including
@@ -152,8 +180,8 @@ func applyDefaultModel(ctx context.Context, rt runtime.ContainerRuntime, name st
 // credentials and DB models.
 //
 // chosen is the owner's selected default model, empty when they have not picked
-// one. llmCfg may be nil, which simply leaves no gateway model to fall back to.
-func RefreshProviderKeys(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, id, name, owner, chosen string, llmCfg *LLMProxyConfig) error {
+// one.
+func RefreshProviderKeys(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, id, name, owner, chosen string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	lock, _ := setupLocks.LoadOrStore(name, make(chan struct{}, 1))
@@ -181,7 +209,7 @@ func RefreshProviderKeys(ctx context.Context, rt runtime.ContainerRuntime, m *se
 	if err := seedProviderModels(ctx, rt, name, models); err != nil {
 		return err
 	}
-	if err := applyDefaultModel(ctx, rt, name, models, chosen, llmCfg); err != nil {
+	if _, err := applyDefaultModel(ctx, rt, name, models, chosen); err != nil {
 		return err
 	}
 	protect := fmt.Sprintf("chown root:user %[1]s %[2]s && chmod 640 %[1]s %[2]s && systemctl restart picoclaw.service", EnvFilePath, ConfigFilePath)

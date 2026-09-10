@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -93,19 +92,16 @@ rm -rf %[3]s
 			return fmt.Errorf("read default model: %w", err)
 		}
 	}
-	// The existing config is read rather than replaced, and the model decided by
-	// the same rule a running VM follows. Rebuilding it from nothing would drop
-	// every other setting the agent keeps there, and would undo the owner's own
-	// in-agent model choice on each restart — the opposite of what that rule
-	// does for a VM that stays up.
+	// The config is rewritten with whatever it already names, which for a fresh
+	// VM is nothing. The point here is only that the file exists, so the
+	// permissions applied below have something to apply to; which model this VM
+	// opens on is decided after seeding, once there is a model list to decide
+	// against.
 	//
 	// llm_gateway in the preserved frontend means exe.dev's provider-specific
 	// API, not an OpenAI endpoint. Configure only explicit DB-backed models.
 	cfg := readGuestConfig(ctx, rt, incusName)
-	value, _ := resolveGuestDefaultModel(guestDefaultModelOf(cfg), providerModels, chosen, llmCfg)
-	// The result is written whether or not it changed: a fresh VM has no config
-	// file at all, and the permissions applied further down need one to exist.
-	if err := writeGuestConfig(ctx, rt, incusName, cfg, value); err != nil {
+	if err := writeGuestConfig(ctx, rt, incusName, cfg, guestDefaultModelOf(cfg)); err != nil {
 		return err
 	}
 	// Written before the agent starts, so its first conversation already knows
@@ -147,6 +143,12 @@ systemctl daemon-reload
 			return err
 		}
 	}
+	// Now that the VM's model list is what it will be, decide which of those
+	// models it opens on — the same decision, and the same code, a running VM
+	// gets when its owner changes their LLM settings.
+	if _, err := applyDefaultModel(ctx, rt, incusName, providerModels, chosen); err != nil {
+		return err
+	}
 	// Custom models and the default model must be loaded with the current token.
 	if _, err := rt.Exec(ctx, incusName, []string{"systemctl", "restart", "picoclaw.service"}); err != nil {
 		return err
@@ -156,28 +158,6 @@ systemctl daemon-reload
 	}
 	log.Printf("picoclaw: setup complete for %s", incusName)
 	return nil
-}
-
-// defaultModelID is the model a VM opens with. The owner's own keys win over
-// the deployment-wide gateway list: that list is shared by every VM and can
-// name models this account has no access to, while a key the owner configured
-// is one they chose and can reach.
-//
-// chosen is the model the owner picked in their LLM settings. It is honoured
-// only while it is still one of theirs — a choice left over from a connection
-// they have since edited or removed names a model no VM has, so falling through
-// to a model they do have beats obeying it.
-func defaultModelID(providerModels []secrets.ProviderModel, chosen string, llmCfg *LLMProxyConfig) string {
-	if chosen != "" && slices.ContainsFunc(providerModels, func(m secrets.ProviderModel) bool { return m.ID() == chosen }) {
-		return chosen
-	}
-	if len(providerModels) > 0 {
-		return providerModels[0].ID()
-	}
-	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
-		return gatewayModelPrefix + llmCfg.Models[0]
-	}
-	return ""
 }
 
 func writeGuestFile(ctx context.Context, rt runtime.ContainerRuntime, name, path string, data []byte) error {

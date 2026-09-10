@@ -61,7 +61,7 @@ func (db *DB) GetAPIKeyPlaintext(id string, encKey []byte) (string, error) {
 // ListAPIKeysByOwner returns metadata (no plaintext) for all keys owned by ownerID.
 func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	rows, err := db.Query(
-		`SELECT id, owner_id, provider, base_url, models, protocol, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC`,
+		`SELECT id, owner_id, provider, base_url, models, protocol, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC, id`,
 		ownerID,
 	)
 	if err != nil {

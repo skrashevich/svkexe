@@ -221,7 +221,9 @@ func TestDeliverInitialTaskUsesOwnerModel(t *testing.T) {
 	}
 }
 
-func TestPreferredModel(t *testing.T) {
+// The task path derives the owner's models from the VM's own list, so this
+// pins desiredModel through exactly the arguments resolveTaskModel gives it.
+func TestTaskModelSelection(t *testing.T) {
 	cases := []struct {
 		name       string
 		available  []string
@@ -240,8 +242,8 @@ func TestPreferredModel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := preferredModel(tc.available, tc.configured); got != tc.want {
-				t.Errorf("preferredModel(%v, %q) = %q, want %q", tc.available, tc.configured, got, tc.want)
+			if got := desiredModel(tc.available, ownModels(tc.available), "", tc.configured); got != tc.want {
+				t.Errorf("desiredModel(%v, %q) = %q, want %q", tc.available, tc.configured, got, tc.want)
 			}
 		})
 	}

@@ -98,13 +98,13 @@ func TestDefaultModelFollowsTheOwnersConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	chosen := UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := database.UserDefaultModel("owner"); err != nil || got != chosen {
 		t.Fatalf("default=%q err=%v", got, err)
 	}
-	if err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-configured")); err == nil {
+	if _, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-configured")); err == nil {
 		t.Fatal("accepted a model the owner cannot reach")
 	}
 
@@ -118,7 +118,7 @@ func TestDefaultModelFollowsTheOwnersConnections(t *testing.T) {
 	}
 
 	// Deleting the last connection does the same.
-	if err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "deepseek-v4-flash")); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "deepseek-v4-flash")); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.DeleteAPIKeyForOwner("k2", "owner"); err != nil {
@@ -141,11 +141,11 @@ func TestRejectedDefaultModelIsRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	reachable := UserModelID("custom-openmodel", "deepseek-v4-flash")
-	if err := database.SetUserDefaultModel("owner", reachable); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", reachable); err != nil {
 		t.Fatal(err)
 	}
 
-	err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-mine"))
+	_, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-mine"))
 	if !errors.Is(err, ErrUnknownModel) {
 		t.Fatalf("err=%v, want ErrUnknownModel so handlers can answer 400", err)
 	}
@@ -154,8 +154,44 @@ func TestRejectedDefaultModelIsRolledBack(t *testing.T) {
 	}
 
 	// An account that no longer exists is reported as such, not as a bad model.
-	if err := database.SetUserDefaultModel("ghost", ""); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := database.SetUserDefaultModel("ghost", ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("err=%v, want sql.ErrNoRows", err)
+	}
+}
+
+// Applying a choice restarts the agent on every running VM, killing whatever it
+// is in the middle of. Re-submitting the model already stored must therefore be
+// reported as a no-op rather than as a change.
+func TestSetDefaultModelReportsWhetherItMoved(t *testing.T) {
+	database := openTestDB(t)
+	if _, err := database.EnsureUser("owner", "owner@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SaveProviderKey("k1", "owner", "custom-openmodel", "key", "https://api.openmodel.ai/v1", "deepseek-v4-flash", "openai-responses", testEncKey); err != nil {
+		t.Fatal(err)
+	}
+	model := UserModelID("custom-openmodel", "deepseek-v4-flash")
+	for _, tc := range []struct {
+		name, model string
+		want        bool
+	}{
+		{"picking a model moves it", model, true},
+		{"picking it again does not", model, false},
+		{"going back to Auto moves it", "", true},
+		{"and staying on Auto does not", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed, err := database.SetUserDefaultModel("owner", tc.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed != tc.want {
+				t.Fatalf("changed = %v, want %v", changed, tc.want)
+			}
+			if got, err := database.UserDefaultModel("owner"); err != nil || got != tc.model {
+				t.Fatalf("default=%q err=%v", got, err)
+			}
+		})
 	}
 }
 
@@ -173,7 +209,7 @@ func TestDeleteConnectionIsScopedToItsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	chosen := UserModelID("custom-openmodel", "deepseek-v4-flash")
-	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,7 +225,7 @@ func TestDeleteConnectionIsScopedToItsOwner(t *testing.T) {
 	}
 
 	// The stranger cannot pick it either.
-	if err := database.SetUserDefaultModel("stranger", chosen); err == nil {
+	if _, err := database.SetUserDefaultModel("stranger", chosen); err == nil {
 		t.Fatal("stranger adopted another account's model")
 	}
 	if got, err := database.OwnerModelIDs("stranger"); err != nil || len(got) != 0 {

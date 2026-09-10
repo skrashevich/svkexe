@@ -142,6 +142,27 @@ func expectedSeedModelIDs(models []string) []string {
 	return ids
 }
 
+// listGuestModels returns every model ID the VM's agent database holds.
+//
+// Everything that picks a model for a VM asks this rather than reasoning from
+// what the gateway believes it seeded. The two drift: the deployment-wide model
+// list can change after a VM was set up, a refresh re-seeds the owner's models
+// but not the gateway's, and naming a model the agent database lacks leaves the
+// VM unable to answer at all.
+func listGuestModels(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
+	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, "SELECT model_id FROM models ORDER BY model_id;"})
+	if err != nil {
+		return nil, fmt.Errorf("list models in %s: %w", incusName, err)
+	}
+	var ids []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if id := strings.TrimSpace(line); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
 func readSeededModelIDs(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
 	verifyCmd := []string{"sqlite3", DBPath, "SELECT model_id FROM models WHERE model_id LIKE 'svkexe-%' ORDER BY model_id;"}
 	out, err := rt.Exec(ctx, incusName, verifyCmd)

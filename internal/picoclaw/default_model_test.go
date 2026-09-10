@@ -42,10 +42,10 @@ func TestSetupOpensNewVMOnTheOwnersChosenModel(t *testing.T) {
 	t.Setenv("SVKEXE_AGENT_BINARY", binary)
 	database, m := ownerWithModels(t, "deepseek-v4-flash,deepseek-v4-pro")
 	chosen := db.UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
-	guest := &guestRuntime{files: map[string][]byte{}, models: "svkexe-cohere/north-mini-code:free\n"}
+	guest := &guestRuntime{files: map[string][]byte{}}
 	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token", Models: []string{"cohere/north-mini-code:free"}}
 
 	if err := SetupContainer(t.Context(), guest, database, m, testContainer("owner"), cfg); err != nil {
@@ -79,8 +79,7 @@ func TestSetupKeepsTheOwnersInAgentChoiceAndOtherSettings(t *testing.T) {
 	}
 	inAgent := db.UserModelID("custom-openmodel", "deepseek-v4-pro")
 	guest := &guestRuntime{
-		files:  map[string][]byte{ConfigFilePath: []byte(`{"default_model":"` + inAgent + `","theme":"dark"}`)},
-		models: "svkexe-cohere/north-mini-code:free\n",
+		files: map[string][]byte{ConfigFilePath: []byte(`{"default_model":"` + inAgent + `","theme":"dark"}`)},
 	}
 	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token", Models: []string{"cohere/north-mini-code:free"}}
 
@@ -105,14 +104,14 @@ func TestSetupKeepsTheOwnersInAgentChoiceAndOtherSettings(t *testing.T) {
 func TestRefreshAppliesTheOwnersChosenModelOverAnotherOfTheirs(t *testing.T) {
 	database, m := ownerWithModels(t, "deepseek-v4-flash,deepseek-v4-pro")
 	chosen := db.UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	guest := &guestRuntime{files: map[string][]byte{
 		ConfigFilePath: []byte(`{"default_model":"` + db.UserModelID("custom-openmodel", "deepseek-v4-flash") + `"}`),
 	}}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", chosen, nil); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != chosen {
@@ -122,15 +121,15 @@ func TestRefreshAppliesTheOwnersChosenModelOverAnotherOfTheirs(t *testing.T) {
 
 // Removing the last connection deletes the owner's models from the agent
 // database. A guest left naming one would open on a model it does not have, so
-// the reference has to go — replaced by a gateway model when there is one.
+// the reference has to go — replaced by a platform model the VM still holds, and
+// otherwise removed. Refresh does not seed the platform list, so it must not
+// name a model from it on faith.
 func TestRefreshClearsDefaultLeftByARemovedConnection(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		llmCfg *LLMProxyConfig
-		want   string
+		name, inTheVM, want string
 	}{
-		{"falls back to the gateway", &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "t", Models: []string{"cohere/north-mini-code:free"}}, "svkexe-cohere/north-mini-code:free"},
-		{"or to nothing at all", nil, ""},
+		{"moves to a platform model the VM still has", "svkexe-cohere/north-mini-code:free\n", "svkexe-cohere/north-mini-code:free"},
+		{"and clears it when the VM has nothing else", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database, m := ownerWithModels(t, "deepseek-v4-flash")
@@ -138,11 +137,12 @@ func TestRefreshClearsDefaultLeftByARemovedConnection(t *testing.T) {
 			if err := database.DeleteAPIKey("key"); err != nil {
 				t.Fatal(err)
 			}
-			guest := &guestRuntime{files: map[string][]byte{
-				ConfigFilePath: []byte(`{"default_model":"` + stale + `"}`),
-			}}
+			guest := &guestRuntime{
+				files:  map[string][]byte{ConfigFilePath: []byte(`{"default_model":"` + stale + `"}`)},
+				models: tc.inTheVM,
+			}
 
-			if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", tc.llmCfg); err != nil {
+			if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
 				t.Fatal(err)
 			}
 			if got := guestDefaultModel(t, guest); got != tc.want {
@@ -159,11 +159,12 @@ func TestRefreshLeavesAModelTheGatewayDoesNotOwn(t *testing.T) {
 	if err := database.DeleteAPIKey("key"); err != nil {
 		t.Fatal(err)
 	}
-	guest := &guestRuntime{files: map[string][]byte{
-		ConfigFilePath: []byte(`{"default_model":"hand-made-local"}`),
-	}}
+	guest := &guestRuntime{
+		files:  map[string][]byte{ConfigFilePath: []byte(`{"default_model":"hand-made-local"}`)},
+		models: "hand-made-local\n",
+	}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "hand-made-local" {
@@ -185,7 +186,7 @@ func TestRefreshPreservesNonStringConfigSettings(t *testing.T) {
 		ConfigFilePath: []byte(`{"default_model":"svkexe_user:removed:model","max_tokens":8192,"debug":true,"tools":{"a":1}}`),
 	}}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	var cfg map[string]any
@@ -223,12 +224,12 @@ func TestRefreshLeavesAStillReachableGatewayModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := secrets.NewMaterializer(database, []byte(testEncKey), t.TempDir())
-	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "t", Models: []string{"first/model", "second/model"}}
-	guest := &guestRuntime{files: map[string][]byte{
-		ConfigFilePath: []byte(`{"default_model":"svkexe-second/model"}`),
-	}}
+	guest := &guestRuntime{
+		files:  map[string][]byte{ConfigFilePath: []byte(`{"default_model":"svkexe-second/model"}`)},
+		models: "svkexe-first/model\nsvkexe-second/model\n",
+	}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", cfg); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "svkexe-second/model" {
@@ -249,23 +250,36 @@ func TestProviderModelsSQLCarriesTheEndpointProtocol(t *testing.T) {
 	}
 }
 
-// A choice the owner can no longer reach must not outrank the models they can.
-func TestDefaultModelIDIgnoresAnUnreachableChoice(t *testing.T) {
-	models := []secrets.ProviderModel{{Provider: "custom-openmodel", Model: "deepseek-v4-flash"}}
-	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Models: []string{"cohere/north-mini-code:free"}}
+// desiredModel is the one rule every path uses, so its table is where the
+// priorities are pinned: an explicit choice, then the owner's own models, then
+// whatever the VM already runs on — and never a model the VM does not have.
+func TestDesiredModel(t *testing.T) {
+	const (
+		flash   = "svkexe_user:custom-openmodel:deepseek-v4-flash"
+		pro     = "svkexe_user:custom-openmodel:deepseek-v4-pro"
+		gateway = "svkexe-cohere/north-mini-code:free"
+		other   = "svkexe-vendor/other"
+		local   = "hand-made-local"
+	)
+	own := []string{flash, pro}
 	for _, tc := range []struct {
-		name   string
-		models []secrets.ProviderModel
-		chosen string
-		want   string
+		name            string
+		available, own  []string
+		chosen, current string
+		want            string
 	}{
-		{"honours a reachable choice", models, db.UserModelID("custom-openmodel", "deepseek-v4-flash"), db.UserModelID("custom-openmodel", "deepseek-v4-flash")},
-		{"falls through a retired choice", models, db.UserModelID("custom-openmodel", "gone"), db.UserModelID("custom-openmodel", "deepseek-v4-flash")},
-		{"falls through to the gateway", nil, db.UserModelID("custom-openmodel", "gone"), "svkexe-cohere/north-mini-code:free"},
+		{"an explicit choice wins", []string{flash, pro, gateway}, own, pro, flash, pro},
+		{"a retired choice does not", []string{flash, gateway}, own, pro, gateway, flash},
+		{"own models replace the platform's", []string{flash, pro, gateway}, own, "", gateway, flash},
+		{"among their own, the VM's own pick stands", []string{flash, pro, gateway}, own, "", pro, pro},
+		{"with none of their own, what works stays", []string{gateway, other}, nil, "", other, other},
+		{"including a model the gateway never seeded", []string{local, gateway}, nil, "", local, local},
+		{"a model the VM lacks is replaced", []string{gateway}, nil, "", flash, gateway},
+		{"and an empty VM names nothing", nil, nil, pro, flash, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := defaultModelID(tc.models, tc.chosen, cfg); got != tc.want {
-				t.Fatalf("default model = %q, want %q", got, tc.want)
+			if got := desiredModel(tc.available, tc.own, tc.chosen, tc.current); got != tc.want {
+				t.Fatalf("desired model = %q, want %q", got, tc.want)
 			}
 		})
 	}

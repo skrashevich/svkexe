@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"slices"
 	"strings"
 	"time"
 
@@ -135,7 +134,10 @@ func resolveTaskModel(ctx context.Context, rt runtime.ContainerRuntime, incusNam
 			available = append(available, id)
 		}
 	}
-	return preferredModel(available, readConfiguredModel(ctx, rt, incusName)), nil
+	// The same rule that decides what the VM opens on decides what its first
+	// task runs on. Two rules here is how a VM ends up showing one model in its
+	// UI while spending another owner's quota in the background.
+	return desiredModel(available, ownModels(available), "", readConfiguredModel(ctx, rt, incusName)), nil
 }
 
 // readConfiguredModel returns the VM's default model, or "" when it cannot be
@@ -152,29 +154,6 @@ func readConfiguredModel(ctx context.Context, rt runtime.ContainerRuntime, incus
 		return ""
 	}
 	return cfg.DefaultModel
-}
-
-// preferredModel runs the task on one of the owner's own models whenever they
-// have any: the gateway list is deployment-wide and may name models this
-// account cannot reach. Their configured default is honoured when it is such a
-// model; otherwise the gateway serves as the fallback.
-func preferredModel(available []string, configured string) string {
-	if user := firstWithPrefix(available, db.UserModelPrefix); user != "" {
-		if strings.HasPrefix(configured, db.UserModelPrefix) && slices.Contains(available, configured) {
-			return configured
-		}
-		return user
-	}
-	if configured != "" && slices.Contains(available, configured) {
-		return configured
-	}
-	if gateway := firstWithPrefix(available, gatewayModelPrefix); gateway != "" {
-		return gateway
-	}
-	if len(available) > 0 {
-		return available[0]
-	}
-	return ""
 }
 
 func firstWithPrefix(ids []string, prefix string) string {

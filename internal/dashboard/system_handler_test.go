@@ -83,13 +83,21 @@ func stubGitHub(t *testing.T, sha string, status int) *httptest.Server {
 }
 
 // newTestUpdater wires a service against a stub API and a runner rooted at dir.
-func newTestUpdater(apiBase, dir string) *updater.Service {
+func newTestUpdater(t *testing.T, apiBase, dir string) *updater.Service {
+	t.Helper()
+	// Stand in for the marker scripts/install-update-units.sh writes once the
+	// root-owned svkexe-update.path unit is enabled; without it the runner
+	// correctly refuses to write a trigger nothing would consume.
+	if err := os.WriteFile(filepath.Join(dir, "update-watcher"), []byte("svkexe-update.path\n"), 0o644); err != nil {
+		t.Fatalf("write watcher marker: %v", err)
+	}
 	local := testVersionInfo()
 	return updater.NewService(
 		updater.Config{APIBase: apiBase, Local: &local},
 		updater.RunnerConfig{
 			TriggerPath: filepath.Join(dir, "update.trigger"),
 			StatusPath:  filepath.Join(dir, "update-status.json"),
+			WatcherPath: filepath.Join(dir, "update-watcher"),
 		},
 	)
 }
@@ -115,7 +123,7 @@ func writeRunState(t *testing.T, dir string, st updater.RunState) {
 
 func TestSystemPageShowsComponentVersions(t *testing.T) {
 	dir := t.TempDir()
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
 
 	rec := get(t, router, "/system")
 	if rec.Code != http.StatusOK {
@@ -131,7 +139,7 @@ func TestSystemPageShowsComponentVersions(t *testing.T) {
 
 func TestSystemRoutesAreAdminOnly(t *testing.T) {
 	dir := t.TempDir()
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "user")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "user")
 
 	cases := []struct {
 		method string
@@ -156,7 +164,7 @@ func TestSystemRoutesAreAdminOnly(t *testing.T) {
 }
 
 func TestUpdateCheckReportsAvailableUpdate(t *testing.T) {
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, t.TempDir()), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, t.TempDir()), "admin")
 
 	rec := get(t, router, "/system/check")
 	if rec.Code != http.StatusOK {
@@ -175,7 +183,7 @@ func TestUpdateCheckReportsAvailableUpdate(t *testing.T) {
 }
 
 func TestUpdateCheckReportsUpToDate(t *testing.T) {
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, localCommit, http.StatusOK).URL, t.TempDir()), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, localCommit, http.StatusOK).URL, t.TempDir()), "admin")
 
 	rec := get(t, router, "/system/check")
 	if rec.Code != http.StatusOK {
@@ -193,7 +201,7 @@ func TestUpdateCheckReportsUpToDate(t *testing.T) {
 // The check runs inside an htmx fragment, so a GitHub failure has to arrive as
 // renderable content; a 500 here would only produce an error toast.
 func TestUpdateCheckRendersFailureAsContent(t *testing.T) {
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusInternalServerError).URL, t.TempDir()), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusInternalServerError).URL, t.TempDir()), "admin")
 
 	rec := get(t, router, "/system/check")
 	if rec.Code != http.StatusOK {
@@ -204,14 +212,29 @@ func TestUpdateCheckRendersFailureAsContent(t *testing.T) {
 	}
 }
 
+// The deployment that matters here is the one the reviewers found: a writable
+// data directory with no svkexe-update.path unit watching it. The button must
+// come back disabled and explain itself instead of writing a trigger that
+// nothing will ever consume.
 func TestUpdateStartReportsUnavailableDeployment(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "missing")
-	upd := newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, dir)
+	dir := t.TempDir()
+	local := testVersionInfo()
+	upd := updater.NewService(
+		updater.Config{APIBase: stubGitHub(t, remoteCommit, http.StatusOK).URL, Local: &local},
+		updater.RunnerConfig{
+			TriggerPath: filepath.Join(dir, "update.trigger"),
+			StatusPath:  filepath.Join(dir, "update-status.json"),
+			WatcherPath: filepath.Join(dir, "update-watcher"), // deliberately never written
+		},
+	)
 	router := newSystemRouter(t, upd, "admin")
 
 	ok, reason := upd.Available()
 	if ok {
-		t.Fatal("runner claims a missing directory is usable")
+		t.Fatal("runner claims a deployment with no watcher is usable")
+	}
+	if !strings.Contains(reason, "no update watcher is installed") {
+		t.Errorf("reason = %q, want it to name the missing watcher", reason)
 	}
 
 	rec := post(t, router, "/system/update", nil)
@@ -229,7 +252,7 @@ func TestUpdateStartReportsUnavailableDeployment(t *testing.T) {
 
 func TestUpdateStartWritesTrigger(t *testing.T) {
 	dir := t.TempDir()
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
 
 	rec := post(t, router, "/system/update", nil)
 	if rec.Code != http.StatusOK {
@@ -246,7 +269,7 @@ func TestUpdateStartWritesTrigger(t *testing.T) {
 
 func TestUpdateStatusPollsOnlyWhileRunning(t *testing.T) {
 	dir := t.TempDir()
-	router := newSystemRouter(t, newTestUpdater(stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
 
 	writeRunState(t, dir, updater.RunState{
 		State:     updater.StateRunning,

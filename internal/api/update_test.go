@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,16 +55,29 @@ func stubGitHub(t *testing.T, sha string, status int) (*httptest.Server, *atomic
 }
 
 // newUpdaterService builds a Service pointed at a stub API and a writable
-// state directory. Trigger and status live in the same directory so
-// Available() reports the deployment as able to update itself.
-func newUpdaterService(apiBase string, local version.Info, dir string) *updater.Service {
+// state directory carrying the watcher marker, so Available() reports the
+// deployment as able to update itself.
+func newUpdaterService(t *testing.T, apiBase string, local version.Info, dir string) *updater.Service {
+	t.Helper()
+	writeWatcherMarker(t, dir)
 	return updater.NewService(
 		updater.Config{APIBase: apiBase, Local: &local, CacheTTL: time.Hour},
 		updater.RunnerConfig{
 			TriggerPath: filepath.Join(dir, "update.trigger"),
 			StatusPath:  filepath.Join(dir, "update-status.json"),
+			WatcherPath: filepath.Join(dir, "update-watcher"),
 		},
 	)
+}
+
+// writeWatcherMarker stands in for the marker scripts/install-update-units.sh
+// writes once the root-owned svkexe-update.path unit is enabled. Without it the
+// runner correctly refuses to write a trigger nothing would consume.
+func writeWatcherMarker(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "update-watcher"), []byte("svkexe-update.path\n"), 0o644); err != nil {
+		t.Fatalf("write watcher marker: %v", err)
+	}
 }
 
 // newTestServerWithUpdater mirrors newTestServerWithAdmin but wires a real
@@ -161,7 +175,7 @@ func TestAdminVersion(t *testing.T) {
 
 func TestAdminVersion_UsesUpdaterBuildInfo(t *testing.T) {
 	stub, _ := stubGitHub(t, testLocalSHA, http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
 
 	w := do(srv, authedAdminRequest(http.MethodGet, "/api/admin/version"))
 	if w.Code != http.StatusOK {
@@ -193,7 +207,7 @@ func TestAdminUpdateCheck(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stub, _ := stubGitHub(t, tc.remote, http.StatusOK)
-			srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
+			srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
 
 			w := do(srv, authedAdminRequest(http.MethodGet, "/api/admin/update/check"))
 			if w.Code != http.StatusOK {
@@ -222,7 +236,7 @@ func TestAdminUpdateCheck(t *testing.T) {
 
 func TestAdminUpdateCheck_ForceBypassesCache(t *testing.T) {
 	stub, calls := stubGitHub(t, "3333333333333333333333333333333333333333", http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
 
 	if w := do(srv, authedAdminRequest(http.MethodGet, "/api/admin/update/check")); w.Code != http.StatusOK {
 		t.Fatalf("first check: want 200, got %d: %s", w.Code, w.Body.String())
@@ -253,7 +267,7 @@ func TestAdminUpdateCheck_ForceBypassesCache(t *testing.T) {
 
 func TestAdminUpdateCheck_UpstreamFailureIsBadGateway(t *testing.T) {
 	stub, _ := stubGitHub(t, "", http.StatusInternalServerError)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
 
 	w := do(srv, authedAdminRequest(http.MethodGet, "/api/admin/update/check"))
 	if w.Code != http.StatusBadGateway {
@@ -267,7 +281,7 @@ func TestAdminUpdateCheck_UpstreamFailureIsBadGateway(t *testing.T) {
 func TestAdminUpdateStatus(t *testing.T) {
 	dir := t.TempDir()
 	stub, _ := stubGitHub(t, testLocalSHA, http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), dir))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), dir))
 
 	started := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	seedStatus(t, dir, updater.RunState{
@@ -299,7 +313,7 @@ func TestAdminUpdateStatus(t *testing.T) {
 
 func TestAdminUpdateStatus_IdleWhenNeverRun(t *testing.T) {
 	stub, _ := stubGitHub(t, testLocalSHA, http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), t.TempDir()))
 
 	w := do(srv, authedAdminRequest(http.MethodGet, "/api/admin/update/status"))
 	if w.Code != http.StatusOK {
@@ -317,7 +331,7 @@ func TestAdminUpdateStatus_IdleWhenNeverRun(t *testing.T) {
 func TestAdminUpdateStart(t *testing.T) {
 	dir := t.TempDir()
 	stub, _ := stubGitHub(t, "3333333333333333333333333333333333333333", http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), dir))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), dir))
 
 	w := do(srv, authedAdminRequest(http.MethodPost, "/api/admin/update"))
 	if w.Code != http.StatusAccepted {
@@ -342,7 +356,7 @@ func TestAdminUpdateStart(t *testing.T) {
 func TestAdminUpdateStart_ConflictWhileRunning(t *testing.T) {
 	dir := t.TempDir()
 	stub, _ := stubGitHub(t, "3333333333333333333333333333333333333333", http.StatusOK)
-	srv := newTestServerWithUpdater(t, newUpdaterService(stub.URL, fakeBuild(testLocalSHA), dir))
+	srv := newTestServerWithUpdater(t, newUpdaterService(t, stub.URL, fakeBuild(testLocalSHA), dir))
 
 	seedStatus(t, dir, updater.RunState{State: updater.StateRunning, StartedAt: time.Now().UTC()})
 
@@ -361,13 +375,16 @@ func TestAdminUpdateStart_ConflictWhileRunning(t *testing.T) {
 func TestAdminUpdateStart_UnavailableDeployment(t *testing.T) {
 	dir := t.TempDir()
 	stub, _ := stubGitHub(t, "3333333333333333333333333333333333333333", http.StatusOK)
-	// The trigger directory does not exist, which is how a container image or a
-	// read-only host presents itself.
+	// A writable data directory with no svkexe-update.path unit watching it —
+	// a container image, or a host upgraded before the units existed. Writing a
+	// trigger here would hang the UI on an update nothing can start, so the
+	// endpoint must refuse.
 	upd := updater.NewService(
 		updater.Config{APIBase: stub.URL, Local: ptr(fakeBuild(testLocalSHA)), CacheTTL: time.Hour},
 		updater.RunnerConfig{
-			TriggerPath: filepath.Join(dir, "no-such-dir", "update.trigger"),
+			TriggerPath: filepath.Join(dir, "update.trigger"),
 			StatusPath:  filepath.Join(dir, "update-status.json"),
+			WatcherPath: filepath.Join(dir, "update-watcher"), // deliberately never written
 		},
 	)
 	srv := newTestServerWithUpdater(t, upd)
@@ -376,8 +393,11 @@ func TestAdminUpdateStart_UnavailableDeployment(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "not accessible") {
+	if !strings.Contains(w.Body.String(), "no update watcher is installed") {
 		t.Errorf("body should carry the runner's reason, got %q", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "update.trigger")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused request must not write a trigger (stat err %v)", err)
 	}
 }
 

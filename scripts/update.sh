@@ -15,15 +15,23 @@
 #   SVKEXE_UPDATE_STATUS  Machine-readable status file
 #                         (default: /var/lib/svkexe/update-status.json)
 #   SVKEXE_UPDATE_LOG     Full run log (default: /var/lib/svkexe/update.log)
+#   SVKEXE_UPDATE_TRIGGER Request file written by the gateway
+#                         (default: /var/lib/svkexe/update.trigger)
+#   SVKEXE_UPDATE_MAX_AGE_SECONDS
+#                         How old a request may be and still be acted on
+#                         (default: 900)
 #   SVKEXE_SERVICE_USER   User that must be able to read status/log
 #                         (default: svkexe)
 #   SKIP_RESTART=1        Build only, don't restart the service
 #
 # What it does:
-#   1. Pulls the latest code from the remote.
-#   2. Rebuilds the gateway binary.
-#   3. Installs it to /usr/local/bin/svkexe-gateway.
-#   4. Restarts the svkexe-gateway systemd service.
+#   1. Consumes the update request, if this run was triggered by one.
+#   2. Pulls the latest code from the remote.
+#   3. Refreshes the self-update systemd units.
+#   4. Rebuilds the gateway binary and installs it to
+#      /usr/local/bin/svkexe-gateway.
+#   5. Restarts the svkexe-gateway systemd service.
+#   6. Rebuilds the svkexe-base Incus image when its inputs changed.
 #
 # The status file is the only channel the web UI has: this script restarts the
 # gateway mid-run, so the HTTP request that triggered the update is killed long
@@ -257,6 +265,17 @@ _finish_ok() {
     _write_status success ""
 }
 
+# A run that deliberately does nothing still owes the UI a terminal status —
+# otherwise the state stays at the "running" the gateway seeded when it wrote
+# the trigger, and every later update is refused as "already in progress".
+# The reason goes in as the error: nothing was updated, and saying "success"
+# would claim otherwise.
+_finish_ignored() {
+    STATUS_FINAL=1
+    _log_flush
+    _write_status failed "$1"
+}
+
 _status_init
 _log_start
 
@@ -268,6 +287,82 @@ trap '_on_exit "$?"' EXIT
 _write_status running ""
 
 [[ "${EUID}" -eq 0 ]] || die "Must run as root. Try: sudo $0"
+
+# ── Update request ──────────────────────────────────────────────────────────
+#
+# The trigger file is how the unprivileged gateway asks for this run; the
+# root-owned svkexe-update.path unit watches it with PathExists. Consuming it
+# here rather than in the unit's ExecStartPre buys two things: the .path unit
+# re-arms as soon as the file is gone, so one click is exactly one run, and we
+# get to look at *when* the request was made. A trigger that was never consumed
+# — the machine went down mid-update — would otherwise fire on the next boot
+# and rebuild the whole platform nobody asked for.
+#
+# No trigger at all means a manual CLI invocation: always proceed.
+
+SVKEXE_UPDATE_TRIGGER="${SVKEXE_UPDATE_TRIGGER:-/var/lib/svkexe/update.trigger}"
+SVKEXE_UPDATE_MAX_AGE_SECONDS="${SVKEXE_UPDATE_MAX_AGE_SECONDS:-900}"
+
+# Prints the request's age in seconds, or fails when the file carries no
+# timestamp this script understands. python3 does the parsing for the same
+# reason it writes the status file: date arithmetic on an RFC3339 string with a
+# fractional part is not something to hand-roll in shell.
+_trigger_age_seconds() {
+    local file="$1"
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "${file}" <<'PY'
+import datetime, json, re, sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        requested = json.load(fh)["requestedAt"]
+except Exception:
+    sys.exit(1)
+
+if not isinstance(requested, str):
+    sys.exit(1)
+
+text = requested.strip()
+# Go emits RFC3339 with a "Z" suffix and up to nanosecond precision;
+# fromisoformat only learned both in 3.11, so normalise for older runtimes.
+text = re.sub(r"\.(\d{6})\d+", r".\1", text)
+if text.endswith(("Z", "z")):
+    text = text[:-1] + "+00:00"
+
+try:
+    ts = datetime.datetime.fromisoformat(text)
+except ValueError:
+    sys.exit(1)
+if ts.tzinfo is None:
+    ts = ts.replace(tzinfo=datetime.timezone.utc)
+
+print(int((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()))
+PY
+}
+
+if [[ -e "${SVKEXE_UPDATE_TRIGGER}" ]]; then
+    TRIGGER_AGE="$(_trigger_age_seconds "${SVKEXE_UPDATE_TRIGGER}" 2>/dev/null || true)"
+    # Delete before deciding anything: whatever we do with this request, it has
+    # been seen, and leaving the file behind would replay it at the next boot.
+    rm -f "${SVKEXE_UPDATE_TRIGGER}" \
+        || warn "Could not remove ${SVKEXE_UPDATE_TRIGGER} — it may re-trigger."
+
+    if [[ -z "${TRIGGER_AGE}" ]]; then
+        REASON="ignored an update request with no readable requestedAt timestamp"
+        log "Update request has no usable timestamp — refusing to act on it."
+        _finish_ignored "${REASON}"
+        exit 0
+    elif (( TRIGGER_AGE > SVKEXE_UPDATE_MAX_AGE_SECONDS )); then
+        REASON="ignored a stale update request: ${TRIGGER_AGE}s old, limit ${SVKEXE_UPDATE_MAX_AGE_SECONDS}s"
+        log "Update request is ${TRIGGER_AGE}s old (limit ${SVKEXE_UPDATE_MAX_AGE_SECONDS}s) — not updating."
+        _finish_ignored "${REASON}"
+        exit 0
+    fi
+
+    log "Acting on an update request made ${TRIGGER_AGE}s ago."
+else
+    log "No update request file — running as a manual invocation."
+fi
 
 # ── Locate source ───────────────────────────────────────────────────────────
 
@@ -299,7 +394,11 @@ OLD_COMMIT=""
 if [[ -d "${REPO_ROOT}/.git" ]]; then
     OLD_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
     log "Pulling latest changes (branch: ${SVKEXE_BRANCH})…"
-    git -C "${REPO_ROOT}" fetch origin "${SVKEXE_BRANCH}"
+    # --tags: the Makefile stamps the binary with `git describe --tags`, and the
+    # release-channel update check compares that string against the latest
+    # release. Fetching without tags leaves it a bare SHA, which never matches
+    # and makes the gateway advertise an update it just installed.
+    git -C "${REPO_ROOT}" fetch --tags origin "${SVKEXE_BRANCH}"
     git -C "${REPO_ROOT}" checkout -q "${SVKEXE_BRANCH}"
     git -C "${REPO_ROOT}" reset --hard "origin/${SVKEXE_BRANCH}"
     COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
@@ -308,30 +407,34 @@ else
     warn "${REPO_ROOT} is not a git repo — skipping pull, building from current state."
 fi
 
+# ── Step 1b: Refresh the self-update units ──────────────────────────────────
+#
+# The units are versioned with the code, so refreshing them here is what lets a
+# fix to the update plumbing reach a host that only ever runs update.sh. Never
+# fatal: a host that cannot install units can still take the new binary, and
+# install-update-units.sh drops the watcher marker in that case so the gateway
+# stops offering a button nothing would answer.
+
+UNITS_SCRIPT="${REPO_ROOT}/scripts/install-update-units.sh"
+if [[ -f "${UNITS_SCRIPT}" ]]; then
+    log "Refreshing self-update systemd units…"
+    env \
+        SVKEXE_SRC_DIR="${REPO_ROOT}" \
+        SVKEXE_BRANCH="${SVKEXE_BRANCH}" \
+        DATA_DIR="$(dirname "${SVKEXE_UPDATE_STATUS}")" \
+        SVKEXE_UPDATE_TRIGGER="${SVKEXE_UPDATE_TRIGGER}" \
+        SVKEXE_UPDATE_STATUS="${SVKEXE_UPDATE_STATUS}" \
+        SVKEXE_UPDATE_LOG="${SVKEXE_UPDATE_LOG}" \
+        SVKEXE_SERVICE_USER="${SVKEXE_SERVICE_USER}" \
+        bash "${UNITS_SCRIPT}" \
+        || warn "Could not refresh the self-update units — continuing with the update."
+else
+    warn "${UNITS_SCRIPT} not found — self-update units left as they are."
+fi
+
 if ! command -v node >/dev/null || ! command -v npm >/dev/null || ! command -v python3 >/dev/null; then
     apt-get update -q
     apt-get install -y nodejs npm python3
-fi
-
-# ── Step 1.5: Rebuild base image if build-image.sh changed ────────────────
-
-if [[ -d "${REPO_ROOT}/.git" ]]; then
-    if [[ -z "${OLD_COMMIT}" ]]; then
-        log "No pre-pull commit recorded — skipping base image rebuild check."
-    else
-        NEW_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-        if [[ "${OLD_COMMIT}" == "${NEW_COMMIT}" ]]; then
-            log "No new commits — skipping base image rebuild check."
-        elif git -C "${REPO_ROOT}" diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
-             | grep -qE '^(scripts/build-(image|agent)\.sh|agent/)'; then
-            log "scripts/build-image.sh changed — rebuilding svkexe-base image…"
-            "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
-        else
-            log "scripts/build-image.sh unchanged — skipping base image rebuild."
-        fi
-    fi
-else
-    log "No git history available — skipping base image rebuild check."
 fi
 
 # ── Step 2: Build ───────────────────────────────────────────────────────────
@@ -374,6 +477,33 @@ elif systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
     systemctl start "${SERVICE_NAME}"
 else
     warn "Systemd unit ${SERVICE_NAME} not found — binary installed but not started."
+fi
+
+# ── Step 5: Rebuild base image if its inputs changed ────────────────────────
+#
+# Deliberately last. scripts/build-image.sh deletes the svkexe-base alias before
+# republishing it, so a failure halfway through (apt, npm, the network) leaves
+# the host unable to create VMs. Running it after the binary is installed and
+# the service is back up bounds the damage to the image: one button click can
+# cost the operator the image rebuild, or the gateway update, but not both.
+
+if [[ -d "${REPO_ROOT}/.git" ]]; then
+    if [[ -z "${OLD_COMMIT}" ]]; then
+        log "No pre-pull commit recorded — skipping base image rebuild check."
+    else
+        NEW_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+        if [[ "${OLD_COMMIT}" == "${NEW_COMMIT}" ]]; then
+            log "No new commits — skipping base image rebuild check."
+        elif git -C "${REPO_ROOT}" diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
+             | grep -qE '^(scripts/build-(image|agent)\.sh|agent/)'; then
+            log "Base image inputs changed (build-image.sh, build-agent.sh or agent/) — rebuilding svkexe-base…"
+            "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
+        else
+            log "Base image inputs unchanged — skipping base image rebuild."
+        fi
+    fi
+else
+    log "No git history available — skipping base image rebuild check."
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────

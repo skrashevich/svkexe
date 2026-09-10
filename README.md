@@ -167,8 +167,16 @@ resumes polling on its own. Progress survives that restart because the update wr
 **How the privileged part works.** The gateway service runs as the unprivileged `svkexe` user with
 `NoNewPrivileges=true`, so it cannot elevate — and it cannot be the parent of a process that restarts it.
 Instead it writes a trigger file, `/var/lib/svkexe/update.trigger`. A root-owned `svkexe-update.path`
-systemd unit watches that file and starts the oneshot `svkexe-update.service`, which removes the trigger
-and runs `scripts/update.sh`. Both units are installed by `scripts/install.sh`.
+systemd unit watches that file and starts the oneshot `svkexe-update.service`, which runs
+`scripts/update.sh`; the script deletes the trigger before doing any work, so the watcher re-arms and one
+click means exactly one run. A trigger older than 15 minutes is discarded without updating, so a request
+nobody picked up cannot fire a surprise rebuild at the next boot.
+
+Both units come from `scripts/install-update-units.sh`, which `install.sh` and `update.sh` both run — so
+updating by either route also refreshes the units. That script writes `/var/lib/svkexe/update-watcher`
+only once the watcher is actually enabled, and the gateway requires that marker before it will offer the
+button. A deployment without a watcher therefore reports "cannot install updates itself" instead of
+accepting a click that would never be acted on.
 
 ### From the command line
 
@@ -186,10 +194,11 @@ The script pulls the latest code, rebuilds the gateway and PicoClaw agent, rebui
 
 ### Docker deployments
 
-A container image is updated by pulling a new image, not by rebuilding in place, so the **Update now**
-button reports the deployment as unable to self-update. Set `SVKEXE_UPDATE_COMMAND` to a command that
-performs the update for your setup if you want the button to work there; the update check and the version
-listing work regardless.
+A container image is updated by pulling a new image, not by rebuilding in place. There is no systemd
+watcher inside the container, so the watcher marker is absent and the **Update now** button reports the
+deployment as unable to self-update — that is enforced by the marker check, not merely assumed. Set
+`SVKEXE_UPDATE_COMMAND` to a command that performs the update for your setup if you want the button to
+work there; the update check and the version listing work regardless.
 
 ## Configuration
 
@@ -228,6 +237,8 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `SVKEXE_GITHUB_TOKEN` | *(falls back to `GITHUB_TOKEN`)* | Optional token; unauthenticated GitHub API calls are limited to 60/hour per IP |
 | `SVKEXE_UPDATE_TRIGGER` | `/var/lib/svkexe/update.trigger` | File the gateway writes to request an update; watched by `svkexe-update.path` |
 | `SVKEXE_UPDATE_STATUS` | `/var/lib/svkexe/update-status.json` | Machine-readable progress file written by `update.sh` and read by the dashboard |
+| `SVKEXE_UPDATE_WATCHER` | `/var/lib/svkexe/update-watcher` | Marker proving a watcher is installed. Without it the Update button is disabled |
+| `SVKEXE_UPDATE_MAX_AGE_SECONDS` | `900` | Discard an update request older than this instead of acting on it |
 | `SVKEXE_UPDATE_LOG` | `/var/lib/svkexe/update.log` | Full update log; the status file carries a bounded tail of it |
 | `SVKEXE_UPDATE_COMMAND` | | Run this command directly instead of using the trigger file. For deployments where the gateway is already privileged (Docker, development) |
 

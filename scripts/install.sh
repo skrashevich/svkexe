@@ -32,7 +32,7 @@
 #   5. Builds the gateway binary, installs /usr/local/bin/svkexe-gateway.
 #   6. Creates svkexe user, /var/lib/svkexe, /etc/svkexe/gateway.env.
 #   7. Installs and enables the svkexe-gateway.service systemd unit.
-#   8. Installs svkexe-update.path/.service so the web UI can self-update.
+#   8. Runs scripts/install-update-units.sh so the web UI can self-update.
 #
 # Idempotent: re-running is safe; completed steps are skipped.
 
@@ -107,14 +107,24 @@ else
     fi
 
     mkdir -p "$(dirname "${SVKEXE_SRC_DIR}")"
+    # --tags everywhere: a shallow clone carries no tag refs, so the Makefile's
+    # `git describe --tags --always` would stamp the binary with a bare SHA.
+    # The gateway compares that string against the latest release, so without
+    # tags a release-channel install reports "update available" forever.
     if [[ -d "${SVKEXE_SRC_DIR}/.git" ]]; then
         log "Updating existing clone at ${SVKEXE_SRC_DIR}…"
-        git -C "${SVKEXE_SRC_DIR}" fetch --depth 1 origin "${SVKEXE_BRANCH}"
+        git -C "${SVKEXE_SRC_DIR}" fetch --depth 1 --tags origin "${SVKEXE_BRANCH}"
         git -C "${SVKEXE_SRC_DIR}" checkout -q "${SVKEXE_BRANCH}"
         git -C "${SVKEXE_SRC_DIR}" reset --hard "origin/${SVKEXE_BRANCH}"
     else
         log "Cloning ${SVKEXE_REPO} → ${SVKEXE_SRC_DIR}…"
+        # A shallow clone only brings the tag that points at the cloned HEAD,
+        # so pull the rest of the tag refs in afterwards — that is what makes
+        # `git describe --tags` name a release once the checkout lands on one.
+        # Not fatal: missing tags only degrade the version string.
         git clone --depth 1 --branch "${SVKEXE_BRANCH}" "${SVKEXE_REPO}.git" "${SVKEXE_SRC_DIR}"
+        git -C "${SVKEXE_SRC_DIR}" fetch --depth 1 --tags origin \
+            || warn "Could not fetch tags — the build will report a commit-only version."
     fi
 
     REPO_ROOT="${SVKEXE_SRC_DIR}"
@@ -152,12 +162,13 @@ SERVICE_FILE="/etc/systemd/system/${BIN_NAME}.service"
 # Self-update plumbing. The gateway runs unprivileged with NoNewPrivileges, so
 # it can never invoke update.sh itself; it drops a trigger file into DATA_DIR
 # and a root-owned .path unit picks it up. The status file is how the gateway
-# learns the outcome — update.sh restarts the gateway halfway through.
-UPDATE_PATH_FILE="/etc/systemd/system/svkexe-update.path"
-UPDATE_SERVICE_FILE="/etc/systemd/system/svkexe-update.service"
+# learns the outcome — update.sh restarts the gateway halfway through. The units
+# themselves are installed by scripts/install-update-units.sh, which update.sh
+# also calls so installed hosts pick up changes to them.
 UPDATE_TRIGGER="${DATA_DIR}/update.trigger"
 UPDATE_STATUS_FILE="${DATA_DIR}/update-status.json"
 UPDATE_LOG_FILE="${DATA_DIR}/update.log"
+UPDATE_WATCHER_FILE="${DATA_DIR}/update-watcher"
 
 GO_FALLBACK_VERSION="1.23.4"
 GO_INSTALL_DIR="/usr/local/go"
@@ -539,68 +550,25 @@ LockPersonality=true
 [Install]
 WantedBy=multi-user.target
 EOF
-    # ── Self-update units ───────────────────────────────────────────────────
-    #
-    # PathExists (not PathChanged): the trigger is created by the gateway,
-    # which may write it while the .path unit is stopped or mid-daemon-reload.
-    # PathExists fires on activation too if the file is already there, so no
-    # click is ever lost. The unit re-arms as soon as the file disappears —
-    # svkexe-update.service removes it in ExecStartPre, before doing any work,
-    # so a single click can't loop.
-    log "Installing systemd unit ${UPDATE_PATH_FILE}…"
-    cat >"${UPDATE_PATH_FILE}" <<EOF
-[Unit]
-Description=Watch for svkexe self-update requests
-Documentation=https://github.com/skrashevich/svkexe
-
-[Path]
-PathExists=${UPDATE_TRIGGER}
-Unit=svkexe-update.service
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # This unit deliberately carries none of the gateway's hardening: it runs
-    # apt-get, rebuilds Incus images and calls systemctl, so it needs real root
-    # with an unrestricted filesystem view. It is started by the .path unit
-    # only, hence no [Install] section.
-    log "Installing systemd unit ${UPDATE_SERVICE_FILE}…"
-    cat >"${UPDATE_SERVICE_FILE}" <<EOF
-[Unit]
-Description=svkexe self-update
-Documentation=https://github.com/skrashevich/svkexe
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=root
-Group=root
-WorkingDirectory=${REPO_ROOT}
-Environment=HOME=/root
-Environment=SVKEXE_SRC_DIR=${REPO_ROOT}
-Environment=SVKEXE_BRANCH=${SVKEXE_BRANCH}
-Environment=SVKEXE_UPDATE_STATUS=${UPDATE_STATUS_FILE}
-Environment=SVKEXE_UPDATE_LOG=${UPDATE_LOG_FILE}
-Environment=SVKEXE_SERVICE_USER=svkexe
-# Remove the trigger before doing anything else so the .path unit re-arms and
-# one request produces exactly one run.
-ExecStartPre=/bin/rm -f ${UPDATE_TRIGGER}
-ExecStart=/bin/bash ${REPO_ROOT}/scripts/update.sh
-# A cold run rebuilds the Go binary and the agent UI from scratch.
-TimeoutStartSec=3600
-EOF
-
-    # A trigger left over from an interrupted run would fire the moment the
-    # path unit starts; drop it so installing never kicks off an update.
-    rm -f "${UPDATE_TRIGGER}"
-
     systemctl daemon-reload
     systemctl enable "${BIN_NAME}.service"
-    systemctl enable --now svkexe-update.path
     log "Unit enabled. Start it with: sudo systemctl start ${BIN_NAME}"
-    log "Self-update watcher active: touch ${UPDATE_TRIGGER} to trigger an update."
+
+    # ── Self-update units ───────────────────────────────────────────────────
+    #
+    # Delegated to scripts/install-update-units.sh so install.sh and update.sh
+    # cannot drift apart on what the update plumbing looks like.
+    log "Installing self-update units…"
+    env \
+        SVKEXE_SRC_DIR="${REPO_ROOT}" \
+        SVKEXE_BRANCH="${SVKEXE_BRANCH}" \
+        DATA_DIR="${DATA_DIR}" \
+        SVKEXE_UPDATE_TRIGGER="${UPDATE_TRIGGER}" \
+        SVKEXE_UPDATE_STATUS="${UPDATE_STATUS_FILE}" \
+        SVKEXE_UPDATE_LOG="${UPDATE_LOG_FILE}" \
+        SVKEXE_UPDATE_WATCHER="${UPDATE_WATCHER_FILE}" \
+        SVKEXE_SERVICE_USER=svkexe \
+        bash "${SCRIPT_DIR}/install-update-units.sh"
 else
     log "SKIP_SERVICE=1 — skipping systemd unit install."
 fi
@@ -621,6 +589,7 @@ cat <<EOF
               trigger  ${UPDATE_TRIGGER}
               status   ${UPDATE_STATUS_FILE}
               log      ${UPDATE_LOG_FILE}
+              watcher  ${UPDATE_WATCHER_FILE}
 
  Next steps:
    1. Review and edit: sudo \$EDITOR ${ENV_FILE}

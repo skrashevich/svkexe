@@ -189,7 +189,17 @@ type Checker struct {
 	// cachedAt keeps its monotonic reading so TTL arithmetic is immune to wall
 	// clock jumps (NTP steps, VM suspend). Callers get the UTC wall time.
 	cachedAt time.Time
+	// A failure is cached too, briefly. The System page checks on load, so
+	// without this an admin refreshing during a GitHub outage — or after being
+	// rate-limited — spends the whole 60-requests-per-hour budget on retries.
+	failure   error
+	failureAt time.Time
 }
+
+// negativeCacheTTL bounds how long a failed lookup suppresses retries. Short
+// enough that a recovered API is picked up almost immediately, long enough that
+// a reload loop cannot hammer it.
+const negativeCacheTTL = 30 * time.Second
 
 // NewChecker returns a Checker with cfg's zero fields filled in from the
 // documented defaults.
@@ -221,6 +231,9 @@ func (c *Checker) check(ctx context.Context, force bool) (*Release, time.Time, e
 	if !force && c.cached != nil && time.Since(c.cachedAt) < c.cfg.CacheTTL {
 		return c.cached, c.cachedAt.UTC(), nil
 	}
+	if !force && c.failure != nil && time.Since(c.failureAt) < negativeCacheTTL {
+		return nil, time.Time{}, c.failure
+	}
 
 	var (
 		rel *Release
@@ -232,11 +245,12 @@ func (c *Checker) check(ctx context.Context, force bool) (*Release, time.Time, e
 		rel, err = c.fetchBranch(ctx)
 	}
 	if err != nil {
+		c.failure, c.failureAt = err, time.Now()
 		return nil, time.Time{}, err
 	}
 
-	c.cached = rel
-	c.cachedAt = time.Now()
+	c.cached, c.cachedAt = rel, time.Now()
+	c.failure, c.failureAt = nil, time.Time{}
 	return rel, c.cachedAt.UTC(), nil
 }
 
@@ -254,7 +268,7 @@ func (c *Checker) Status(ctx context.Context, force bool) (Status, error) {
 			st.Reason = "local build has no release version to compare; rebuild with the release ldflags to enable update checks"
 			return st, nil
 		}
-		st.UpdateAvailable = rel.Tag != "" && rel.Tag != c.local.Version
+		st.UpdateAvailable = rel.Tag != "" && !describesAtOrAfter(c.local.Version, rel.Tag)
 	default:
 		if c.local.IsDev() {
 			st.Reason = "local build has no commit stamp to compare against " + c.cfg.Owner + "/" + c.cfg.Repo + "@" + c.cfg.Branch
@@ -384,6 +398,34 @@ func snippet(b []byte) string {
 		return "(empty body)"
 	}
 	return s
+}
+
+// describesAtOrAfter reports whether a `git describe --tags --always --dirty`
+// string denotes the given tag or a commit built after it.
+//
+// describe renders an exact tag as "v1.2.3" and a later commit as
+// "v1.2.3-4-gabc1234", optionally with a "-dirty" suffix. A plain string
+// comparison would therefore keep offering "v1.2.3" to a build that is already
+// four commits past it — reporting an update that would move the operator
+// backwards. Anything that is not a describe of this tag (a bare SHA from a
+// checkout without tags, or an older tag) is treated as behind, which errs
+// toward offering the update rather than hiding it.
+func describesAtOrAfter(local, tag string) bool {
+	local = strings.TrimSuffix(local, "-dirty")
+	if local == tag {
+		return true
+	}
+	// "-N-g<sha>" is the only suffix describe appends to the tag itself.
+	rest, ok := strings.CutPrefix(local, tag+"-")
+	if !ok {
+		return false
+	}
+	count, sha, ok := strings.Cut(rest, "-g")
+	if !ok || count == "" || sha == "" {
+		return false
+	}
+	_, err := strconv.Atoi(count)
+	return err == nil
 }
 
 func shortSHA(sha string) string {

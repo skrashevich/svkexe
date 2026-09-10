@@ -591,3 +591,76 @@ func TestReleaseWithBranchTargetHasNoCommit(t *testing.T) {
 		t.Errorf("Commit = %q, want empty for a branch target_commitish", rel.Commit)
 	}
 }
+
+// A failed lookup must not be retried on every page load: the System page
+// checks on load, and GitHub allows 60 unauthenticated requests per hour, so a
+// refreshing admin could otherwise spend the whole budget on a dead endpoint.
+func TestCheckerCachesFailures(t *testing.T) {
+	stub := newGitHubStub(t)
+	stub.branchCode = http.StatusInternalServerError
+	local := stampedInfo()
+	c := NewChecker(Config{APIBase: stub.server.URL, Local: &local})
+
+	for range 3 {
+		if _, err := c.Check(t.Context(), false); err == nil {
+			t.Fatal("Check succeeded against a failing endpoint")
+		}
+	}
+	if got := stub.branchHits.Load(); got != 1 {
+		t.Fatalf("branch endpoint hit %d times, want 1 (failure cached)", got)
+	}
+
+	// An explicit re-check must still reach the endpoint: the admin pressing
+	// the button is asking to find out whether it recovered.
+	if _, err := c.Check(t.Context(), true); err == nil {
+		t.Fatal("forced Check succeeded against a failing endpoint")
+	}
+	if got := stub.branchHits.Load(); got != 2 {
+		t.Fatalf("branch endpoint hit %d times after force, want 2", got)
+	}
+}
+
+// A recovered endpoint must replace the cached failure rather than being
+// shadowed by it.
+func TestCheckerFailureClearedOnSuccess(t *testing.T) {
+	stub := newGitHubStub(t)
+	stub.branchCode = http.StatusInternalServerError
+	local := stampedInfo()
+	c := NewChecker(Config{APIBase: stub.server.URL, Local: &local})
+
+	if _, err := c.Check(t.Context(), false); err == nil {
+		t.Fatal("Check succeeded against a failing endpoint")
+	}
+	stub.branchCode = http.StatusOK
+	if _, err := c.Check(t.Context(), true); err != nil {
+		t.Fatalf("Check after recovery: %v", err)
+	}
+	if _, err := c.Check(t.Context(), false); err != nil {
+		t.Fatalf("cached Check after recovery: %v", err)
+	}
+}
+
+func TestDescribesAtOrAfter(t *testing.T) {
+	tests := []struct {
+		name  string
+		local string
+		tag   string
+		want  bool
+	}{
+		{name: "exact tag", local: "v1.2.3", tag: "v1.2.3", want: true},
+		{name: "exact tag dirty", local: "v1.2.3-dirty", tag: "v1.2.3", want: true},
+		{name: "commits after the tag", local: "v1.2.3-4-gabc1234", tag: "v1.2.3", want: true},
+		{name: "commits after the tag dirty", local: "v1.2.3-4-gabc1234-dirty", tag: "v1.2.3", want: true},
+		{name: "older tag", local: "v1.2.2", tag: "v1.2.3", want: false},
+		{name: "bare sha from a checkout without tags", local: "abc1234", tag: "v1.2.3", want: false},
+		{name: "prerelease of the tag is not a describe of it", local: "v1.2.3-rc1", tag: "v1.2.3", want: false},
+		{name: "dev build", local: "dev", tag: "v1.2.3", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := describesAtOrAfter(tc.local, tc.tag); got != tc.want {
+				t.Errorf("describesAtOrAfter(%q, %q) = %v, want %v", tc.local, tc.tag, got, tc.want)
+			}
+		})
+	}
+}

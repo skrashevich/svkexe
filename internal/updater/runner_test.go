@@ -15,10 +15,22 @@ import (
 func newTestRunner(t *testing.T) (*Runner, string) {
 	t.Helper()
 	dir := t.TempDir()
+	// Stand in for the marker install-update-units.sh drops once the
+	// svkexe-update.path unit is enabled; without it the runner correctly
+	// refuses to write a trigger nothing would consume.
+	writeWatcher(t, dir)
 	return NewRunner(RunnerConfig{
 		TriggerPath: filepath.Join(dir, "update.trigger"),
 		StatusPath:  filepath.Join(dir, "update-status.json"),
+		WatcherPath: filepath.Join(dir, "update-watcher"),
 	}), dir
+}
+
+func writeWatcher(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "update-watcher"), []byte("svkexe-update.path\n"), 0o644); err != nil {
+		t.Fatalf("write watcher marker: %v", err)
+	}
 }
 
 // runningStatus renders a "running" status document that started `age` ago.
@@ -207,6 +219,8 @@ func TestRunnerStatus(t *testing.T) {
 
 func TestRunnerAvailable(t *testing.T) {
 	dir := t.TempDir()
+	writeWatcher(t, dir)
+	watcher := filepath.Join(dir, "update-watcher")
 
 	tests := []struct {
 		name        string
@@ -215,18 +229,26 @@ func TestRunnerAvailable(t *testing.T) {
 		wantReasonN string
 	}{
 		{
-			name:   "writable trigger directory",
-			cfg:    RunnerConfig{TriggerPath: filepath.Join(dir, "update.trigger")},
+			name:   "watcher installed and trigger directory usable",
+			cfg:    RunnerConfig{TriggerPath: filepath.Join(dir, "update.trigger"), WatcherPath: watcher},
 			wantOK: true,
 		},
 		{
+			// The defect this guards: a writable directory with nothing
+			// watching it makes the button look live while the click is
+			// swallowed forever.
+			name:        "no watcher installed",
+			cfg:         RunnerConfig{TriggerPath: filepath.Join(dir, "update.trigger"), WatcherPath: filepath.Join(dir, "absent-watcher")},
+			wantReasonN: "no update watcher is installed",
+		},
+		{
 			name:        "missing trigger directory",
-			cfg:         RunnerConfig{TriggerPath: filepath.Join(dir, "nope", "update.trigger")},
+			cfg:         RunnerConfig{TriggerPath: filepath.Join(dir, "nope", "update.trigger"), WatcherPath: watcher},
 			wantReasonN: "not accessible",
 		},
 		{
-			name:   "command overrides the trigger path",
-			cfg:    RunnerConfig{TriggerPath: filepath.Join(dir, "nope", "update.trigger"), Command: []string{"/bin/true"}},
+			name:   "command overrides the trigger path and the watcher",
+			cfg:    RunnerConfig{TriggerPath: filepath.Join(dir, "nope", "update.trigger"), WatcherPath: filepath.Join(dir, "absent-watcher"), Command: []string{"/bin/true"}},
 			wantOK: true,
 		},
 	}
@@ -261,7 +283,11 @@ func TestRunnerAvailableRejectsFileAsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(RunnerConfig{TriggerPath: filepath.Join(notADir, "update.trigger")})
+	writeWatcher(t, dir)
+	r := NewRunner(RunnerConfig{
+		TriggerPath: filepath.Join(notADir, "update.trigger"),
+		WatcherPath: filepath.Join(dir, "update-watcher"),
+	})
 	ok, reason := r.Available()
 	if ok {
 		t.Fatal("Available() = true for a file used as a directory")
@@ -273,9 +299,11 @@ func TestRunnerAvailableRejectsFileAsDirectory(t *testing.T) {
 
 func TestRunnerStartUnavailable(t *testing.T) {
 	dir := t.TempDir()
+	writeWatcher(t, dir)
 	r := NewRunner(RunnerConfig{
 		TriggerPath: filepath.Join(dir, "nope", "update.trigger"),
 		StatusPath:  filepath.Join(dir, "update-status.json"),
+		WatcherPath: filepath.Join(dir, "update-watcher"),
 	})
 
 	err := r.Start(t.Context())
@@ -297,9 +325,11 @@ func TestRunnerStartSucceedsWithUnwritableStatusFile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(statusDir, 0o755) })
 
+	writeWatcher(t, dir)
 	r := NewRunner(RunnerConfig{
 		TriggerPath: filepath.Join(dir, "update.trigger"),
 		StatusPath:  filepath.Join(statusDir, "update-status.json"),
+		WatcherPath: filepath.Join(dir, "update-watcher"),
 	})
 	if err := r.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)

@@ -25,6 +25,7 @@ const (
 const (
 	DefaultTriggerPath = "/var/lib/svkexe/update.trigger"
 	DefaultStatusPath  = "/var/lib/svkexe/update-status.json"
+	DefaultWatcherPath = "/var/lib/svkexe/update-watcher"
 )
 
 // Sentinel errors returned by Start, wrapped with context and checkable with
@@ -51,6 +52,11 @@ type RunnerConfig struct {
 	TriggerPath string
 	// StatusPath is the JSON file the update script writes progress into.
 	StatusPath string
+	// WatcherPath is the marker scripts/install-update-units.sh writes once the
+	// root-owned svkexe-update.path unit is enabled. Its presence is the only
+	// proof that anything will ever consume a trigger; without it the button
+	// would write a file nobody reads and the UI would wait forever.
+	WatcherPath string
 	// Command, when set, is executed directly instead of using the trigger
 	// file. It exists for deployments where the gateway is already privileged,
 	// such as a Docker image or a developer machine.
@@ -80,6 +86,9 @@ func NewRunner(cfg RunnerConfig) *Runner {
 	if cfg.StatusPath == "" {
 		cfg.StatusPath = DefaultStatusPath
 	}
+	if cfg.WatcherPath == "" {
+		cfg.WatcherPath = DefaultWatcherPath
+	}
 	if cfg.StaleAfter <= 0 {
 		cfg.StaleAfter = DefaultStaleAfter
 	}
@@ -90,11 +99,13 @@ func NewRunner(cfg RunnerConfig) *Runner {
 //
 //	SVKEXE_UPDATE_TRIGGER  (default /var/lib/svkexe/update.trigger)
 //	SVKEXE_UPDATE_STATUS   (default /var/lib/svkexe/update-status.json)
+//	SVKEXE_UPDATE_WATCHER  (default /var/lib/svkexe/update-watcher)
 //	SVKEXE_UPDATE_COMMAND  optional command run directly, split on whitespace
 func NewRunnerFromEnv() *Runner {
 	return NewRunner(RunnerConfig{
 		TriggerPath: os.Getenv("SVKEXE_UPDATE_TRIGGER"),
 		StatusPath:  os.Getenv("SVKEXE_UPDATE_STATUS"),
+		WatcherPath: os.Getenv("SVKEXE_UPDATE_WATCHER"),
 		Command:     strings.Fields(os.Getenv("SVKEXE_UPDATE_COMMAND")),
 	})
 }
@@ -124,9 +135,19 @@ func (r RunState) Terminal() bool { return r.State == StateSuccess || r.State ==
 // Available reports whether this deployment can start an update. The second
 // return value is a human-readable reason when it cannot; an unsupported
 // deployment is a normal state, not an error.
+// Writing the trigger is only half the question — the other half is whether
+// anything will ever read it. A writable directory with no watcher is the worst
+// outcome: the button looks live, the click lands, and the UI waits on an
+// update that will never start. So the marker written by
+// scripts/install-update-units.sh is required, not the directory's write bit.
 func (r *Runner) Available() (bool, string) {
 	if len(r.cfg.Command) > 0 {
 		return true, ""
+	}
+	if _, err := os.Stat(r.cfg.WatcherPath); err != nil {
+		return false, fmt.Sprintf(
+			"no update watcher is installed (%s is missing); run scripts/install-update-units.sh as root, or set SVKEXE_UPDATE_COMMAND",
+			r.cfg.WatcherPath)
 	}
 	dir := filepath.Dir(r.cfg.TriggerPath)
 	info, err := os.Stat(dir)
@@ -136,15 +157,6 @@ func (r *Runner) Available() (bool, string) {
 	if !info.IsDir() {
 		return false, fmt.Sprintf("update trigger path %s is not a directory", dir)
 	}
-	// Permission bits alone do not answer this (supplementary groups, ACLs,
-	// read-only mounts), so probe with a real file.
-	probe, err := os.CreateTemp(dir, ".svkexe-update-probe-*")
-	if err != nil {
-		return false, fmt.Sprintf("update trigger directory %s is not writable", dir)
-	}
-	name := probe.Name()
-	_ = probe.Close()
-	_ = os.Remove(name)
 	return true, ""
 }
 

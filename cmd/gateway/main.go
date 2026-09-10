@@ -41,6 +41,8 @@ func main() {
 	encKeyHex := getenv("GATEWAY_ENC_KEY", "")
 	incusSocket := getenv("INCUS_SOCKET", "/var/lib/incus/unix.socket")
 	domain := getenv("DOMAIN", "")
+	// The agent is told the address its VM answers on, built from this domain.
+	picoclaw.Domain = domain
 	secretsBasePath := getenv("SECRETS_BASE_PATH", "/var/lib/svkexe/secrets")
 	sshAddr := getenv("SSH_ADDR", ":2222")
 	sshHostKeyPath := getenv("SSH_HOST_KEY_PATH", "/var/lib/svkexe/ssh_host_key")

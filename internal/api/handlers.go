@@ -126,7 +126,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.EqualFold(rtContainer.Status, "running") {
-		if err := picoclaw.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer.ID, dbContainer.IncusName, userID, s.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer, s.picoclawLLMCfg); err != nil {
 			_ = s.db.UpdateContainerStatus(dbContainer.ID, "error", dbContainer.IPAddress)
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -263,7 +263,7 @@ func (s *Server) doRecreate(c *dbpkg.Container) {
 		_ = s.db.UpdateContainerStatus(id, "error", "")
 		return
 	}
-	if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, id, c.IncusName, c.OwnerID, s.picoclawLLMCfg); err != nil {
+	if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c, s.picoclawLLMCfg); err != nil {
 		log.Printf("recreate: PicoClaw setup: %v", err)
 		_ = s.db.UpdateContainerStatus(id, "error", "")
 		return
@@ -302,7 +302,7 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 	if s.materializer != nil {
 		setupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		if err := picoclaw.SetupContainer(setupCtx, s.runtime, s.materializer, id, c.IncusName, c.OwnerID, s.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(setupCtx, s.runtime, s.materializer, c, s.picoclawLLMCfg); err != nil {
 			log.Printf("PicoClaw setup on start %s: %v", c.IncusName, err)
 			_ = s.db.UpdateContainerStatus(id, "error", c.IPAddress)
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)

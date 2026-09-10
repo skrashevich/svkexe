@@ -89,7 +89,7 @@ func TestSetupPrefersOwnerModelOverGatewayList(t *testing.T) {
 	guest := &guestRuntime{files: map[string][]byte{}, models: "svkexe-cohere/north-mini-code:free\n"}
 	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token", Models: []string{"cohere/north-mini-code:free"}}
 
-	if err := SetupContainer(t.Context(), guest, m, "id", "vm", owner.ID, cfg); err != nil {
+	if err := SetupContainer(t.Context(), guest, m, testContainer(owner.ID), cfg); err != nil {
 		t.Fatal(err)
 	}
 	var config map[string]string
@@ -113,7 +113,7 @@ func TestSetupMigrationAndGatewayConfiguration(t *testing.T) {
 	t.Setenv("SVKEXE_AGENT_BINARY", binary)
 	guest := &guestRuntime{files: map[string][]byte{EnvFilePath: []byte("OLD_KEY=stale")}}
 	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token'$(not-a-command)\nSEED_EOF", Models: []string{"test/model"}}
-	if err := SetupContainer(t.Context(), guest, nil, "id", "vm", "owner", cfg); err != nil {
+	if err := SetupContainer(t.Context(), guest, nil, testContainer("owner"), cfg); err != nil {
 		t.Fatal(err)
 	}
 	if string(guest.files["/usr/local/bin/picoclaw.new"]) != "agent-binary" {
@@ -159,7 +159,7 @@ func TestSetupMigrationAndGatewayConfiguration(t *testing.T) {
 func TestSetupRefusesMissingArtifact(t *testing.T) {
 	t.Setenv("SVKEXE_AGENT_BINARY", filepath.Join(t.TempDir(), "missing"))
 	guest := &guestRuntime{files: map[string][]byte{}}
-	if err := SetupContainer(t.Context(), guest, nil, "id", "vm", "owner", nil); err == nil {
+	if err := SetupContainer(t.Context(), guest, nil, testContainer("owner"), nil); err == nil {
 		t.Fatal("missing agent reported ready")
 	}
 	for _, cmd := range guest.commands {
@@ -177,7 +177,7 @@ func TestBackupFailureIsReturned(t *testing.T) {
 func TestSetupCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := SetupContainer(ctx, &guestRuntime{}, nil, "id", "vm", "owner", nil); !errors.Is(err, context.Canceled) {
+	if err := SetupContainer(ctx, &guestRuntime{}, nil, testContainer("owner"), nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -189,7 +189,7 @@ func TestSetupRejectsIncompatibleArtifactBeforeStopping(t *testing.T) {
 	}
 	t.Setenv("SVKEXE_AGENT_BINARY", binary)
 	guest := &guestRuntime{files: map[string][]byte{}, fail: "picoclaw.new version"}
-	if err := SetupContainer(t.Context(), guest, nil, "id", "vm", "owner", nil); err == nil {
+	if err := SetupContainer(t.Context(), guest, nil, testContainer("owner"), nil); err == nil {
 		t.Fatal("incompatible guest binary accepted")
 	}
 	for _, cmd := range guest.commands {

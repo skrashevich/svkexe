@@ -27,7 +27,7 @@ func ReconcileRunning(ctx context.Context, database *db.DB, rt runtime.Container
 			return
 		}
 		setupCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := SetupContainer(setupCtx, rt, m, c.ID, c.IncusName, c.OwnerID, cfg)
+		err := SetupContainer(setupCtx, rt, m, c, cfg)
 		cancel()
 		if err != nil {
 			log.Printf("picoclaw: migration failed for %s: %v", c.IncusName, err)

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
 )
@@ -19,8 +20,15 @@ import (
 var setupLocks sync.Map // container name -> turn-safe setup semaphore
 
 // SetupContainer installs PicoClaw while retaining Shelley's UI, prompts and DB.
-// It is used by every create/start/recreate path and is safe to repeat.
-func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, incusName, ownerID string, llmCfg *LLMProxyConfig) error {
+// It is used by every create/start/recreate path and is safe to repeat. The
+// whole container is taken rather than its identifiers alone: the agent is also
+// told the address and port its work will be served on, which only the record
+// knows.
+func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, c *db.Container, llmCfg *LLMProxyConfig) error {
+	if c == nil {
+		return fmt.Errorf("setup PicoClaw: no container given")
+	}
+	containerID, incusName, ownerID := c.ID, c.IncusName, c.OwnerID
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	lock, _ := setupLocks.LoadOrStore(incusName, make(chan struct{}, 1))
@@ -81,6 +89,11 @@ rm -rf %[3]s
 		return err
 	}
 	if err := writeGuestFile(ctx, rt, incusName, ConfigFilePath, data); err != nil {
+		return err
+	}
+	// Written before the agent starts, so its first conversation already knows
+	// where this VM's work is published.
+	if err := writeEnvironmentGuide(ctx, rt, c); err != nil {
 		return err
 	}
 	var env []byte

@@ -395,6 +395,87 @@ index 4b265e1..84d324f 100644
  			return fmt.Errorf("%w: tool result message: %v", errMessagePersistence, err)
  		}
  
+diff --git a/server/platform_prompt_test.go b/server/platform_prompt_test.go
+new file mode 100644
+index 0000000..30b5259
+--- /dev/null
++++ b/server/platform_prompt_test.go
+@@ -0,0 +1,42 @@
++package server
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++// The platform describes the VM — the host it answers on, the port published
++// to the outside — in a file the agent must read before configuring anything,
++// or it will bind a service to a port nobody can reach.
++func TestPlatformAgentsFileReachesTheSystemPrompt(t *testing.T) {
++	guide := filepath.Join(t.TempDir(), "AGENTS.md")
++	const text = "This VM is served at https://demo.example.com/ from port 3000."
++	if err := os.WriteFile(guide, []byte(text), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	original := platformAgentsFile
++	platformAgentsFile = guide
++	t.Cleanup(func() { platformAgentsFile = original })
++
++	prompt, err := GenerateSystemPrompt(t.TempDir())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(prompt, text) {
++		t.Errorf("the VM's own hosting details never reached the prompt")
++	}
++}
++
++// A VM without the file must still produce a prompt: the agent has to work on
++// hosts that predate the platform guide.
++func TestMissingPlatformAgentsFileIsNotAnError(t *testing.T) {
++	original := platformAgentsFile
++	platformAgentsFile = filepath.Join(t.TempDir(), "absent.md")
++	t.Cleanup(func() { platformAgentsFile = original })
++
++	if _, err := GenerateSystemPrompt(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++}
+diff --git a/server/system_prompt.go b/server/system_prompt.go
+index 5d4b5e7..054d42c 100644
+--- a/server/system_prompt.go
++++ b/server/system_prompt.go
+@@ -725,6 +725,10 @@ func collectGitInfo(dir string) (*GitInfo, error) {
+ 	}, nil
+ }
+ 
++// platformAgentsFile is where the host platform describes this VM to the agent.
++// It is a variable so tests can point it at a temporary file.
++var platformAgentsFile = "/etc/picoclaw/AGENTS.md"
++
+ func collectCodebaseInfo(wd string, gitInfo *GitInfo) (*CodebaseInfo, error) {
+ 	info := &CodebaseInfo{
+ 		InjectFiles:        []string{},
+@@ -736,6 +740,17 @@ func collectCodebaseInfo(wd string, gitInfo *GitInfo) (*CodebaseInfo, error) {
+ 	seenFiles := make(map[string]bool)
+ 	seenContents := make(map[string]bool)
+ 
++	// /etc/picoclaw/AGENTS.md describes the VM itself — the host it is served
++	// on, the port published to the outside — and is written by the platform,
++	// not by the user. It is read first and lives outside $HOME so neither the
++	// user nor the agent can overwrite what the platform knows about the VM.
++	if content, err := os.ReadFile(platformAgentsFile); err == nil && len(content) > 0 {
++		info.InjectFiles = append(info.InjectFiles, platformAgentsFile)
++		info.InjectFileContents[platformAgentsFile] = string(content)
++		seenFiles[resolveAndNormalize(platformAgentsFile)] = true
++		seenContents[string(content)] = true
++	}
++
+ 	// Check for user-level agent instructions in ~/.config/AGENTS.md, ~/.config/shelley/AGENTS.md, and ~/.shelley/AGENTS.md
+ 	if home, err := os.UserHomeDir(); err == nil {
+ 		userAgentsFiles := []string{
 diff --git a/ui/src/assets/manifest.json b/ui/src/assets/manifest.json
 index 2d0fc8b..9a6af3f 100644
 --- a/ui/src/assets/manifest.json

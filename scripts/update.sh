@@ -69,6 +69,11 @@ else
     warn "${REPO_ROOT} is not a git repo — skipping pull, building from current state."
 fi
 
+if ! command -v node >/dev/null || ! command -v npm >/dev/null || ! command -v python3 >/dev/null; then
+    apt-get update -q
+    apt-get install -y nodejs npm python3
+fi
+
 # ── Step 1.5: Rebuild base image if build-image.sh changed ────────────────
 
 if [[ -d "${REPO_ROOT}/.git" ]]; then
@@ -79,7 +84,7 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
         if [[ "${OLD_COMMIT}" == "${NEW_COMMIT}" ]]; then
             log "No new commits — skipping base image rebuild check."
         elif git -C "${REPO_ROOT}" diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
-             | grep -q '^scripts/build-image\.sh$'; then
+             | grep -qE '^(scripts/build-(image|agent)\.sh|agent/)'; then
             log "scripts/build-image.sh changed — rebuilding svkexe-base image…"
             "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
         else
@@ -101,6 +106,10 @@ env HOME="/root" make -C "${REPO_ROOT}" build
 
 log "Installing binary to ${INSTALL_PREFIX}/bin/${BIN_NAME}…"
 install -m 0755 "${REPO_ROOT}/bin/gateway" "${INSTALL_PREFIX}/bin/${BIN_NAME}"
+install -d -m 0755 "${INSTALL_PREFIX}/lib/svkexe"
+install -m 0755 "${REPO_ROOT}/bin/picoclaw" "${INSTALL_PREFIX}/lib/svkexe/picoclaw"
+install -d -m 0755 "${INSTALL_PREFIX}/share/licenses/svkexe-agent"
+install -m 0644 "${REPO_ROOT}"/agent/licenses/* "${INSTALL_PREFIX}/share/licenses/svkexe-agent/"
 
 # ── Step 4: Restart service ─────────────────────────────────────────────────
 

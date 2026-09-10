@@ -181,6 +181,9 @@ apt-get install -y --no-install-recommends \
     sqlite3 \
     jq \
     make \
+    nodejs \
+    npm \
+    python3 \
     pkg-config \
     uidmap \
     rsync
@@ -392,6 +395,10 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 
     log "Installing binary to ${INSTALL_PREFIX}/bin/${BIN_NAME}…"
     install -m 0755 "${REPO_ROOT}/bin/gateway" "${INSTALL_PREFIX}/bin/${BIN_NAME}"
+    install -d -m 0755 "${INSTALL_PREFIX}/lib/svkexe"
+    install -m 0755 "${REPO_ROOT}/bin/picoclaw" "${INSTALL_PREFIX}/lib/svkexe/picoclaw"
+    install -d -m 0755 "${INSTALL_PREFIX}/share/licenses/svkexe-agent"
+    install -m 0644 "${REPO_ROOT}"/agent/licenses/* "${INSTALL_PREFIX}/share/licenses/svkexe-agent/"
 
     if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" &>/dev/null; then
         # Let the operator's user own the checkout so future manual builds work.
@@ -456,7 +463,7 @@ SSH_HOST_KEY_PATH=${DATA_DIR}/ssh_host_key
 RATE_LIMIT_RPS=10
 RATE_LIMIT_BURST=20
 
-# LLM reverse proxy — enables Shelley to use OpenRouter through the gateway.
+# LLM reverse proxy — enables PicoClaw to use OpenRouter through the gateway.
 # Set OPENROUTER_API_KEY to enable. Models are tried in order until one works.
 OPENROUTER_API_KEY=
 OPENROUTER_MODELS=anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash

@@ -10,7 +10,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
-	"github.com/skrashevich/svkexe/internal/shelley"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -19,17 +19,17 @@ type Server struct {
 	db            *db.DB
 	runtime       runtime.ContainerRuntime
 	materializer  *secrets.Materializer
-	shelleyLLMCfg *shelley.LLMProxyConfig
+	picoclawLLMCfg *picoclaw.LLMProxyConfig
 	srv           *gssh.Server
 }
 
 // New creates a new SSH gateway server bound to addr using hostKey.
-func New(addr string, hostKey gossh.Signer, database *db.DB, rt runtime.ContainerRuntime, m *secrets.Materializer, shelleyLLM *shelley.LLMProxyConfig) *Server {
+func New(addr string, hostKey gossh.Signer, database *db.DB, rt runtime.ContainerRuntime, m *secrets.Materializer, picoclawLLM *picoclaw.LLMProxyConfig) *Server {
 	s := &Server{
 		db:            database,
 		runtime:       rt,
 		materializer:  m,
-		shelleyLLMCfg: shelleyLLM,
+		picoclawLLMCfg: picoclawLLM,
 	}
 
 	s.srv = &gssh.Server{

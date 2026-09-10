@@ -11,7 +11,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
-	"github.com/skrashevich/svkexe/internal/shelley"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/ui"
 )
 
@@ -22,13 +22,13 @@ type Dashboard struct {
 	materializer *secrets.Materializer
 	domain        string
 	encKey        []byte
-	shelleyLLMCfg *shelley.LLMProxyConfig
+	picoclawLLMCfg *picoclaw.LLMProxyConfig
 	templates     *template.Template
 	funcMap       template.FuncMap
 }
 
 // NewDashboard creates a Dashboard and parses all HTML templates.
-func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, shelleyLLM *shelley.LLMProxyConfig) (*Dashboard, error) {
+func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, picoclawLLM *picoclaw.LLMProxyConfig) (*Dashboard, error) {
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
 			return t.Format("2006-01-02 15:04")
@@ -67,7 +67,7 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 		materializer:  materializer,
 		domain:        domain,
 		encKey:        encKey,
-		shelleyLLMCfg: shelleyLLM,
+		picoclawLLMCfg: picoclawLLM,
 		templates:     tmpl,
 		funcMap:       funcMap,
 	}, nil

@@ -11,11 +11,11 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
 	"github.com/skrashevich/svkexe/internal/metrics"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/proxy"
 	"github.com/skrashevich/svkexe/internal/ratelimit"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
-	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 // Server holds the HTTP server dependencies.
@@ -29,14 +29,14 @@ type Server struct {
 	materializer   *secrets.Materializer
 	rateLimiter    *ratelimit.Limiter
 	llmProxy       *llmproxy.Proxy
-	shelleyLLMCfg  *shelley.LLMProxyConfig
+	picoclawLLMCfg *picoclaw.LLMProxyConfig
 }
 
 // NewServer constructs a Server with the given dependencies and registers routes.
 // domain is the base domain used for subdomain-based container routing (e.g. "example.com").
 // materializer may be nil, in which case key materialization is skipped.
 // rl may be nil, in which case rate limiting is disabled.
-func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, shelleyLLM *shelley.LLMProxyConfig) *Server {
+func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, picoclawLLM *picoclaw.LLMProxyConfig) *Server {
 	s := &Server{
 		db:             database,
 		runtime:        rt,
@@ -45,7 +45,7 @@ func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, doma
 		containerProxy: proxy.New(database, rt, domain),
 		materializer:   materializer,
 		rateLimiter:    rl,
-		shelleyLLMCfg:  shelleyLLM,
+		picoclawLLMCfg: picoclawLLM,
 	}
 	if llmCfg != nil && llmCfg.APIKey != "" {
 		s.llmProxy = llmproxy.New(*llmCfg)
@@ -154,7 +154,7 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 	})
 
 	// Dashboard routes
-	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.shelleyLLMCfg)
+	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.picoclawLLMCfg)
 	if err != nil {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}

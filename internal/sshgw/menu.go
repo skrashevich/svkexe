@@ -10,8 +10,8 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	"github.com/google/uuid"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
-	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 const banner = "\r\n              _\r\n  _____   _| | __\r\n / __\\ \\ / / |/ /\r\n \\__ \\\\ V /|   <\r\n |___/ \\_/ |_|\\_\\\r\n\r\n"
@@ -231,9 +231,13 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 		return
 	}
 
-	// Re-apply Shelley config on every start.
+	// Re-apply PicoClaw config on every start.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg)
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.picoclawLLMCfg); err != nil {
+			_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
+			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
+			return
+		}
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -287,9 +291,13 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 		return
 	}
 
-	// Re-apply Shelley config on every start.
+	// Re-apply PicoClaw config on every start.
 	if s.materializer != nil {
-		_ = shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg)
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.picoclawLLMCfg); err != nil {
+			_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
+			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
+			return
+		}
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -445,38 +453,22 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 
 	_ = s.db.UpdateContainerStatus(c.ID, "recreating", c.IPAddress)
 
-	// Start the container if stopped so we can back up /data.
-	wasRunning := c.Status == "running"
-	if c.Status == "stopped" {
-		fmt.Fprintf(sess, "Starting %q for backup...\r\n", c.Name)
-		if err := s.runtime.Start(ctx, c.IncusName); err == nil {
-			wasRunning = true
-		}
+	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
+		fmt.Fprintf(sess, "Error starting VM for backup: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
+		return
 	}
-
-	// Back up /data.
-	var backupData []byte
-	if wasRunning {
-		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
-			fmt.Fprintf(sess, "Backing up /data from %q...\r\n", c.Name)
-			if _, err := s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-czf", "/tmp/data-backup.tar.gz", "-C", "/", "data"}); err == nil {
-				backupData, _ = fr.PullFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz")
-			}
-			if len(backupData) > 0 {
-				fmt.Fprintf(sess, "Backup complete (%d bytes).\r\n", len(backupData))
-			} else {
-				io.WriteString(sess, "Warning: /data backup is empty (no user data found).\r\n")
-			}
-		}
+	fmt.Fprintf(sess, "Backing up /data from %q...\r\n", c.Name)
+	backupData, err := picoclaw.BackupData(ctx, s.runtime, c.IncusName)
+	if err != nil {
+		fmt.Fprintf(sess, "Error backing up VM: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
+		return
 	}
-
-	// Stop the container.
-	if wasRunning {
-		fmt.Fprintf(sess, "Stopping %q...\r\n", c.Name)
-		if err := s.runtime.Stop(ctx, c.IncusName); err != nil {
-			fmt.Fprintf(sess, "Error stopping VM: %v\r\n", err)
-			return
-		}
+	if err := s.runtime.Stop(ctx, c.IncusName); err != nil {
+		fmt.Fprintf(sess, "Error stopping VM: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
+		return
 	}
 
 	// Delete old container.
@@ -487,11 +479,11 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 	}
 
 	// Create new container from fresh image.
-	fmt.Fprintf(sess, "Creating new container from %s image...\r\n", shelley.DefaultImage)
-	_, err := s.runtime.Create(ctx, runtime.CreateOpts{
+	fmt.Fprintf(sess, "Creating new container from %s image...\r\n", picoclaw.DefaultImage)
+	_, err = s.runtime.Create(ctx, runtime.CreateOpts{
 		Name:     c.Name,
 		OwnerID:  user.ID,
-		Image:    shelley.DefaultImage,
+		Image:    picoclaw.DefaultImage,
 		CPULimit: c.CPULimit,
 		MemoryMB: c.MemoryMB,
 		DiskGB:   c.DiskGB,
@@ -516,27 +508,17 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 		ip = rtc.IP
 	}
 
-	// Shelley setup.
-	if s.materializer != nil {
-		fmt.Fprintf(sess, "Setting up Shelley...\r\n")
-		if err := shelley.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.shelleyLLMCfg); err != nil {
-			fmt.Fprintf(sess, "Warning: Shelley setup failed: %v\r\n", err)
-		}
+	fmt.Fprintf(sess, "Restoring /data...\r\n")
+	if err := picoclaw.RestoreData(ctx, s.runtime, c.IncusName, backupData); err != nil {
+		fmt.Fprintf(sess, "Error restoring data: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", ip)
+		return
 	}
-
-	// Restore /data.
-	if len(backupData) > 0 {
-		if fr, ok := s.runtime.(runtime.FileRuntime); ok {
-			fmt.Fprintf(sess, "Restoring /data...\r\n")
-			if err := fr.PushFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz", backupData); err == nil {
-				s.runtime.Exec(ctx, c.IncusName, []string{"tar", "-xzf", "/tmp/data-backup.tar.gz", "-C", "/"})
-				s.runtime.Exec(ctx, c.IncusName, []string{"rm", "-f", "/tmp/data-backup.tar.gz"})
-				s.runtime.Exec(ctx, c.IncusName, []string{"chown", "-R", "user:user", "/data"})
-				io.WriteString(sess, "Data restored.\r\n")
-			} else {
-				fmt.Fprintf(sess, "Warning: failed to restore data: %v\r\n", err)
-			}
-		}
+	fmt.Fprintf(sess, "Setting up PicoClaw...\r\n")
+	if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c.ID, c.IncusName, user.ID, s.picoclawLLMCfg); err != nil {
+		fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
+		_ = s.db.UpdateContainerStatus(c.ID, "error", ip)
+		return
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", ip)
@@ -833,4 +815,3 @@ func (le *lineEditor) readLine(sess gssh.Session) (string, error) {
 		}
 	}
 }
-

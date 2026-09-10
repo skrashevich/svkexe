@@ -5,14 +5,16 @@
 [![GitHub release](https://img.shields.io/github/v/release/skrashevich/svkexe?include_prereleases)](https://github.com/skrashevich/svkexe/releases)
 
 
-Self-hosted platform for persistent Linux VMs with integrated [Shelley](https://github.com/boldsoftware/shelley) AI coding agent. A self-hosted alternative to [exe.dev](https://exe.dev).
+Self-hosted platform for persistent Linux VMs with integrated [PicoClaw](https://github.com/sipeed/picoclaw) agent runtime, preserving the [Shelley](https://github.com/boldsoftware/shelley) web UI, coding prompts, tools and conversation storage. A self-hosted alternative to [exe.dev](https://exe.dev).
+
+See [agent architecture, build and migration](docs/PICOCLAW.md) for the preserved contracts and existing-VM upgrade procedure.
 
 ## Features
 
 - **Persistent Linux VMs** via Incus LXC containers with native systemd
-- **Shelley coding agent** per container — web-based, multi-conversation, multi-model AI assistant
+- **PicoClaw coding agent with Shelley UI** per container — web-based, multi-conversation, multi-model AI assistant
 - **Dynamic subdomain routing** — each VM accessible at `https://{name}.yourdomain.com`
-- **WebSocket/SSE proxy** for real-time Shelley interactions
+- **WebSocket/SSE proxy** for real-time PicoClaw interactions
 - **Web Shell** (xterm.js) for browser-based terminal access
 - **SSH Gateway** with interactive VM menu and direct connect (`ssh vm@host`)
 - **Shared links** (Discord-style) for temporary container access
@@ -72,7 +74,7 @@ The installer handles everything: system packages, Go, Docker, Incus, base conta
    | `BOOTSTRAP_ADMIN_EMAIL` | Admin login email |
    | `BOOTSTRAP_ADMIN_PASSWORD` | Admin login password (printed during install, rotatable here) |
    | `GATEWAY_COOKIE_SECURE` | Set to `1` when behind HTTPS (Caddy or external TLS) |
-   | `OPENROUTER_API_KEY` | Your OpenRouter key (enables LLM proxy for Shelley) |
+   | `OPENROUTER_API_KEY` | Your OpenRouter key (enables LLM proxy for PicoClaw) |
 
 3. **Start the service:**
 
@@ -159,7 +161,7 @@ Or remotely:
 curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/update.sh | sudo bash
 ```
 
-The script pulls the latest code, rebuilds the binary, rebuilds the base image if `build-image.sh` changed, and restarts the service. Optional: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (build only).
+The script pulls the latest code, rebuilds the gateway and PicoClaw agent, rebuilds the base image when agent/build sources change, and restarts the service. Running VM agents are migrated on gateway startup; stopped VMs migrate on their next start. Optional: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (build only).
 
 ## Configuration
 
@@ -182,7 +184,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `BOOTSTRAP_ADMIN_PASSWORD` | | Admin account password (re-hashed on every restart — rotate by changing this value) |
 | `OPENROUTER_API_KEY` | | OpenRouter API key (enables LLM proxy) |
 | `OPENROUTER_MODELS` | `anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash` | Models to try in order (comma-separated) |
-| `LLM_INTERNAL_TOKEN` | | Bearer token for Shelley → gateway auth |
+| `LLM_INTERNAL_TOKEN` | | Bearer token for PicoClaw → gateway auth |
 | `LLM_PROXY_URL` | *(derived from DOMAIN)* | LLM proxy URL as seen from containers. If unset and DOMAIN is configured, defaults to `https://$DOMAIN/api/llm/v1` |
 
 ## Architecture
@@ -201,7 +203,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 │              Incus (LXC Containers)                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
 │  │ VM 1     │  │ VM 2     │  │ VM N     │           │
-│  │ Shelley  │  │ Shelley  │  │ Shelley  │           │
+│  │ PicoClaw │  │ PicoClaw │  │ PicoClaw │           │
 │  │ :9000    │  │ :9000    │  │ :9000    │           │
 │  └──────────┘  └──────────┘  └──────────┘           │
 └─────────────────────────────────────────────────────┘
@@ -212,7 +214,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | Component | Technology |
 |---|---|
 | VM Runtime | [Incus](https://linuxcontainers.org/incus/) (LXC) |
-| Coding Agent | [Shelley](https://github.com/boldsoftware/shelley) (Go + React) |
+| Coding Agent | PicoClaw v0.3.1 runtime + pinned Shelley UI/prompts/tools |
 | API Gateway | Go, [chi](https://github.com/go-chi/chi), SQLite (WAL) |
 | Reverse Proxy | [Caddy](https://caddyserver.com/) |
 | Auth | Built-in web login (bcrypt + session cookies) |
@@ -233,7 +235,7 @@ internal/
   proxy/               Dynamic reverse proxy (WebSocket/SSE)
   runtime/             ContainerRuntime + ShellRuntime interfaces
   secrets/             LLM key materialization (encrypted DB -> env file)
-  shelley/             Shelley config contract + container setup
+  picoclaw/            Agent setup, migration, gateway models and backups
   sshgw/               SSH gateway with interactive menu
   metrics/             Prometheus metrics + middleware
   ratelimit/           Per-user token bucket rate limiter
@@ -274,7 +276,7 @@ GET    /metrics                     Prometheus metrics (unauthenticated)
 
 - All incoming `X-ExeDev-*` headers stripped by Caddy before auth
 - User-to-container ownership verified before every proxy request
-- Shelley is not a multi-tenancy boundary — isolation is at the LXC container level
+- The agent is not a multi-tenancy boundary — isolation is at the LXC container level
 - LLM keys encrypted with AES-GCM, materialized as read-only tmpfs mounts
 - Shared links scoped to specific containers with optional expiration
 

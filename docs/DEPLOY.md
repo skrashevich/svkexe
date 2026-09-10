@@ -157,7 +157,7 @@ Key metrics to alert on:
 │              Incus (LXC Containers)                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
 │  │ VM 1     │  │ VM 2     │  │ VM N     │           │
-│  │ Shelley  │  │ Shelley  │  │ Shelley  │           │
+│  │ PicoClaw │  │ PicoClaw │  │ PicoClaw │           │
 │  │ :9000    │  │ :9000    │  │ :9000    │           │
 │  └──────────┘  └──────────┘  └──────────┘           │
 └─────────────────────────────────────────────────────┘
@@ -167,7 +167,11 @@ Auth chain:
 ```
 Client → Caddy (strip X-ExeDev-*) → Authelia (forward_auth)
        → Caddy (inject verified headers) → Gateway (ownership check)
-       → Rate limiter → Container:Shelley
+       → Rate limiter → Container:PicoClaw
 ```
 
 See [PLAN.md](../PLAN.md) for full architecture decisions and phase roadmap.
+
+## Agent updates
+
+The installer/update script builds both the gateway and the pinned PicoClaw agent. See [PicoClaw migration](PICOCLAW.md) for data compatibility, build prerequisites, and rollback.

@@ -26,8 +26,8 @@ import (
 	"github.com/skrashevich/svkexe/internal/api"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/proxy"
-	"github.com/skrashevich/svkexe/internal/shelley"
 	"github.com/skrashevich/svkexe/internal/ratelimit"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
@@ -80,7 +80,7 @@ func main() {
 	api.CookieSecure = strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", "0"), "1") ||
 		strings.EqualFold(getenv("GATEWAY_COOKIE_SECURE", ""), "true")
 
-	// Set cookie domain so sessions work across subdomains (e.g. shelley.vm.domain).
+	// Set cookie domain so sessions work across subdomains (e.g. picoclaw.vm.domain).
 	if domain != "" {
 		api.CookieDomain = "." + domain
 	}
@@ -126,7 +126,7 @@ func main() {
 
 	// Build LLM proxy config.
 	var llmCfg *llmproxy.Config
-	var shelleyLLM *shelley.LLMProxyConfig
+	var picoclawLLM *picoclaw.LLMProxyConfig
 	if openRouterKey != "" {
 		models := strings.Split(openRouterModels, ",")
 		llmCfg = &llmproxy.Config{
@@ -137,7 +137,7 @@ func main() {
 		log.Printf("LLM proxy enabled with %d models", len(models))
 	}
 
-	// Derive the LLM proxy URL for Shelley inside containers.
+	// Derive the LLM proxy URL for PicoClaw inside containers.
 	// This is independent of OpenRouter — containers need it whenever
 	// the gateway exposes an LLM endpoint.
 	llmProxyURL := getenv("LLM_PROXY_URL", "")
@@ -151,7 +151,7 @@ func main() {
 				models = append(models, m)
 			}
 		}
-		shelleyLLM = &shelley.LLMProxyConfig{
+		picoclawLLM = &picoclaw.LLMProxyConfig{
 			BaseURL: llmProxyURL,
 			Token:   llmInternalToken,
 			Models:  models,
@@ -159,7 +159,7 @@ func main() {
 	}
 
 	// Build and start SSH gateway.
-	sshGateway := sshgw.New(sshAddr, hostKey, database, rt, materializer, shelleyLLM)
+	sshGateway := sshgw.New(sshAddr, hostKey, database, rt, materializer, picoclawLLM)
 	go func() {
 		if err := sshGateway.ListenAndServe(); err != nil {
 			log.Printf("SSH gateway stopped: %v", err)
@@ -167,7 +167,7 @@ func main() {
 	}()
 
 	// Build API server and container proxy.
-	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, shelleyLLM)
+	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM)
 	containerProxy := proxy.New(database, rt, domain)
 
 	// Top-level handler: route by Host header.
@@ -195,11 +195,17 @@ func main() {
 		}
 	}()
 
+	// Upgrade agents in running VMs; stopped VMs are handled on their next start.
+	agentCtx, stopAgents := context.WithCancel(context.Background())
+	defer stopAgents()
+	go picoclaw.ReconcileRunning(agentCtx, database, rt, materializer, picoclawLLM)
+
 	// Wait for shutdown signal.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("shutting down...")
+	stopAgents()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

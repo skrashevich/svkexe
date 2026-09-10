@@ -826,21 +826,21 @@
               <div class="arch-box-name">box-01</div>
               <div class="arch-box-detail">
                 <span>systemd</span>
-                <span>shelley :9000</span>
+                <span>picoclaw :9000</span>
               </div>
             </div>
             <div class="arch-box">
               <div class="arch-box-name">box-02</div>
               <div class="arch-box-detail">
                 <span>systemd</span>
-                <span>shelley :9000</span>
+                <span>picoclaw :9000</span>
               </div>
             </div>
             <div class="arch-box">
               <div class="arch-box-name">box-N</div>
               <div class="arch-box-detail">
                 <span>systemd</span>
-                <span>shelley :9000</span>
+                <span>picoclaw :9000</span>
               </div>
             </div>
           </div>
@@ -869,7 +869,7 @@
         <div class="feat-item">
           <div class="feat-num">02</div>
           <div class="feat-title">AI agent per box</div>
-          <p class="feat-desc">Shelley runs inside each container on <code class="mono" style="font-size:0.78rem;">:9000</code>. It has full filesystem access to that container and nothing else. Your context, your CPU, your data.</p>
+          <p class="feat-desc">PicoClaw runs inside each container on <code class="mono" style="font-size:0.78rem;">:9000</code>. It has full filesystem access to that container and nothing else. Your context, your CPU, your data.</p>
         </div>
 
         <div class="feat-item">
@@ -937,7 +937,7 @@
         <div class="sec-item">
           <div class="sec-id">S4</div>
           <div class="sec-content">
-            <div class="sec-title">Shelley is not a multi-tenancy boundary. The LXC container is.</div>
+            <div class="sec-title">PicoClaw is not a multi-tenancy boundary. The LXC container is.</div>
             <div class="sec-note">Architectural decision</div>
           </div>
         </div>
@@ -985,11 +985,11 @@
           <span class="term-line">&nbsp;</span>
           <span class="term-line"><span class="mu"># 4. Create your first box</span></span>
           <span class="term-line"><span class="p">$</span> <span class="c">svkexe box create --name dev-01 --image ubuntu/24.04</span></span>
-          <span class="term-line"><span class="ok">✓ box-01 created  (shelley :9000 ready in ~8s)</span></span>
+          <span class="term-line"><span class="ok">✓ box-01 created  (picoclaw :9000 ready in ~8s)</span></span>
           <span class="term-line">&nbsp;</span>
           <span class="term-line"><span class="mu"># 5. SSH in</span></span>
           <span class="term-line"><span class="p">$</span> <span class="c">svkexe ssh dev-01</span></span>
-          <span class="term-line"><span class="ok">Connecting to dev-01 via shelley...</span></span>
+          <span class="term-line"><span class="ok">Connecting to dev-01 via picoclaw...</span></span>
           <span class="term-line"><span class="c">root@dev-01:~# <span class="term-cursor"></span></span></span>
         </div>
       </div>
@@ -1028,11 +1028,11 @@
 
         <details>
           <summary>
-            What does "Shelley" do exactly?
+            What does "PicoClaw" do exactly?
             <span class="faq-icon">+</span>
           </summary>
           <div class="faq-body">
-            Shelley is a small Go process that runs inside each container on port <code>:9000</code>. It exposes a WebSocket interface for the AI coding agent, handles file reads/writes, and proxies terminal sessions. It is scoped entirely to that container's filesystem — it has no network reach outside the LXC boundary.
+            PicoClaw is a small Go process that runs inside each container on port <code>:9000</code>. It exposes a WebSocket interface for the AI coding agent, handles file reads/writes, and proxies terminal sessions. It is scoped entirely to that container's filesystem — it has no network reach outside the LXC boundary.
           </div>
         </details>
 
@@ -1042,7 +1042,7 @@
             <span class="faq-icon">+</span>
           </summary>
           <div class="faq-body">
-            Yes. Shelley reads its provider config from a <code>tmpfs</code> mount at a path unique to each container (invariant S5). You can configure OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint. Keys never touch the gateway process and are never stored in SQLite.
+            Yes. PicoClaw reads its provider config from a <code>tmpfs</code> mount at a path unique to each container (invariant S5). You can configure OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint. Keys never touch the gateway process and are never stored in SQLite.
           </div>
         </details>
 

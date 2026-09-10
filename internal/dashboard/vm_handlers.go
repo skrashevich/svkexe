@@ -8,13 +8,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
-	"github.com/skrashevich/svkexe/internal/shelley"
 )
 
 // userFromCtx extracts the authenticated *db.User from context.
@@ -143,7 +144,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		rtContainer, err := d.runtime.Create(ctx, runtime.CreateOpts{
 			Name:     name,
 			OwnerID:  user.ID,
-			Image:    shelley.DefaultImage,
+			Image:    picoclaw.DefaultImage,
 			CPULimit: cpuLimit,
 			MemoryMB: memoryMB,
 			DiskGB:   diskGB,
@@ -155,9 +156,10 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = d.db.UpdateContainerStatus(c.ID, rtContainer.Status, rtContainer.IP)
 
-		if d.materializer != nil {
-			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, c.ID, incusName, user.ID, d.shelleyLLMCfg); err != nil {
-				log.Printf("shelley setup failed for %s: %v", incusName, err)
+		if strings.EqualFold(rtContainer.Status, "running") {
+			if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c.ID, incusName, user.ID, d.picoclawLLMCfg); err != nil {
+				log.Printf("PicoClaw setup failed for %s: %v", incusName, err)
+				_ = d.db.UpdateContainerStatus(c.ID, "error", rtContainer.IP)
 			}
 		}
 	}()
@@ -204,9 +206,16 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-apply Shelley config on every start.
+	// Re-apply PicoClaw config on every start.
 	if d.materializer != nil {
-		_ = shelley.SetupContainer(r.Context(), d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.shelleyLLMCfg)
+		setupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if err := picoclaw.SetupContainer(setupCtx, d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.picoclawLLMCfg); err != nil {
+			log.Printf("start: PicoClaw setup failed for %s: %v", c.IncusName, err)
+			_ = d.db.UpdateContainerStatus(id, "error", c.IPAddress)
+			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Fetch fresh IP from runtime after start.
@@ -284,31 +293,20 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx := context.Background()
 
-		// Start the container if stopped so we can back up /data.
-		wasRunning := c.Status == "running"
-		if c.Status == "stopped" {
-			if err := d.runtime.Start(ctx, c.IncusName); err == nil {
-				wasRunning = true
-			}
+		// The old VM must stay intact unless its data was successfully backed up.
+		if err := d.runtime.Start(ctx, c.IncusName); err != nil {
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
 		}
-
-		// Back up /data.
-		var backupData []byte
-		if wasRunning {
-			if fr, ok := d.runtime.(runtime.FileRuntime); ok {
-				if _, err := d.runtime.Exec(ctx, c.IncusName, []string{"tar", "-czf", "/tmp/data-backup.tar.gz", "-C", "/", "data"}); err == nil {
-					backupData, _ = fr.PullFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz")
-				}
-			}
+		backupData, err := picoclaw.BackupData(ctx, d.runtime, c.IncusName)
+		if err != nil {
+			log.Printf("backup agent data: %v", err)
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
 		}
-
-		// Stop the container.
-		if wasRunning {
-			if err := d.runtime.Stop(ctx, c.IncusName); err != nil {
-				log.Printf("recreate: stop failed for %s: %v", c.IncusName, err)
-				_ = d.db.UpdateContainerStatus(id, "error", "")
-				return
-			}
+		if err := d.runtime.Stop(ctx, c.IncusName); err != nil {
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
 		}
 
 		// Delete old container.
@@ -322,7 +320,7 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 		if _, err := d.runtime.Create(ctx, runtime.CreateOpts{
 			Name:     c.Name,
 			OwnerID:  c.OwnerID,
-			Image:    shelley.DefaultImage,
+			Image:    picoclaw.DefaultImage,
 			CPULimit: c.CPULimit,
 			MemoryMB: c.MemoryMB,
 			DiskGB:   c.DiskGB,
@@ -345,22 +343,16 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 			ip = rtc.IP
 		}
 
-		// Shelley setup.
-		if d.materializer != nil {
-			if err := shelley.SetupContainer(ctx, d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.shelleyLLMCfg); err != nil {
-				log.Printf("recreate: shelley setup failed for %s: %v", c.IncusName, err)
-			}
+		// Restore the database before PicoClaw opens it; then apply current keys/models.
+		if err := picoclaw.RestoreData(ctx, d.runtime, c.IncusName, backupData); err != nil {
+			log.Printf("restore agent data: %v", err)
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
 		}
-
-		// Restore /data.
-		if len(backupData) > 0 {
-			if fr, ok := d.runtime.(runtime.FileRuntime); ok {
-				if err := fr.PushFile(ctx, c.IncusName, "/tmp/data-backup.tar.gz", backupData); err == nil {
-					d.runtime.Exec(ctx, c.IncusName, []string{"tar", "-xzf", "/tmp/data-backup.tar.gz", "-C", "/"})
-					d.runtime.Exec(ctx, c.IncusName, []string{"rm", "-f", "/tmp/data-backup.tar.gz"})
-					d.runtime.Exec(ctx, c.IncusName, []string{"chown", "-R", "user:user", "/data"})
-				}
-			}
+		if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, id, c.IncusName, c.OwnerID, d.picoclawLLMCfg); err != nil {
+			log.Printf("recreate: PicoClaw setup: %v", err)
+			_ = d.db.UpdateContainerStatus(id, "error", "")
+			return
 		}
 
 		_ = d.db.UpdateContainerStatus(id, "running", ip)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -20,7 +21,7 @@ type Config struct {
 	// Models is the ordered list of models to try. The proxy tries each
 	// model in order until one succeeds.
 	Models []string
-	// InternalToken is the Bearer token that Shelley must present.
+	// InternalToken is the Bearer token that PicoClaw must present.
 	// If empty, no auth check is performed.
 	InternalToken string
 }
@@ -141,7 +142,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	models := p.cfg.Models
 	// If the client specified a model and it's in our list, try it first.
-	if req.Model != "" {
+	if slices.Contains(models, req.Model) {
 		models = prioritize(req.Model, models)
 	}
 
@@ -176,8 +177,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					w.Header().Add(k, v)
 				}
 			}
+			if req.Stream {
+				_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+			}
 			w.WriteHeader(http.StatusOK)
-			io.Copy(w, resp.Body)
+			var output io.Writer = w
+			if req.Stream {
+				output = flushingWriter{w}
+			}
+			io.Copy(output, resp.Body)
 			resp.Body.Close()
 			return
 		}
@@ -210,4 +218,15 @@ func prioritize(preferred string, models []string) []string {
 		}
 	}
 	return result
+}
+
+// Flush each upstream chunk so token/tool deltas reach the preserved agent UI.
+type flushingWriter struct{ http.ResponseWriter }
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil {
+		err = http.NewResponseController(w.ResponseWriter).Flush()
+	}
+	return n, err
 }

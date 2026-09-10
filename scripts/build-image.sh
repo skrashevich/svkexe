@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-image.sh — Build Incus image 'svkexe-base' from Ubuntu 24.04.
 #
-# A developer-ready container image with systemd, Shelley, Claude Code, Codex,
+# A developer-ready container image with systemd, PicoClaw, Claude Code, Codex,
 # Go, Node, and common dev tools.
 #
 # Idempotent: safe to re-run. Cleans up the working container on exit.
@@ -251,46 +251,18 @@ run_in "
     su - ${CONTAINER_USER} -c 'git config --global init.defaultBranch main'
 "
 
-# ── Install Shelley (from release binary) ──────────────────────────────────
+# ── Install the pinned PicoClaw agent with Shelley UI/prompts ──────────────
 
-log "Installing Shelley…"
-run_in "
-    ARCH=\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    SHELLEY_URL=\$(curl -fsSL https://api.github.com/repos/boldsoftware/shelley/releases/latest \
-        | jq -r \".assets[] | select(.name == \\\"shelley_linux_\${ARCH}\\\") | .browser_download_url\")
-    if [ -z \"\${SHELLEY_URL}\" ] || [ \"\${SHELLEY_URL}\" = \"null\" ]; then
-        echo 'ERROR: Could not find Shelley release binary' >&2
-        exit 1
-    fi
-    curl -fsSL \"\${SHELLEY_URL}\" -o /usr/local/bin/shelley
-    chmod +x /usr/local/bin/shelley
-    echo \"Shelley installed: \$(/usr/local/bin/shelley -help 2>&1 | head -1 || echo ok)\"
-"
-
-# ── Shelley systemd unit ──────────────────────────────────────────────────
-
-log "Installing shelley.service…"
-run_in "
-    cat > /etc/systemd/system/shelley.service <<'UNIT'
-[Unit]
-Description=Shelley LLM execution service
-After=network.target
-
-[Service]
-Type=simple
-User=user
-Group=user
-WorkingDirectory=/home/user
-EnvironmentFile=/etc/shelley/env
-ExecStart=/usr/local/bin/shelley --config /etc/shelley/shelley.json -db /data/shelley.db serve -port 9000 -require-header X-ExeDev-Userid
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    systemctl enable shelley.service
-"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+log "Building PicoClaw agent…"
+AGENT_GOOS=linux "$REPO_ROOT/scripts/build-agent.sh"
+incus file push "$REPO_ROOT/bin/picoclaw" "${CONTAINER_NAME}/usr/local/bin/picoclaw"
+run_in "chmod 755 /usr/local/bin/picoclaw; ln -sfn picoclaw /usr/local/bin/shelley; mkdir -p /usr/local/share/licenses/svkexe-agent"
+for license in "$REPO_ROOT"/agent/licenses/*; do
+    incus file push "$license" "${CONTAINER_NAME}/usr/local/share/licenses/svkexe-agent/$(basename "$license")"
+done
+# Gateway setup writes the service/config after provisioning each VM. Avoid
+# starting an unconfigured agent in the base image.
 
 # ── Install Claude Code ────────────────────────────────────────────────────
 
@@ -338,7 +310,7 @@ run_in "
     mkdir -p /data /etc/shelley
     chown ${CONTAINER_USER}:${CONTAINER_USER} /data
     cat > /etc/shelley/env <<'ENVEOF'
-# Shelley runtime environment — populated by svkexe gateway.
+# Agent runtime environment — populated by svkexe gateway.
 ENVEOF
     chmod 640 /etc/shelley/env
     chown root:${CONTAINER_USER} /etc/shelley/env
@@ -384,7 +356,7 @@ incus stop "${CONTAINER_NAME}"
 log "Publishing Incus image as '${IMAGE_NAME}'…"
 incus publish "${CONTAINER_NAME}" --alias "${IMAGE_NAME}" \
     --compression bzip2 \
-    description="svkexe base image — Ubuntu 24.04 with Shelley, dev tools, Claude Code, Codex"
+    description="svkexe base image — Ubuntu 24.04 with PicoClaw, dev tools, Claude Code, Codex"
 
 log "Done. Image '${IMAGE_NAME}' is ready."
 incus image list "${IMAGE_NAME}"

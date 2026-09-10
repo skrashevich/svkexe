@@ -1,0 +1,177 @@
+package picoclaw
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
+)
+
+var setupLocks sync.Map // container name -> turn-safe setup semaphore
+
+// SetupContainer installs PicoClaw while retaining Shelley's UI, prompts and DB.
+// It is used by every create/start/recreate path and is safe to repeat.
+func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, containerID, incusName, ownerID string, llmCfg *LLMProxyConfig) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	lock, _ := setupLocks.LoadOrStore(incusName, make(chan struct{}, 1))
+	gate := lock.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := waitForGuestSystemd(ctx, rt, incusName); err != nil {
+		return err
+	}
+	if _, err := rt.Exec(ctx, incusName, []string{"mkdir", "-p", "/data", "/etc/shelley", "/etc/systemd/system"}); err != nil {
+		return err
+	}
+	if err := installBinary(ctx, rt, incusName); err != nil {
+		return err
+	}
+	// Stop both names before touching configuration or the database. Preserve a
+	// one-time SQLite backup so rollback does not depend on newer schema support.
+	stop := `set -eu
+if systemctl cat shelley.service >/dev/null 2>&1; then systemctl disable --now shelley.service; fi
+if systemctl cat picoclaw.service >/dev/null 2>&1; then systemctl stop picoclaw.service; fi
+if [ -f /data/shelley.db ] && [ ! -f /data/shelley.pre-picoclaw.db ]; then sqlite3 /data/shelley.db '.backup /data/shelley.pre-picoclaw.db'; fi
+ln -sfn picoclaw /usr/local/bin/shelley
+`
+	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", stop}); err != nil {
+		return fmt.Errorf("stop old agent: %w", err)
+	}
+	if err := writeGuestFile(ctx, rt, incusName, "/etc/systemd/system/picoclaw.service", []byte(SystemdUnitContent())); err != nil {
+		return err
+	}
+	cfg := map[string]string{}
+	// llm_gateway in the preserved frontend means exe.dev's provider-specific
+	// API, not an OpenAI endpoint. Configure only explicit DB-backed models.
+	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
+		cfg["default_model"] = "svkexe-" + llmCfg.Models[0]
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := writeGuestFile(ctx, rt, incusName, ConfigFilePath, data); err != nil {
+		return err
+	}
+	var env []byte
+	if m != nil {
+		if err := m.MaterializeKeys(containerID, ownerID); err != nil {
+			return fmt.Errorf("materialize keys: %w", err)
+		}
+		env, err = m.ReadKeys(containerID)
+		if err != nil {
+			return err
+		}
+	}
+	// Always replace the file: deleting the last key must clear stale credentials.
+	if err := writeGuestFile(ctx, rt, incusName, EnvFilePath, env); err != nil {
+		return err
+	}
+	configure := `set -eu
+chown -R user:user /data
+chown root:user /etc/shelley/env /etc/shelley/shelley.json
+chmod 640 /etc/shelley/env /etc/shelley/shelley.json
+ln -sfn picoclaw.service /etc/systemd/system/shelley.service
+systemctl daemon-reload
+`
+	if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", configure}); err != nil {
+		return err
+	}
+	if err := startPicoClawService(ctx, rt, incusName); err != nil {
+		return err
+	}
+	if err := SeedLLMModels(ctx, rt, incusName, llmCfg); err != nil {
+		return err
+	}
+	// Custom models and the default model must be loaded with the current token.
+	if _, err := rt.Exec(ctx, incusName, []string{"systemctl", "restart", "picoclaw.service"}); err != nil {
+		return err
+	}
+	if err := waitForAgentHTTP(ctx, rt, incusName); err != nil {
+		return err
+	}
+	log.Printf("picoclaw: setup complete for %s", incusName)
+	return nil
+}
+
+func writeGuestFile(ctx context.Context, rt runtime.ContainerRuntime, name, path string, data []byte) error {
+	// Only fixed paths and base64 enter the shell. Config/key bytes cannot become
+	// command substitutions or terminate a here-document.
+	cmd := fmt.Sprintf("umask 077; printf '%%s' '%s' | base64 -d > %s", base64.StdEncoding.EncodeToString(data), path)
+	if _, err := rt.Exec(ctx, name, []string{"sh", "-c", cmd}); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func installBinary(ctx context.Context, rt runtime.ContainerRuntime, name string) error {
+	path := os.Getenv("SVKEXE_AGENT_BINARY")
+	if path == "" {
+		path = "/usr/local/lib/svkexe/picoclaw"
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) && os.Getenv("SVKEXE_AGENT_BINARY") == "" {
+		if exe, e := os.Executable(); e == nil {
+			data, err = os.ReadFile(filepath.Join(filepath.Dir(exe), "picoclaw"))
+		}
+	}
+	if os.IsNotExist(err) && os.Getenv("SVKEXE_AGENT_BINARY") == "" {
+		// Fresh images already contain the pinned agent. Older images must receive
+		// the host artifact; never silently fall back to the Shelley engine.
+		if e := verifyBinary(ctx, rt, name, "/usr/local/bin/picoclaw"); e == nil {
+			return nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("load PicoClaw binary (build make agent and set SVKEXE_AGENT_BINARY): %w", err)
+	}
+	fr, ok := rt.(runtime.FileRuntime)
+	if !ok {
+		return fmt.Errorf("runtime cannot install PicoClaw binary")
+	}
+	if err := fr.PushFile(ctx, name, "/usr/local/bin/picoclaw.new", data); err != nil {
+		return err
+	}
+	if _, err := rt.Exec(ctx, name, []string{"chmod", "755", "/usr/local/bin/picoclaw.new"}); err != nil {
+		return err
+	}
+	if err := verifyBinary(ctx, rt, name, "/usr/local/bin/picoclaw.new"); err != nil {
+		return err
+	}
+	_, err = rt.Exec(ctx, name, []string{"mv", "-f", "/usr/local/bin/picoclaw.new", "/usr/local/bin/picoclaw"})
+	return err
+}
+
+// Verify both guest architecture compatibility and the customized runtime
+// before stopping the currently working service.
+func verifyBinary(ctx context.Context, rt runtime.ContainerRuntime, name, path string) error {
+	data, err := rt.Exec(ctx, name, []string{path, "version"})
+	if err != nil {
+		return fmt.Errorf("verify PicoClaw artifact: %w", err)
+	}
+	var info struct {
+		Version    string `json:"version"`
+		Customized bool   `json:"customized"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return fmt.Errorf("invalid agent version response: %w", err)
+	}
+	if !info.Customized || !strings.HasPrefix(info.Version, "picoclaw-") {
+		return fmt.Errorf("artifact is not the svkexe PicoClaw integration")
+	}
+	return nil
+}

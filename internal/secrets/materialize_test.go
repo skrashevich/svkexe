@@ -185,3 +185,32 @@ func TestRefreshKeys(t *testing.T) {
 		t.Errorf("unexpected env content after refresh: %q", string(data))
 	}
 }
+
+func TestMaterializeKeysReplacesReadOnlyFile(t *testing.T) {
+	database, key := setupTestDB(t)
+	createTestUser(t, database, "owner-repeat")
+	m := NewMaterializer(database, key, t.TempDir())
+	if err := database.CreateAPIKey("repeat-key", "owner-repeat", "openai", "test", key); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MaterializeKeys("vm", "owner-repeat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteAPIKeyForOwner("repeat-key", "owner-repeat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MaterializeKeys("vm", "owner-repeat"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := m.ReadKeys("vm")
+	if err != nil || len(data) != 0 {
+		t.Fatalf("deleted key remains: bytes=%d err=%v", len(data), err)
+	}
+	info, err := os.Stat(filepath.Join(m.basePath, "vm", "env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0400 {
+		t.Fatalf("permissions=%v", info.Mode())
+	}
+}

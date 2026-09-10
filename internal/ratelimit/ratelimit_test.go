@@ -102,8 +102,8 @@ func TestMiddleware_RetryAfterHeader(t *testing.T) {
 
 	makeReq()
 	rr := makeReq()
-	if rr.Code == http.StatusTooManyRequests && rr.Header().Get("Retry-After") == "" {
-		t.Fatal("Retry-After header should be set on 429 response")
+	if rr.Code != http.StatusTooManyRequests || rr.Header().Get("Retry-After") != "1" {
+		t.Fatalf("expected 429 with Retry-After: 1, got %d with %q", rr.Code, rr.Header().Get("Retry-After"))
 	}
 }
 

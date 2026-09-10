@@ -102,6 +102,10 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Pipes: browser WS → container stdin, container stdout → browser WS.
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutR.Close()
+	defer stdoutW.Close()
 
 	resizeCh := make(chan runtime.ResizeEvent, 8)
 	doneCh := make(chan struct{})
@@ -120,7 +124,17 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Start exec in background.
 	execErr := make(chan error, 1)
 	go func() {
-		execErr <- shellRT.ExecInteractive(r.Context(), opts)
+		if err := shellRT.ExecInteractive(r.Context(), opts); err != nil {
+			execErr <- err
+			stdoutW.Close()
+			return
+		}
+		// With Done supplied, the runtime returns after starting the session.
+		// Keep its output pipe open until the session actually exits.
+		select {
+		case <-doneCh:
+		case <-r.Context().Done():
+		}
 		stdoutW.Close()
 	}()
 
@@ -156,7 +170,9 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Container stdout → browser WS.
+	outputDone := make(chan struct{})
 	go func() {
+		defer close(outputDone)
 		buf := make([]byte, 4096)
 		for {
 			n, err := stdoutR.Read(buf)
@@ -174,7 +190,7 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Wait until browser disconnects or exec finishes.
 	select {
 	case <-wsDone:
-	case <-doneCh:
+	case <-outputDone:
 	case err := <-execErr:
 		if err != nil {
 			log.Printf("shell exec error for vm %s: %v", id, err)

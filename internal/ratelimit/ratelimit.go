@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -77,7 +78,7 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 			if retryAfter < 1 {
 				retryAfter = 1
 			}
-			w.Header().Set("Retry-After", http.TimeFormat)
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.Header().Set("X-RateLimit-Limit", "exceeded")
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return

@@ -15,7 +15,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
-const shelleyPort = 9000
+const agentPort = 9000
 
 // sessionCookieName mirrors api.SessionCookieName — redeclared here to avoid
 // importing the api package (which would create an import cycle).
@@ -39,7 +39,7 @@ func New(database *db.DB, rt runtime.ContainerRuntime, domain string) *Container
 
 // ServeHTTP handles an incoming request by resolving the container from the
 // subdomain, enforcing ownership, and reverse-proxying to the container's
-// Shelley port.
+// PicoClaw port.
 func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	info, ok := p.extractSubdomain(r.Host)
 	if !ok {
@@ -47,8 +47,8 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only "shelley" service prefix is supported; reject unknown services.
-	if info.Service != "" && info.Service != "shelley" {
+	// Keep old Shelley links working while exposing the PicoClaw service name.
+	if info.Service != "" && info.Service != "shelley" && info.Service != "picoclaw" {
 		http.Error(w, "unknown service", http.StatusNotFound)
 		return
 	}
@@ -62,20 +62,42 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var container *db.Container
 	var err error
 
-	if token := r.URL.Query().Get("share"); token != "" {
-		link, linkErr := p.db.GetSharedLinkByToken(token)
+	shareToken := r.URL.Query().Get("share")
+	if shareToken == "" {
+		if cookie, err := r.Cookie("svkexe_share"); err == nil {
+			shareToken = cookie.Value
+		}
+	}
+	if shareToken != "" {
+		link, linkErr := p.db.GetSharedLinkByToken(shareToken)
 		if linkErr != nil {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		container, err = p.db.GetContainerByID(link.ContainerID)
-		if err == sql.ErrNoRows || container.Name != info.ContainerName {
+		if err == sql.ErrNoRows {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
+		}
+		if container.Name != info.ContainerName {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		// The agent requires a trusted identity even for shared access. A
+		// host-only cookie carries the grant to subsequent API and asset calls;
+		// validating it on every request makes revocation immediate.
+		r.Header.Set("X-ExeDev-Userid", "share:"+link.ID)
+		if r.URL.Query().Get("share") != "" {
+			http.SetCookie(w, &http.Cookie{Name: "svkexe_share", Value: shareToken,
+				Path: "/", HttpOnly: true, Secure: p.domain != "", SameSite: http.SameSiteLaxMode,
+			})
+			query := r.URL.Query()
+			query.Del("share")
+			r.URL.RawQuery = query.Encode()
 		}
 	} else if userID != "" {
 		container, err = p.db.GetContainerByName(info.ContainerName, userID)
@@ -123,9 +145,10 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target := &url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(container.IPAddress, fmt.Sprintf("%d", shelleyPort)),
+		Host:   net.JoinHostPort(container.IPAddress, fmt.Sprintf("%d", agentPort)),
 	}
 
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	proxy := newReverseProxy(target)
 	proxy.ServeHTTP(w, r)
 }
@@ -160,7 +183,7 @@ func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
 		return subdomainInfo{}, false
 	}
 
-	// Check for service.name pattern (e.g. "shelley.my-vm").
+	// Check for service.name pattern (e.g. "picoclaw.my-vm").
 	if idx := strings.IndexByte(prefix, '.'); idx != -1 {
 		service := prefix[:idx]
 		name := prefix[idx+1:]

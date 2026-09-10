@@ -15,13 +15,14 @@ func TestExtractSubdomain(t *testing.T) {
 	p := &ContainerProxy{domain: "example.com"}
 
 	cases := []struct {
-		host      string
-		wantName  string
-		wantSvc   string
-		ok        bool
+		host     string
+		wantName string
+		wantSvc  string
+		ok       bool
 	}{
 		{"mybox.example.com", "mybox", "", true},
 		{"mybox.example.com:8080", "mybox", "", true},
+		{"picoclaw.mybox.example.com", "mybox", "picoclaw", true},
 		{"shelley.mybox.example.com", "mybox", "shelley", true},
 		{"example.com", "", "", false},
 		{"other.domain.com", "", "", false},
@@ -74,8 +75,8 @@ func TestIsRunning(t *testing.T) {
 // testProxy is a minimal reimplementation of ContainerProxy that uses a
 // lookup function instead of a real db.DB, so we can inject fake data.
 type testProxy struct {
-	domain    string
-	lookupFn  func(name string) (*fakeContainer, error)
+	domain   string
+	lookupFn func(name string) (*fakeContainer, error)
 }
 
 type fakeContainer struct {

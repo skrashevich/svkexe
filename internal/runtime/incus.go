@@ -15,6 +15,13 @@ import (
 
 const containerPrefix = "svkexe"
 
+func isAlreadyRunningError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already running")
+}
+
 // waitOp waits for an Incus operation to complete, respecting context cancellation.
 func waitOp(ctx context.Context, op incus.Operation) error {
 	done := make(chan error, 1)
@@ -106,9 +113,15 @@ func (r *IncusRuntime) Start(ctx context.Context, id string) error {
 	}
 	op, err := r.client.UpdateInstanceState(id, req, "")
 	if err != nil {
+		if isAlreadyRunningError(err) {
+			return nil
+		}
 		return fmt.Errorf("start container %s: %w", id, err)
 	}
 	if err := waitOp(ctx, op); err != nil {
+		if isAlreadyRunningError(err) {
+			return nil
+		}
 		return fmt.Errorf("wait for container start %s: %w", id, err)
 	}
 	return nil
@@ -212,17 +225,31 @@ func (r *IncusRuntime) Exec(ctx context.Context, id string, cmd []string) ([]byt
 		Interactive: false,
 	}
 
+	dataDone := make(chan bool)
 	args := incus.InstanceExecArgs{
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+		DataDone: dataDone,
 	}
 
 	op, err := r.client.ExecInstance(id, req, &args)
 	if err != nil {
 		return nil, fmt.Errorf("exec in container %s: %w", id, err)
 	}
-	if err := op.Wait(); err != nil {
+	if err := waitOp(ctx, op); err != nil {
 		return nil, fmt.Errorf("wait for exec in container %s: %w", id, err)
+	}
+	<-dataDone
+
+	opAPI := op.Get()
+	if opAPI.Metadata != nil {
+		if code, ok := opAPI.Metadata["return"].(float64); ok && int(code) != 0 {
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = strings.TrimSpace(stdout.String())
+			}
+			return stdout.Bytes(), fmt.Errorf("exec in container %s exited with status %d: %s", id, int(code), msg)
+		}
 	}
 	return stdout.Bytes(), nil
 }

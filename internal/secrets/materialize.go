@@ -53,8 +53,26 @@ func (m *Materializer) MaterializeKeys(containerID, ownerID string) error {
 	}
 
 	envFile := filepath.Join(dir, "env")
-	if err := os.WriteFile(envFile, []byte(sb.String()), 0400); err != nil {
+	// Replace atomically: the existing file is deliberately read-only, so a
+	// second setup cannot open it for writing as the unprivileged gateway user.
+	f, err := os.CreateTemp(dir, ".env-*")
+	if err != nil {
+		return fmt.Errorf("create env file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(sb.String()); err != nil {
+		f.Close()
 		return fmt.Errorf("write env file: %w", err)
+	}
+	if err := f.Chmod(0400); err != nil {
+		f.Close()
+		return fmt.Errorf("protect env file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close env file: %w", err)
+	}
+	if err := os.Rename(f.Name(), envFile); err != nil {
+		return fmt.Errorf("replace env file: %w", err)
 	}
 	return nil
 }
@@ -74,10 +92,8 @@ func (m *Materializer) RemoveKeys(containerID string) error {
 	return nil
 }
 
-// RefreshKeys removes and re-materializes keys for the given container.
+// RefreshKeys atomically re-materializes keys for the given container.
 func (m *Materializer) RefreshKeys(containerID, ownerID string) error {
-	if err := m.RemoveKeys(containerID); err != nil {
-		return err
-	}
 	return m.MaterializeKeys(containerID, ownerID)
 }
+

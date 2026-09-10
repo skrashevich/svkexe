@@ -102,6 +102,7 @@ func (s *Server) buildRouter() chi.Router {
 	// Everything below requires a valid session cookie.
 	r.Group(func(r chi.Router) {
 		r.Use(s.AuthMiddleware)
+		r.Use(vmOperationDeadline)
 		if s.rateLimiter != nil {
 			r.Use(s.rateLimiter.Middleware)
 		}

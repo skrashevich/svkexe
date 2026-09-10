@@ -6,10 +6,24 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
 )
+
+// VM operations may unpack an image and initialize systemd for several minutes.
+// Keep the response writable beyond the server's ordinary one-minute deadline.
+func vmOperationDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			(r.URL.Path == "/api/containers" || strings.HasPrefix(r.URL.Path, "/api/containers/") ||
+				r.URL.Path == "/dashboard/vms" || strings.HasPrefix(r.URL.Path, "/dashboard/vms/")) {
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(10 * time.Minute))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // AuthMiddleware validates the session cookie, loads the user, and injects
 // it into the request context. API requests missing or with invalid sessions
@@ -34,7 +48,7 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, ctxkeys.UserEmail, user.Email)
 		ctx = context.WithValue(ctx, ctxkeys.User, user)
 
-		// Downstream middlewares (rate limiter) and proxies (Shelley) still
+		// Downstream middlewares (rate limiter) and proxies (PicoClaw) still
 		// consume X-ExeDev-Userid / X-ExeDev-Email. Inject them from the
 		// authenticated session so we have a single source of truth.
 		r.Header.Set("X-ExeDev-Userid", user.ID)

@@ -15,6 +15,7 @@ import (
 // mockRuntime is a test double for ContainerRuntime.
 type mockRuntime struct {
 	containers map[string]*runtime.Container
+	lastImage  string
 }
 
 func newMockRuntime() *mockRuntime {
@@ -22,6 +23,7 @@ func newMockRuntime() *mockRuntime {
 }
 
 func (m *mockRuntime) Create(_ context.Context, opts runtime.CreateOpts) (*runtime.Container, error) {
+	m.lastImage = opts.Image
 	c := &runtime.Container{
 		ID:      "incus-" + opts.Name,
 		Name:    "incus-" + opts.Name,
@@ -246,5 +248,17 @@ func TestDeleteKey_Ownership(t *testing.T) {
 	_, err := database.GetAPIKeyPlaintext("victim-key", testEncKey)
 	if err != nil {
 		t.Fatalf("victim key should still exist: %v", err)
+	}
+}
+
+func TestCreateContainerUsesDefaultImage(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, authedRequest(http.MethodPost, "/api/containers", []byte(`{"name":"default-box"}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := srv.runtime.(*mockRuntime).lastImage; got != "svkexe-base" {
+		t.Fatalf("image=%q", got)
 	}
 }

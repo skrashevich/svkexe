@@ -12,6 +12,9 @@
 #   INSTALL_DOCKER=1    Install Docker-in-Docker (skipped by default)
 #   SKIP_CLAUDE=1       Skip Claude Code install
 #   SKIP_CODEX=1        Skip Codex install
+#   SVKEXE_AGENT_BINARY=/path/to/picoclaw
+#                       Use a prebuilt Linux agent instead of building one, for
+#                       hosts without a Go/Node toolchain
 set -euo pipefail
 
 if [[ ! -t 0 ]]; then
@@ -42,7 +45,10 @@ command -v incus &>/dev/null || die "'incus' is not installed. Run scripts/setup
 
 # ── Remove existing image if present ────────────────────────────────────────
 
-if incus image list --format csv | grep -q "^${IMAGE_NAME},"; then
+# Match the alias by name rather than by line prefix: an image carrying extra
+# aliases is listed as "svkexe-base (1 more)", which a prefix match misses,
+# leaving the old image in place until publishing fails on the taken alias.
+if incus image alias list --format csv | cut -d, -f1 | grep -qx "${IMAGE_NAME}"; then
     log "Removing existing image '${IMAGE_NAME}'…"
     incus image delete "${IMAGE_NAME}"
 fi
@@ -254,10 +260,23 @@ run_in "
 # ── Install the pinned PicoClaw agent with Shelley UI/prompts ──────────────
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-log "Building PicoClaw agent…"
-AGENT_GOOS=linux "$REPO_ROOT/scripts/build-agent.sh"
-incus file push "$REPO_ROOT/bin/picoclaw" "${CONTAINER_NAME}/usr/local/bin/picoclaw"
+# Accept a prebuilt agent so the image can be rebuilt on a host that has no Go
+# or Node toolchain. Same variable the gateway uses to pick an explicit artifact.
+AGENT_BINARY="${SVKEXE_AGENT_BINARY:-}"
+if [[ -n "$AGENT_BINARY" ]]; then
+    [[ -f "$AGENT_BINARY" ]] || die "SVKEXE_AGENT_BINARY=$AGENT_BINARY does not exist"
+    log "Using prebuilt PicoClaw agent: $AGENT_BINARY"
+else
+    log "Building PicoClaw agent…"
+    AGENT_GOOS=linux "$REPO_ROOT/scripts/build-agent.sh"
+    AGENT_BINARY="$REPO_ROOT/bin/picoclaw"
+fi
+incus file push "$AGENT_BINARY" "${CONTAINER_NAME}/usr/local/bin/picoclaw"
 run_in "chmod 755 /usr/local/bin/picoclaw; mkdir -p /usr/local/share/licenses/svkexe-agent"
+# Refuse to bake in a wrong or foreign artifact: it must run on the guest and
+# report itself as the svkexe integration build.
+run_in "/usr/local/bin/picoclaw version" | grep -q '"customized": *true' \
+    || die "agent artifact is not the svkexe PicoClaw integration build"
 for license in "$REPO_ROOT"/agent/licenses/*; do
     incus file push "$license" "${CONTAINER_NAME}/usr/local/share/licenses/svkexe-agent/$(basename "$license")"
 done

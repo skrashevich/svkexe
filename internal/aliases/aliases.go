@@ -194,9 +194,15 @@ func (m *Manager) check(ctx context.Context, c *db.Container, alias *db.Containe
 	m.refreshGuide(ctx, c)
 
 	updated, err := m.db.GetAliasByID(alias.ID)
-	// Another VM's verification can delete a competing claim while this one is
-	// in flight. The alias is gone, not broken, so the caller gets a 404 rather
+	// Guard against a race, not a path anything exercises: another VM's
+	// verification can delete this competing claim between the write above and
+	// this read. The alias is gone, not broken, so the caller gets a 404 rather
 	// than a server error.
+	//
+	// Deliberately untested. Reproducing it would need a seam in this function
+	// between the write and the read — a test hook in production code bought
+	// for a cosmetic status code. Do not read this branch as verified
+	// behaviour, and do not build on it.
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

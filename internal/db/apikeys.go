@@ -13,11 +13,14 @@ import (
 
 // APIKey represents an encrypted LLM provider API key.
 type APIKey struct {
-	ID        string
-	OwnerID   string
-	Provider  string
-	BaseURL   string
-	Models    string
+	ID       string
+	OwnerID  string
+	Provider string
+	BaseURL  string
+	Models   string
+	// Protocol is the wire protocol the endpoint speaks. It is empty for a
+	// provider-native key, which has no endpoint to speak one to.
+	Protocol  string
 	CreatedAt time.Time
 }
 
@@ -58,7 +61,7 @@ func (db *DB) GetAPIKeyPlaintext(id string, encKey []byte) (string, error) {
 // ListAPIKeysByOwner returns metadata (no plaintext) for all keys owned by ownerID.
 func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	rows, err := db.Query(
-		`SELECT id, owner_id, provider, base_url, models, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC`,
+		`SELECT id, owner_id, provider, base_url, models, protocol, created_at FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC`,
 		ownerID,
 	)
 	if err != nil {
@@ -69,7 +72,7 @@ func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	var keys []*APIKey
 	for rows.Next() {
 		k := &APIKey{}
-		if err := rows.Scan(&k.ID, &k.OwnerID, &k.Provider, &k.BaseURL, &k.Models, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.OwnerID, &k.Provider, &k.BaseURL, &k.Models, &k.Protocol, &k.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan api key: %w", err)
 		}
 		keys = append(keys, k)
@@ -77,30 +80,68 @@ func (db *DB) ListAPIKeysByOwner(ownerID string) ([]*APIKey, error) {
 	return keys, rows.Err()
 }
 
-// DeleteAPIKey removes an API key by ID.
+// DeleteAPIKey removes an API key by ID. A key that is already gone is not an
+// error: this entry point is used to clear out keys the caller has just listed,
+// where a concurrent delete is a race it does not need to hear about.
 func (db *DB) DeleteAPIKey(id string) error {
-	_, err := db.Exec(`DELETE FROM api_keys WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete api key: %w", err)
+	if err := db.deleteAPIKey(id, ""); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	return nil
 }
 
 // DeleteAPIKeyForOwner removes an API key only when it belongs to ownerID.
-// Returns sql.ErrNoRows when no matching row was deleted.
+// Returns sql.ErrNoRows when no matching row was deleted, which is how a
+// request for someone else's key is answered — indistinguishably from one for a
+// key that does not exist.
 func (db *DB) DeleteAPIKeyForOwner(id, ownerID string) error {
-	res, err := db.Exec(`DELETE FROM api_keys WHERE id = ? AND owner_id = ?`, id, ownerID)
+	return db.deleteAPIKey(id, ownerID)
+}
+
+// deleteAPIKey removes a connection and, in the same transaction, drops a
+// chosen default model the deletion just made unreachable. The two have to move
+// together: between them the owner's VMs would be pointed at a model no longer
+// in their agent database, and a caller that crashed in between would leave
+// them there permanently.
+//
+// ownerID, when non-empty, scopes the delete to that owner.
+//
+// The delete comes first and reports the owner through RETURNING rather than
+// being preceded by a SELECT. That is deliberate on two counts: it removes the
+// window in which the row could change between the two statements, and it makes
+// the transaction's first statement a write. A transaction that reads first
+// holds a WAL read snapshot and has to upgrade to a write lock, and SQLite
+// refuses that upgrade with SQLITE_BUSY_SNAPSHOT the moment anyone else has
+// committed in between — a busy that busy_timeout does not retry, which would
+// surface as a spurious failure on a perfectly valid delete.
+func (db *DB) deleteAPIKey(id, ownerID string) error {
+	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("delete api key for owner: %w", err)
+		return fmt.Errorf("delete api key: begin tx: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete api key for owner: rows affected: %w", err)
+	defer tx.Rollback()
+	// The scoping is a whole separate statement rather than a predicate that
+	// switches itself off, so that an empty ownerID cannot quietly turn an
+	// owner-scoped delete into a delete of anybody's key — and a prune of that
+	// owner's chosen model.
+	query, args := `DELETE FROM api_keys WHERE id = ? RETURNING owner_id`, []any{id}
+	if ownerID != "" {
+		query, args = `DELETE FROM api_keys WHERE id = ? AND owner_id = ? RETURNING owner_id`, []any{id, ownerID}
 	}
-	if n == 0 {
+	var owner string
+	err = tx.QueryRow(query, args...).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No such key, or it belongs to someone else. The two are deliberately
+		// indistinguishable to the caller.
 		return sql.ErrNoRows
 	}
-	return nil
+	if err != nil {
+		return fmt.Errorf("delete api key: %w", err)
+	}
+	if err := pruneDefaultModel(tx, owner); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // encryptAESGCM encrypts plaintext using AES-GCM. Returns nonce+ciphertext.

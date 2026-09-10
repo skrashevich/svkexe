@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -82,17 +83,29 @@ rm -rf %[3]s
 			return fmt.Errorf("read provider models: %w", err)
 		}
 	}
-	cfg := map[string]string{}
+	// A VM has to open on the model its owner chose, and that choice lives on
+	// the account rather than on the VM, so it is read here — this is the only
+	// point where a VM created after the choice was made learns about it.
+	var chosen string
+	if database != nil {
+		var err error
+		if chosen, err = database.UserDefaultModel(ownerID); err != nil {
+			return fmt.Errorf("read default model: %w", err)
+		}
+	}
+	// The existing config is read rather than replaced, and the model decided by
+	// the same rule a running VM follows. Rebuilding it from nothing would drop
+	// every other setting the agent keeps there, and would undo the owner's own
+	// in-agent model choice on each restart — the opposite of what that rule
+	// does for a VM that stays up.
+	//
 	// llm_gateway in the preserved frontend means exe.dev's provider-specific
 	// API, not an OpenAI endpoint. Configure only explicit DB-backed models.
-	if id := defaultModelID(providerModels, llmCfg); id != "" {
-		cfg["default_model"] = id
-	}
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	if err := writeGuestFile(ctx, rt, incusName, ConfigFilePath, data); err != nil {
+	cfg := readGuestConfig(ctx, rt, incusName)
+	value, _ := resolveGuestDefaultModel(guestDefaultModelOf(cfg), providerModels, chosen, llmCfg)
+	// The result is written whether or not it changed: a fresh VM has no config
+	// file at all, and the permissions applied further down need one to exist.
+	if err := writeGuestConfig(ctx, rt, incusName, cfg, value); err != nil {
 		return err
 	}
 	// Written before the agent starts, so its first conversation already knows
@@ -105,8 +118,8 @@ rm -rf %[3]s
 		if err := m.MaterializeKeys(containerID, ownerID); err != nil {
 			return fmt.Errorf("materialize keys: %w", err)
 		}
-		env, err = m.ReadKeys(containerID)
-		if err != nil {
+		var err error
+		if env, err = m.ReadKeys(containerID); err != nil {
 			return err
 		}
 	}
@@ -149,9 +162,17 @@ systemctl daemon-reload
 // the deployment-wide gateway list: that list is shared by every VM and can
 // name models this account has no access to, while a key the owner configured
 // is one they chose and can reach.
-func defaultModelID(providerModels []secrets.ProviderModel, llmCfg *LLMProxyConfig) string {
+//
+// chosen is the model the owner picked in their LLM settings. It is honoured
+// only while it is still one of theirs — a choice left over from a connection
+// they have since edited or removed names a model no VM has, so falling through
+// to a model they do have beats obeying it.
+func defaultModelID(providerModels []secrets.ProviderModel, chosen string, llmCfg *LLMProxyConfig) string {
+	if chosen != "" && slices.ContainsFunc(providerModels, func(m secrets.ProviderModel) bool { return m.ID() == chosen }) {
+		return chosen
+	}
 	if len(providerModels) > 0 {
-		return providerModelID(providerModels[0])
+		return providerModels[0].ID()
 	}
 	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
 		return gatewayModelPrefix + llmCfg.Models[0]

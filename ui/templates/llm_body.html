@@ -1,0 +1,40 @@
+{{define "llm_body"}}
+<div class="card" style="margin-bottom:20px;">
+    <h2 style="font-size:1rem; margin-bottom:4px;">Default model</h2>
+    <div class="form-hint">Every VM on this account opens on this model — the ones running now and the ones you create later.</div>
+    {{if .Models}}
+    <form hx-post="/dashboard/keys/default" hx-target="#llm-body" hx-swap="innerHTML">
+        <div class="form-inline">
+            <div class="form-group" style="flex:1;">
+                <label>Model</label>
+                <select name="model">
+                    <option value="" {{if .Auto}}selected{{end}}>Auto — first of your own models, else the platform default</option>
+                    {{range .Models}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary" style="flex-shrink:0;">Use this model</button>
+        </div>
+    </form>
+    {{else}}
+    <div class="form-hint">Add a connection with a base URL and model IDs below, then pick one here. Until then your VMs run on the platform's own models.</div>
+    {{end}}
+</div>
+
+<div class="card" style="padding:0; overflow:hidden;">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Provider</th>
+                <th>Endpoint / models</th>
+                <th>Protocol</th>
+                <th>Key</th>
+                <th>Added</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="key-table-body">
+            {{template "key_list" .Keys}}
+        </tbody>
+    </table>
+</div>
+{{end}}

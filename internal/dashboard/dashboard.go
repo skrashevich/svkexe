@@ -104,6 +104,8 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)
 	r.Get("/keys", d.getKeys)
+	// Static before the wildcard: "default" is a setting, not a provider.
+	r.Post("/keys/default", d.postDefaultModel)
 	r.Put("/keys/{provider}", d.putKey)
 	r.Delete("/keys/{provider}", d.deleteKey)
 
@@ -176,6 +178,7 @@ var partialPatterns = []string{
 	"templates/vm_row.html",
 	"templates/vm_create.html",
 	"templates/key_row.html",
+	"templates/llm_body.html",
 }
 
 // renderPage renders a full page by parsing layout + the named page file

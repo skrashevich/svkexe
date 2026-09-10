@@ -37,9 +37,6 @@ const (
 	// gatewayModelPrefix marks models seeded from the deployment-wide
 	// OPENROUTER_MODELS list, which route through the gateway's own key.
 	gatewayModelPrefix = "svkexe-"
-
-	// userModelPrefix marks models seeded from the owner's own LLM keys.
-	userModelPrefix = "svkexe_user:"
 )
 
 // LLMProxyConfig holds the gateway-level LLM proxy settings to pass to PicoClaw.

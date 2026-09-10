@@ -116,13 +116,24 @@ func (m *Materializer) ProviderModels(owner string) ([]ProviderModel, error) {
 		if err != nil {
 			return nil, err
 		}
+		protocol := k.Protocol
+		if protocol == "" {
+			// Stored before the protocol was configurable, when every endpoint
+			// was seeded as chat/completions.
+			protocol = db.DefaultProtocol
+		}
 		for _, model := range strings.Split(k.Models, ",") {
 			if model != "" {
-				result = append(result, ProviderModel{Provider: k.Provider, Model: model, BaseURL: k.BaseURL, Key: key})
+				result = append(result, ProviderModel{Provider: k.Provider, Model: model, BaseURL: k.BaseURL, Key: key, Protocol: protocol})
 			}
 		}
 	}
 	return result, nil
 }
 
-type ProviderModel struct{ Provider, Model, BaseURL, Key string }
+// ProviderModel is one model reached through a connection the owner configured.
+// Protocol is the agent's provider_type for that endpoint.
+type ProviderModel struct{ Provider, Model, BaseURL, Key, Protocol string }
+
+// ID is the agent-side identifier this model is seeded under.
+func (m ProviderModel) ID() string { return db.UserModelID(m.Provider, m.Model) }

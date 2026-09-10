@@ -2,14 +2,15 @@
 <tr id="key-row-{{.Provider}}">
     <td class="cell-name">{{.Provider}}</td>
     <td><div>{{.BaseURL}}</div><div class="cell-muted">{{.Models}}</div></td>
+    <td class="cell-muted">{{if .Protocol}}{{.Protocol}}{{else}}—{{end}}</td>
     <td class="cell-mono">{{.Masked}}</td>
     <td class="cell-muted">{{formatTime .CreatedAt}}</td>
     <td class="cell-actions">
         <button class="btn btn-danger btn-sm"
             hx-delete="/dashboard/keys/{{.Provider}}"
-            hx-target="#key-table-body"
+            hx-target="#llm-body"
             hx-swap="innerHTML"
-            hx-confirm="Delete {{.Provider}} key?">
+            hx-confirm="Delete {{.Provider}} connection?">
             Delete
         </button>
     </td>
@@ -18,6 +19,6 @@
 
 {{define "key_list"}}
 {{range .}}{{template "key_row" .}}{{else}}
-<tr id="keys-empty"><td colspan="5" style="padding:48px 16px; text-align:center;">No API keys saved yet.</td></tr>
+<tr id="keys-empty"><td colspan="6" style="padding:48px 16px; text-align:center;">No LLM connections saved yet.</td></tr>
 {{end}}
 {{end}}

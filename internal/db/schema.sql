@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'user',
     password_hash TEXT NOT NULL DEFAULT '',
+    -- The agent-side model ID this account's VMs open on. Empty means the
+    -- gateway picks: the owner's first own model, else the deployment default.
+    default_model TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -74,6 +77,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
     owner_id TEXT NOT NULL REFERENCES users(id),
     provider TEXT NOT NULL,
     encrypted_key BLOB NOT NULL,
+    base_url TEXT NOT NULL DEFAULT '',
+    models TEXT NOT NULL DEFAULT '',
+    -- Which wire protocol the endpoint speaks. Gateways differ: OpenRouter
+    -- serves /chat/completions while api.openmodel.ai serves only /responses
+    -- and /messages, so assuming one of them makes the other unusable.
+    protocol TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

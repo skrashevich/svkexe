@@ -248,23 +248,44 @@ The gateway reports its own build metadata from ldflags stamped by `make`; a bin
 
 ### User LLM endpoints
 
-In **Dashboard → API Keys**, choose **OpenRouter** or **Custom OpenAI-compatible**.
+In **Dashboard → LLM**, choose a preset or **Custom OpenAI-compatible**.
 OpenRouter uses `https://openrouter.ai/api/v1` by default. For custom connections,
 enter a unique name (e.g. `local`), the complete API Base URL (e.g.
 `http://10.0.0.10:8000/v1`), and comma-separated model IDs. The URL must be reachable
-from the VM; `localhost` refers to that VM. Do not append `/chat/completions`.
+from the VM; `localhost` refers to that VM. Do not append the operation path.
 A custom endpoint may omit its API key. Model IDs must match the provider exactly.
+
+Pick the **protocol** the endpoint actually serves — gateways differ, and the
+wrong one fails only when the model is first used:
+
+| Protocol | Request goes to | Use for |
+|---|---|---|
+| `openai` (default) | `{base_url}/chat/completions` | OpenRouter, DeepSeek, vLLM, Ollama, most local servers |
+| `openai-responses` | `{base_url}/responses` | OpenModel (`https://api.openmodel.ai/v1`) |
+| `anthropic` | `base_url` verbatim | Anthropic-compatible gateways; give the full messages URL |
+| `gemini` | `base_url` verbatim | Gemini-compatible gateways |
 
 Multiple named custom connections can coexist. Save the same provider/name again
 to replace its settings. Keys remain encrypted in the gateway database. Saving or
 deleting settings reloads models and restarts the agent in running VMs; stopped
 VMs receive changes on their next start. Sync failures are reported and can be
-retried by restarting the VM. Select the resulting provider/model in the agent UI.
+retried by restarting the VM.
 
-The REST API accepts the same settings at `POST /api/keys`, for example:
+**Default model.** The same page picks which of your models every VM on the
+account opens with — the ones running now and the ones you create later. Leave it
+on *Auto* to let the gateway pick your most recently configured model. A choice
+that stops being reachable (you edit or delete the connection behind it) is
+dropped rather than left dangling, and the VMs fall back to a model you do have.
 
-```json
-{"provider":"custom-local","base_url":"http://10.0.0.10:8000/v1","models":"local-model","key":""}
+The REST API accepts the same settings:
+
+```bash
+# Add a connection
+curl -X POST /api/keys -d '{"provider":"custom-openmodel","base_url":"https://api.openmodel.ai/v1","models":"deepseek-v4-flash,deepseek-v4-pro","protocol":"openai-responses","key":"om-..."}'
+
+# See what you can pick, and pick one
+curl /api/llm/models
+curl -X PUT /api/llm/default -d '{"model":"svkexe_user:custom-openmodel:deepseek-v4-pro"}'
 ```
 
 User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.

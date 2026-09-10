@@ -140,7 +140,7 @@ func TestOpenRouterLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	enc := []byte("01234567890123456789012345678901")
-	if err := gatewayDB.SaveProviderKey("key", "owner", "openrouter", key, "", "openrouter/free", enc); err != nil {
+	if err := gatewayDB.SaveProviderKey("key", "owner", "openrouter", key, "", "openrouter/free", "", enc); err != nil {
 		t.Fatal(err)
 	}
 	materializer := secrets.NewMaterializer(gatewayDB, enc, filepath.Join(work, "secrets"))

@@ -160,20 +160,27 @@ Revoke a shared link by token.
 
 ---
 
-### API Keys
+### LLM connections
+
+These are the caller's own LLM provider credentials, not platform tokens. Saving
+or deleting one re-seeds the models and restarts the agent in every running VM the
+caller owns; stopped VMs pick the change up on their next start.
 
 #### `GET /api/keys`
 
-List all API keys for the authenticated user.
+List the caller's connections. The stored key itself is never returned.
 
 **Response `200 OK`:**
 ```json
 [
   {
-    "id": "key-uuid",
-    "name": "my-key",
-    "created_at": "2024-01-01T00:00:00Z",
-    "last_used_at": "2024-01-02T00:00:00Z"
+    "ID": "key-uuid",
+    "OwnerID": "user-uuid",
+    "Provider": "custom-openmodel",
+    "BaseURL": "https://api.openmodel.ai/v1",
+    "Models": "deepseek-v4-flash,deepseek-v4-pro",
+    "Protocol": "openai-responses",
+    "CreatedAt": "2024-01-01T00:00:00Z"
   }
 ]
 ```
@@ -182,33 +189,78 @@ List all API keys for the authenticated user.
 
 #### `POST /api/keys`
 
-Create a new API key.
+Add or replace a connection. Saving the same `provider` again replaces its settings.
 
 **Request body:**
 ```json
 {
-  "name": "my-key"
+  "provider": "custom-openmodel",
+  "base_url": "https://api.openmodel.ai/v1",
+  "models": "deepseek-v4-flash,deepseek-v4-pro",
+  "protocol": "openai-responses",
+  "key": "om-..."
 }
 ```
 
-**Response `201 Created`:**
-```json
-{
-  "id": "key-uuid",
-  "name": "my-key",
-  "key": "svk_..."
-}
-```
+| Field | Notes |
+|---|---|
+| `provider` | `openai`, `anthropic`, `gemini`, `fireworks`, `openrouter`, or `custom-<name>` |
+| `base_url` | Complete API prefix, no operation path. Required for `custom-*`; defaulted for `openrouter` |
+| `models` | Comma-separated model IDs. Required whenever `base_url` is set |
+| `protocol` | `openai` (default), `openai-responses`, `anthropic`, `gemini`. Only valid with `base_url` |
+| `key` | May be empty for a `custom-*` endpoint that needs no credential |
 
-Note: the `key` value is only returned once at creation time.
+**Response `201 Created`:** `{"id": "key-uuid"}`
+
+`400 Bad Request` when the provider, URL, model list or protocol is rejected.
 
 ---
 
 #### `DELETE /api/keys/{id}`
 
-Delete an API key.
+Delete a connection. If it backed the caller's chosen default model, that choice
+is cleared in the same transaction.
 
 **Response `204 No Content`**
+
+---
+
+#### `GET /api/llm/models`
+
+List the models the caller may put their VMs on, most recently configured first,
+together with the current choice.
+
+**Response `200 OK`:**
+```json
+{
+  "models": [
+    "svkexe_user:custom-openmodel:deepseek-v4-flash",
+    "svkexe_user:custom-openmodel:deepseek-v4-pro"
+  ],
+  "default": ""
+}
+```
+
+An empty `default` means the gateway picks: the caller's first own model, else
+the deployment-wide model.
+
+---
+
+#### `PUT /api/llm/default`
+
+Choose the model every VM on this account opens with — the ones running now and
+the ones created later.
+
+**Request body:**
+```json
+{"model": "svkexe_user:custom-openmodel:deepseek-v4-pro"}
+```
+
+Pass `""` to hand the choice back to the gateway.
+
+**Response `200 OK`:** the stored choice, echoed back.
+
+`400 Bad Request` when the model is not one of the caller's own.
 
 ---
 

@@ -55,15 +55,22 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("exec schema: %w", err)
 	}
 
-	// Pre-existing users tables need password_hash backfilled. SQLite lacks
+	// Pre-existing users tables need these backfilled. SQLite lacks
 	// IF NOT EXISTS for ADD COLUMN, so probe table_info first.
-	hasPasswordHash, err := columnExists(db, "users", "password_hash")
-	if err != nil {
-		return fmt.Errorf("probe users.password_hash: %w", err)
-	}
-	if !hasPasswordHash {
-		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("add password_hash column: %w", err)
+	for column, definition := range map[string]string{
+		"password_hash": "TEXT NOT NULL DEFAULT ''",
+		// An upgraded account has made no choice yet, so the empty value keeps
+		// its VMs on whichever model the gateway was already picking for them.
+		"default_model": "TEXT NOT NULL DEFAULT ''",
+	} {
+		exists, err := columnExists(db, "users", column)
+		if err != nil {
+			return fmt.Errorf("probe users.%s: %w", column, err)
+		}
+		if !exists {
+			if _, err := db.Exec("ALTER TABLE users ADD COLUMN " + column + " " + definition); err != nil {
+				return fmt.Errorf("add users.%s column: %w", column, err)
+			}
 		}
 	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS containers_owner_name_idx ON containers(owner_id, name)`); err != nil {
@@ -103,7 +110,9 @@ func (db *DB) migrate() error {
 			}
 		}
 	}
-	for _, column := range []string{"base_url", "models"} {
+	// An upgraded connection was seeded as chat/completions, which is what the
+	// empty value still means, so existing endpoints keep working untouched.
+	for _, column := range []string{"base_url", "models", "protocol"} {
 		exists, err := columnExists(db, "api_keys", column)
 		if err != nil {
 			return err

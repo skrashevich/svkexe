@@ -14,6 +14,9 @@ type User struct {
 	DisplayName  string
 	Role         string
 	PasswordHash string
+	// DefaultModel is the agent-side model ID this account's VMs open on.
+	// Empty means the gateway picks one; see db.UserModelID.
+	DefaultModel string
 	CreatedAt    time.Time
 }
 
@@ -33,8 +36,8 @@ func (db *DB) CreateUser(u *User) error {
 func (db *DB) GetUserByID(id string) (*User, error) {
 	u := &User{}
 	err := db.QueryRow(
-		`SELECT id, email, display_name, role, password_hash, created_at FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt)
+		`SELECT id, email, display_name, role, password_hash, default_model, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.DefaultModel, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -48,8 +51,8 @@ func (db *DB) GetUserByID(id string) (*User, error) {
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	err := db.QueryRow(
-		`SELECT id, email, display_name, role, password_hash, created_at FROM users WHERE email = ?`, email,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt)
+		`SELECT id, email, display_name, role, password_hash, default_model, created_at FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.DefaultModel, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -92,7 +95,7 @@ func (db *DB) UpdateUser(u *User) error {
 // ListUsers returns all users ordered by created_at.
 func (db *DB) ListUsers() ([]*User, error) {
 	rows, err := db.Query(
-		`SELECT id, email, display_name, role, password_hash, created_at FROM users ORDER BY created_at ASC`,
+		`SELECT id, email, display_name, role, password_hash, default_model, created_at FROM users ORDER BY created_at ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -102,7 +105,7 @@ func (db *DB) ListUsers() ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.PasswordHash, &u.DefaultModel, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)

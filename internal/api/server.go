@@ -171,6 +171,10 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 		r.Post("/keys", s.createKey)
 		r.Delete("/keys/{id}", s.deleteKey)
 
+		// LLM settings: which of the owner's own models their VMs open on.
+		r.Get("/llm/models", s.listLLMModels)
+		r.Put("/llm/default", s.putDefaultModel)
+
 		// SSH key endpoints
 		r.Get("/ssh-keys", s.listSSHKeys)
 		r.Post("/ssh-keys", s.createSSHKey)

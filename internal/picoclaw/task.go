@@ -159,8 +159,8 @@ func readConfiguredModel(ctx context.Context, rt runtime.ContainerRuntime, incus
 // account cannot reach. Their configured default is honoured when it is such a
 // model; otherwise the gateway serves as the fallback.
 func preferredModel(available []string, configured string) string {
-	if user := firstWithPrefix(available, userModelPrefix); user != "" {
-		if strings.HasPrefix(configured, userModelPrefix) && slices.Contains(available, configured) {
+	if user := firstWithPrefix(available, db.UserModelPrefix); user != "" {
+		if strings.HasPrefix(configured, db.UserModelPrefix) && slices.Contains(available, configured) {
 			return configured
 		}
 		return user

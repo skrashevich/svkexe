@@ -129,7 +129,7 @@ func TestSetupPrefersOwnerModelOverGatewayList(t *testing.T) {
 		t.Fatal(err)
 	}
 	enc := []byte("01234567890123456789012345678901")
-	if err := database.SaveProviderKey("key", owner.ID, "openrouter", "secret", "https://host/api/v1", "openrouter/free", enc); err != nil {
+	if err := database.SaveProviderKey("key", owner.ID, "openrouter", "secret", "https://host/api/v1", "openrouter/free", "", enc); err != nil {
 		t.Fatal(err)
 	}
 	m := secrets.NewMaterializer(database, enc, t.TempDir())

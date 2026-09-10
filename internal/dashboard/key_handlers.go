@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -17,14 +18,33 @@ type keyRowData struct {
 	Provider  string
 	BaseURL   string
 	Models    string
+	Protocol  string
 	Masked    string
 	CreatedAt time.Time
 }
 
-// keyPageData extends templateData with Keys slice.
+// modelChoice is one model the owner may put their VMs on.
+type modelChoice struct {
+	ID       string
+	Label    string
+	Selected bool
+}
+
+// llmBodyData is the part of the LLM page that every change replaces. Saving a
+// connection and choosing a default both rewrite the connection list and the
+// choices, so the two are swapped as one fragment rather than separately: a
+// half-updated page would offer a model that no longer exists.
+type llmBodyData struct {
+	Keys   []keyRowData
+	Models []modelChoice
+	// Auto reports that no explicit choice is stored, so the gateway picks.
+	Auto bool
+}
+
+// keyPageData extends templateData with the LLM settings body.
 type keyPageData struct {
 	templateData
-	Keys []keyRowData
+	llmBodyData
 }
 
 // getKeys handles GET /dashboard/keys — full page render.
@@ -35,17 +55,13 @@ func (d *Dashboard) getKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := d.loadKeyRows(user.ID)
+	body, err := d.loadLLMBody(user.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	data := keyPageData{
-		templateData: d.newData(r),
-		Keys:         rows,
-	}
-	d.renderPage(w, "keys.html", data)
+	d.renderPage(w, "keys.html", keyPageData{templateData: d.newData(r), llmBodyData: body})
 }
 
 // putKey handles PUT /dashboard/keys/{provider} — upsert a key.
@@ -72,12 +88,12 @@ func (d *Dashboard) putKey(w http.ResponseWriter, r *http.Request) {
 		provider = "custom-" + strings.ToLower(strings.TrimSpace(r.FormValue("name")))
 	}
 	plaintext := r.FormValue("key")
-	baseURL, models, err := db.NormalizeProvider(provider, r.FormValue("base_url"), r.FormValue("models"), plaintext)
+	baseURL, models, protocol, err := db.NormalizeProvider(provider, r.FormValue("base_url"), r.FormValue("models"), plaintext, r.FormValue("protocol"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := d.db.SaveProviderKey(uuid.New().String(), user.ID, provider, plaintext, baseURL, models, d.encKey); err != nil {
+	if err := d.db.SaveProviderKey(uuid.New().String(), user.ID, provider, plaintext, baseURL, models, protocol, d.encKey); err != nil {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
@@ -86,7 +102,7 @@ func (d *Dashboard) putKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d.getKeyList(w, r)
+	d.getLLMBody(w, r)
 }
 
 // deleteKey handles DELETE /dashboard/keys/{provider}.
@@ -129,32 +145,88 @@ func (d *Dashboard) deleteKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Settings deleted, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
 		return
 	}
-	d.getKeyList(w, r)
+	d.getLLMBody(w, r)
 }
 
-// loadKeyRows returns masked key display rows for the given owner.
-func (d *Dashboard) loadKeyRows(ownerID string) ([]keyRowData, error) {
+// postDefaultModel handles POST /dashboard/keys/default — choose the model this
+// owner's VMs open on. The choice is stored on the account rather than on a VM,
+// which is what makes it reach the ones they create later too.
+func (d *Dashboard) postDefaultModel(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	// Only an unreachable model is the caller's mistake. Anything else is ours,
+	// and reporting it as a validation message would render a driver error into
+	// the page as if the owner had chosen badly.
+	switch err := d.db.SetUserDefaultModel(user.ID, r.FormValue("model")); {
+	case errors.Is(err, db.ErrUnknownModel):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case errors.Is(err, sql.ErrNoRows):
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	case err != nil:
+		http.Error(w, "failed to save the default model", http.StatusInternalServerError)
+		return
+	}
+	if err := d.refreshProviderKeys(r, user.ID); err != nil {
+		http.Error(w, "Default model saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
+		return
+	}
+	d.getLLMBody(w, r)
+}
+
+// loadLLMBody assembles the owner's connections and the models they may pick
+// from. Both come from one read so the list and the choices cannot disagree.
+func (d *Dashboard) loadLLMBody(ownerID string) (llmBodyData, error) {
 	apiKeys, err := d.db.ListAPIKeysByOwner(ownerID)
 	if err != nil {
-		return nil, err
+		return llmBodyData{}, err
+	}
+	chosen, err := d.db.UserDefaultModel(ownerID)
+	if err != nil {
+		return llmBodyData{}, err
 	}
 
-	var rows []keyRowData
+	body := llmBodyData{Auto: chosen == ""}
 	for _, k := range apiKeys {
 		plain, err := d.db.GetAPIKeyPlaintext(k.ID, d.encKey)
 		masked := "••••••••"
 		if err == nil {
 			masked = maskKeyValue(plain)
 		}
-		rows = append(rows, keyRowData{
+		body.Keys = append(body.Keys, keyRowData{
 			Provider:  k.Provider,
 			BaseURL:   k.BaseURL,
 			Models:    k.Models,
+			Protocol:  k.Protocol,
 			Masked:    masked,
 			CreatedAt: k.CreatedAt,
 		})
+		if k.BaseURL == "" {
+			// A provider-native key reaches the agent as an environment
+			// credential, not as a model row, so there is nothing to pick.
+			continue
+		}
+		for _, model := range strings.Split(k.Models, ",") {
+			if model == "" {
+				continue
+			}
+			id := db.UserModelID(k.Provider, model)
+			body.Models = append(body.Models, modelChoice{
+				ID:       id,
+				Label:    k.Provider + " / " + model,
+				Selected: id == chosen,
+			})
+		}
 	}
-	return rows, nil
+	return body, nil
 }
 
 // maskKeyValue masks an API key showing first 4 and last 4 chars.
@@ -165,13 +237,13 @@ func maskKeyValue(key string) string {
 	return key[:4] + strings.Repeat("•", len(key)-8) + key[len(key)-4:]
 }
 
-func (d *Dashboard) getKeyList(w http.ResponseWriter, r *http.Request) {
-	rows, err := d.loadKeyRows(userFromCtx(r.Context()).ID)
+func (d *Dashboard) getLLMBody(w http.ResponseWriter, r *http.Request) {
+	body, err := d.loadLLMBody(userFromCtx(r.Context()).ID)
 	if err != nil {
 		http.Error(w, "failed to load settings", http.StatusInternalServerError)
 		return
 	}
-	d.render(w, "key_list", rows)
+	d.render(w, "llm_body", body)
 }
 
 func (d *Dashboard) refreshProviderKeys(r *http.Request, owner string) error {
@@ -182,10 +254,14 @@ func (d *Dashboard) refreshProviderKeys(r *http.Request, owner string) error {
 	if err != nil {
 		return err
 	}
+	chosen, err := d.db.UserDefaultModel(owner)
+	if err != nil {
+		return err
+	}
 	var syncErr error
 	for _, c := range containers {
 		if c.Status == "running" {
-			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), d.runtime, d.materializer, c.ID, c.IncusName, owner))
+			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), d.runtime, d.materializer, c.ID, c.IncusName, owner, chosen, d.picoclawLLMCfg))
 		}
 	}
 	return syncErr

@@ -1,5 +1,9 @@
 {{define "vm_card"}}
-<div class="card" id="vm-{{.ID}}">
+<div class="card vm-card" id="vm-{{.ID}}">
+    <div class="vm-busy" aria-hidden="true">
+        <span class="vm-busy-spinner"></span>
+        <span class="vm-busy-msg"></span>
+    </div>
     <div class="vm-card-head">
         <div>
             <div class="vm-card-name">{{.Name}}</div>
@@ -75,14 +79,18 @@
         <button class="btn btn-secondary btn-sm"
             hx-post="/dashboard/vms/{{.ID}}/start"
             hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML">
+            hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            hx-on::before-request="omcBusy(this, 'Starting…')">
             Start
         </button>
         {{else if eq .Status "running"}}
         <button class="btn btn-secondary btn-sm"
             hx-post="/dashboard/vms/{{.ID}}/stop"
             hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML">
+            hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            hx-on::before-request="omcBusy(this, 'Stopping…')">
             Stop
         </button>
         {{end}}
@@ -90,7 +98,9 @@
             hx-delete="/dashboard/vms/{{.ID}}"
             hx-target="#vm-{{.ID}}"
             hx-swap="outerHTML"
-            hx-confirm="Delete VM '{{.Name}}'? This cannot be undone.">
+            hx-disabled-elt="this"
+            hx-confirm="Delete VM '{{.Name}}'? This cannot be undone."
+            hx-on::before-request="omcBusy(this, 'Deleting…')">
             Delete
         </button>
     </div>

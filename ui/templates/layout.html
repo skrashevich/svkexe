@@ -627,6 +627,41 @@
 
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ── VM busy overlay ─────────────────────────────────────────────── */
+        .vm-card { position: relative; }
+        .vm-busy {
+            display: none;
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            border-radius: var(--radius-lg);
+            background: oklch(0.17 0.006 60 / 0.78);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+            animation: fade-in 0.12s ease-out;
+        }
+        .card.is-busy .vm-busy { display: flex; }
+        .card.is-busy { border-color: var(--accent); }
+        .vm-busy-spinner {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            border: 2px solid var(--line);
+            border-top-color: var(--accent);
+            animation: spin 0.7s linear infinite;
+        }
+        .vm-busy-msg {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--fg-dim);
+            letter-spacing: 0.02em;
+        }
+
         /* ── Responsive ──────────────────────────────────────────────────── */
         @media (max-width: 768px) {
             .dash-nav-inner { padding: 0 16px; gap: 16px; }
@@ -664,6 +699,35 @@
             toast.offsetHeight;
             toast.style.animation = '';
             setTimeout(function() { toast.style.display = 'none'; }, 5000);
+        });
+
+        // Optimistic "busy" state for VM start/stop/delete. The handlers block
+        // for the whole operation, so the card is masked with a spinner the
+        // moment the request leaves the browser.
+        function omcBusy(el, msg) {
+            var card = el.closest('.card');
+            if (!card) return;
+            card.classList.add('is-busy');
+            var m = card.querySelector('.vm-busy-msg');
+            if (m) m.textContent = msg;
+        }
+
+        // A successful start/stop swaps the whole card (busy state gone with it)
+        // and a successful delete removes it. Only failures need manual cleanup.
+        document.body.addEventListener('htmx:afterRequest', function(e) {
+            if (e.detail.successful) return;
+            var el = e.detail.elt;
+            var card = el && el.closest ? el.closest('.card.is-busy') : null;
+            if (card) card.classList.remove('is-busy');
+        });
+
+        // Don't let the 5s list poll repaint a card mid-action and wipe the
+        // spinner — pause it while any card is busy.
+        document.body.addEventListener('htmx:beforeRequest', function(e) {
+            if (e.detail.elt && e.detail.elt.id === 'vm-list' &&
+                document.querySelector('.card.is-busy')) {
+                e.preventDefault();
+            }
         });
 
         // Active nav link

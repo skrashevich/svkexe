@@ -65,7 +65,10 @@ jobs:
           node-version: '22'
       - name: Build agent with preserved UI
         run: make agent
+      # Ahead of the upstream suite: these exercise the gateway/agent contract
+      # this repo owns, and they must report even when an upstream test the
+      # PicoClaw overlay already breaks fails the job.
+      - name: Test complete gateway and agent path
+        run: SVKEXE_TEST_AGENT_BINARY="$PWD/bin/picoclaw" go test ./internal/llmproxy -run TestPicoClaw -v
       - name: Test agent compatibility
         run: make test-agent
-      - name: Test complete gateway and agent path
-        run: SVKEXE_TEST_AGENT_BINARY="$PWD/bin/picoclaw" go test ./internal/llmproxy -run TestPicoClawThroughGateway -v

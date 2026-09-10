@@ -68,8 +68,13 @@ type Container struct {
 	// InitialTaskConversation is the agent conversation the task runs in. It is
 	// what progress polling watches, so it is empty until delivery succeeded.
 	InitialTaskConversation string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	// InitialTaskResumes counts the times the gateway has asked the agent to
+	// pick this task back up after a transient failure. It is the resume
+	// budget, and the gateway owns it: a resume the agent declines leaves the
+	// agent's own message log unchanged, so nothing there could bound it.
+	InitialTaskResumes int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 
 	// Aliases holds the VM's custom hostnames. It is not a column: reads leave
 	// it nil and callers that need it ask for it explicitly via AttachAliases,
@@ -78,14 +83,14 @@ type Container struct {
 }
 
 // containerColumns keeps every read of a container in sync.
-const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, initial_task_conversation, created_at, updated_at`
+const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, initial_task_conversation, initial_task_resumes, created_at, updated_at`
 
 func scanContainer(row interface{ Scan(...any) error }) (*Container, error) {
 	c := &Container{}
 	err := row.Scan(&c.ID, &c.Name, &c.OwnerID, &c.IncusName, &c.Status, &c.IPAddress,
 		&c.CPULimit, &c.MemoryMB, &c.DiskGB, &c.AppPort, &c.AppPublic,
 		&c.InitialTask, &c.InitialTaskState, &c.InitialTaskError, &c.InitialTaskConversation,
-		&c.CreatedAt, &c.UpdatedAt)
+		&c.InitialTaskResumes, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +312,7 @@ func (db *DB) SetInitialTaskState(id, state, reason string) error {
 // with the conversation progress polling has to watch.
 func (db *DB) SetInitialTaskDelivered(id, conversationID string) error {
 	_, err := db.Exec(
-		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = ?, initial_task_resumes = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		TaskSent, conversationID, id,
 	)
 	if err != nil {
@@ -338,6 +343,22 @@ func (db *DB) SetInitialTaskConversation(id, conversationID string) error {
 		return fmt.Errorf("no task waiting for conversation %q", conversationID)
 	}
 	return nil
+}
+
+// CountInitialTaskResume records that the gateway has asked the agent to pick a
+// task back up, and returns the new total. This count is the resume budget, and
+// the gateway keeps it because nothing in the agent's own data could: a resume
+// the agent declines leaves its message log untouched.
+func (db *DB) CountInitialTaskResume(id string) (int, error) {
+	var resumes int
+	err := db.QueryRow(
+		`UPDATE containers SET initial_task_resumes = initial_task_resumes + 1, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? RETURNING initial_task_resumes`, id,
+	).Scan(&resumes)
+	if err != nil {
+		return 0, fmt.Errorf("count initial task resume: %w", err)
+	}
+	return resumes, nil
 }
 
 // ListContainersWithTaskInProgress returns the running VMs whose task is still
@@ -371,7 +392,7 @@ func (db *DB) ListContainersWithTaskInProgress() ([]*Container, error) {
 // so a task written weeks ago cannot fire on an unrelated restart.
 func (db *DB) RetryInitialTask(id string) error {
 	res, err := db.Exec(
-		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = '', updated_at = CURRENT_TIMESTAMP
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = '', initial_task_resumes = 0, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND initial_task != '' AND initial_task_state = ?`,
 		TaskPending, id, TaskFailed,
 	)

@@ -89,6 +89,9 @@ func (db *DB) migrate() error {
 		// Names the agent conversation the task runs in, so progress can be
 		// polled after delivery.
 		"initial_task_conversation": "TEXT NOT NULL DEFAULT ''",
+		// Counts the times the gateway has picked this task back up after a
+		// transient agent failure, which is what bounds it.
+		"initial_task_resumes": "INTEGER NOT NULL DEFAULT 0",
 	} {
 		exists, err := columnExists(db, "containers", column)
 		if err != nil {

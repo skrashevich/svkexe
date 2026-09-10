@@ -29,6 +29,15 @@ type guestRuntime struct {
 	progress string
 	// agentError is the text stored on the task's last error message.
 	agentError string
+	// failedTurn is what the agent's database reports about the task's latest
+	// failure, in the "retryable|seconds since it happened" form the query
+	// returns. Empty means a fresh failure the agent called permanent.
+	failedTurn string
+	// resumeStatus is the HTTP status the agent answers a resume request with.
+	// Empty means it accepts the task back.
+	resumeStatus string
+	// resumes counts the resume requests the agent received.
+	resumes int
 	// taskLookup is the conversation the agent's database reports for a task
 	// whose conversation the gateway never recorded.
 	taskLookup string
@@ -69,7 +78,24 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 		}
 		return []byte(`{"status":"accepted","conversation_id":"cTASK01"}`), nil
 	case strings.Contains(text, "agent_working"):
+		// The query is expected to look past a trailing slug marker, exactly as
+		// the agent does; a fake that answered regardless would hide the very
+		// bug this guards.
+		if !strings.Contains(text, "type != 'slug'") {
+			return nil, errors.New("progress query does not skip slug messages")
+		}
 		return []byte(g.progress + "\n"), nil
+	case strings.Contains(text, "json_extract(user_data"):
+		if g.failedTurn != "" {
+			return []byte(g.failedTurn + "\n"), nil
+		}
+		return []byte("0|0\n"), nil
+	case strings.Contains(text, "/retry"):
+		g.resumes++
+		if g.resumeStatus != "" {
+			return []byte(g.resumeStatus), nil
+		}
+		return []byte("202"), nil
 	case strings.Contains(text, "CAST(x'"):
 		return []byte(g.taskLookup + "\n"), nil
 	case strings.Contains(text, "json_extract(llm_data"):

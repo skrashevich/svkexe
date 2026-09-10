@@ -1,8 +1,52 @@
+diff --git a/llm/ant/ant.go b/llm/ant/ant.go
+index 12966e9..a680aee 100644
+--- a/llm/ant/ant.go
++++ b/llm/ant/ant.go
+@@ -1202,11 +1202,11 @@ func parseSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*response, err
+ 	}
+ 
+ 	if resp == nil {
+-		return nil, fmt.Errorf("no message_start event in stream")
++		return nil, llm.TruncatedStream("no message_start event in stream", nil)
+ 	}
+ 
+ 	if !messageDone {
+-		return nil, fmt.Errorf("incomplete stream: no stop_reason received (stream may have been truncated)")
++		return nil, llm.TruncatedStream("incomplete stream: no stop_reason received (stream may have been truncated)", nil)
+ 	}
+ 
+ 	// Ensure tool_use blocks always have a non-nil ToolInput.
 diff --git a/llm/oai/oai.go b/llm/oai/oai.go
-index b31f005..ef9f840 100644
+index b31f005..a7d265a 100644
 --- a/llm/oai/oai.go
 +++ b/llm/oai/oai.go
-@@ -1334,7 +1334,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
+@@ -1094,12 +1094,15 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
+ 		}
+ 		if err != nil {
+ 			if started {
+-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
++				return nil, llm.TruncatedStream("chat completion stream failed after response started", err)
+ 			}
+ 			return nil, err
+ 		}
+ 		var chunk chatCompletionStreamResponse
+ 		if err := json.Unmarshal(raw, &chunk); err != nil {
++			// Not a truncated stream: frames arrive whole, so a frame that does
++			// not decode is a schema the client cannot read. Repeating the
++			// request would fail the same way every time.
+ 			if started {
+ 				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+ 			}
+@@ -1165,7 +1168,7 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
+ 	}
+ 
+ 	if finishReason == "" {
+-		return nil, fmt.Errorf("incomplete chat completion stream: no finish reason")
++		return nil, llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)
+ 	}
+ 	return &llm.Response{
+ 		ID:         id,
+@@ -1334,7 +1337,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
  	if s.Org != "" {
  		config.OrgID = s.Org
  	}
@@ -11,6 +55,19 @@ index b31f005..ef9f840 100644
  
  	client := openai.NewClientWithConfig(config)
  
+diff --git a/llm/oai/oai_responses.go b/llm/oai/oai_responses.go
+index 960c662..cac5a4f 100644
+--- a/llm/oai/oai_responses.go
++++ b/llm/oai/oai_responses.go
+@@ -1140,7 +1140,7 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
+ 		}
+ 	}
+ 	if completed == nil {
+-		return nil, fmt.Errorf("incomplete stream: no response.completed event")
++		return nil, llm.TruncatedStream("incomplete stream: no response.completed event", nil)
+ 	}
+ 	return completed, nil
+ }
 diff --git a/llm/oai/ssecomments.go b/llm/oai/ssecomments.go
 new file mode 100644
 index 0000000..69db3a1
@@ -249,8 +306,278 @@ index 0000000..5d8964f
 +		t.Errorf("body altered: %q", got)
 +	}
 +}
+diff --git a/llm/request_error.go b/llm/request_error.go
+index 57a7f9a..443bd34 100644
+--- a/llm/request_error.go
++++ b/llm/request_error.go
+@@ -20,10 +20,71 @@ type RequestError interface {
+ }
+ 
+ // RequestErrorInfoFromError finds request failure metadata in err.
++//
++// Providers accumulate one wrapped error per attempt with errors.Join and
++// return the whole pile, so a plain errors.As would answer with the metadata of
++// whichever attempt happens to come first — a cut stream on attempt 1 would make
++// a permanent "invalid api key" on attempt 2 look retryable, and the request
++// would be repeated until the budget ran out. Only the last branch of a join
++// describes how the request actually ended, so that is the one asked.
+ func RequestErrorInfoFromError(err error) (RequestErrorInfo, bool) {
++	err = FinalAttempt(err)
+ 	var requestErr RequestError
+ 	if !errors.As(err, &requestErr) {
+ 		return RequestErrorInfo{}, false
+ 	}
+ 	return requestErr.RequestErrorInfo(), true
+ }
++
++// FinalAttempt walks past the accumulated earlier attempts of a joined error to
++// the one that ended the request. A single error is returned unchanged.
++//
++// Classifying a request means answering "how did it end", so anything deciding
++// whether to repeat a request should look here rather than at the joined text,
++// which still describes every attempt that came before.
++func FinalAttempt(err error) error {
++	for {
++		switch chain := err.(type) {
++		case interface{ Unwrap() []error }:
++			attempts := chain.Unwrap()
++			if len(attempts) == 0 {
++				return err
++			}
++			err = attempts[len(attempts)-1]
++		case interface{ Unwrap() error }:
++			// A single wrapper is stepped through only when it hides a join:
++			// providers that give up hand back the accumulated attempts behind
++			// one closing message, and the attempt that ended the request is
++			// inside. A wrapper around anything else already is the final error,
++			// message and all, and unwrapping it would throw that message away.
++			inner := joinUnder(err)
++			if inner == nil {
++				return err
++			}
++			err = inner
++		default:
++			return err
++		}
++	}
++}
++
++// joinUnder returns the joined error a chain of single wrappers leads to, or nil
++// when it leads anywhere else. The wrappers are followed to the end rather than
++// one at a time, so a closing message wrapped twice still resolves to the
++// attempts underneath it.
++func joinUnder(err error) error {
++	for {
++		wrapper, ok := err.(interface{ Unwrap() error })
++		if !ok {
++			return nil
++		}
++		inner := wrapper.Unwrap()
++		if inner == nil {
++			return nil
++		}
++		if _, joined := inner.(interface{ Unwrap() []error }); joined {
++			return inner
++		}
++		err = inner
++	}
++}
+diff --git a/llm/truncated_stream.go b/llm/truncated_stream.go
+new file mode 100644
+index 0000000..ec06324
+--- /dev/null
++++ b/llm/truncated_stream.go
+@@ -0,0 +1,39 @@
++package llm
++
++import "fmt"
++
++// truncatedStreamError marks a provider stream that ended before the provider
++// said why it stopped. It is a transport failure wearing a protocol-shaped
++// message: the socket died, or a proxy cut the response, and the last chunk
++// carrying the stop reason never arrived.
++//
++// Re-sending the same request is safe. A truncated stream yields no response at
++// all, so no tool ran and no assistant message was recorded; the retry starts
++// from exactly the conversation state the failed attempt started from.
++type truncatedStreamError struct {
++	detail string
++	cause  error
++}
++
++var _ RequestError = (*truncatedStreamError)(nil)
++
++// TruncatedStream wraps a truncated-stream failure so the retry classifiers see
++// it as the transient failure it is instead of ending the turn for good. detail
++// keeps the provider's own wording, so existing error text is unchanged; cause
++// may be nil when the stream simply ran out.
++func TruncatedStream(detail string, cause error) error {
++	return &truncatedStreamError{detail: detail, cause: cause}
++}
++
++func (e *truncatedStreamError) Error() string {
++	if e.cause == nil {
++		return e.detail
++	}
++	return fmt.Sprintf("%s: %v", e.detail, e.cause)
++}
++
++func (e *truncatedStreamError) Unwrap() error { return e.cause }
++
++func (e *truncatedStreamError) RequestErrorInfo() RequestErrorInfo {
++	return RequestErrorInfo{Retryable: true}
++}
+diff --git a/llm/truncated_stream_test.go b/llm/truncated_stream_test.go
+new file mode 100644
+index 0000000..53a45b2
+--- /dev/null
++++ b/llm/truncated_stream_test.go
+@@ -0,0 +1,143 @@
++package llm
++
++import (
++	"errors"
++	"fmt"
++	"io"
++	"strings"
++	"testing"
++)
++
++func TestTruncatedStreamIsRetryable(t *testing.T) {
++	err := TruncatedStream("incomplete chat completion stream: no finish reason", nil)
++	info, ok := RequestErrorInfoFromError(err)
++	if !ok {
++		t.Fatalf("RequestErrorInfoFromError(%v) reported no metadata", err)
++	}
++	if !info.Retryable {
++		t.Errorf("Retryable = false, want true for a truncated stream")
++	}
++}
++
++func TestTruncatedStreamKeepsProviderWording(t *testing.T) {
++	const detail = "incomplete stream: no stop_reason received (stream may have been truncated)"
++	if got := TruncatedStream(detail, nil).Error(); got != detail {
++		t.Errorf("Error() = %q, want %q", got, detail)
++	}
++}
++
++func TestTruncatedStreamUnwrapsCause(t *testing.T) {
++	err := TruncatedStream("chat completion stream failed after response started", io.ErrUnexpectedEOF)
++	if !errors.Is(err, io.ErrUnexpectedEOF) {
++		t.Errorf("errors.Is(%v, io.ErrUnexpectedEOF) = false, want true", err)
++	}
++	want := "chat completion stream failed after response started: unexpected EOF"
++	if got := err.Error(); got != want {
++		t.Errorf("Error() = %q, want %q", got, want)
++	}
++}
++
++// A truncated stream stays retryable after it is wrapped and joined the way the
++// providers report a failed attempt, because that is how the loop's classifiers
++// actually receive it.
++func TestTruncatedStreamSurvivesWrapping(t *testing.T) {
++	inner := TruncatedStream("incomplete chat completion stream: no finish reason", nil)
++	wrapped := errors.Join(
++		errors.New("attempt 1 at 2026-09-10 20:09:03"),
++		errors.New("url=https://openrouter.ai/api/v1/chat/completions model=openrouter/free: "+inner.Error()),
++	)
++	if _, ok := RequestErrorInfoFromError(wrapped); ok {
++		t.Fatal("plain text copies must not report metadata; the test would prove nothing")
++	}
++	joined := errors.Join(errors.New("attempt 1"), inner)
++	info, ok := RequestErrorInfoFromError(joined)
++	if !ok || !info.Retryable {
++		t.Errorf("RequestErrorInfoFromError(joined) = %+v, %v; want retryable metadata", info, ok)
++	}
++}
++
++// A cut stream on one attempt must not lend its verdict to the attempt that
++// actually ended the request: the providers hand back every attempt joined
++// together, and answering with the first one turns a permanent failure into a
++// request that is repeated until the retry budget runs out.
++func TestRequestErrorInfoAnswersForTheFinalAttempt(t *testing.T) {
++	truncated := TruncatedStream("incomplete chat completion stream: no finish reason", nil)
++	permanent := errors.Join(
++		fmt.Errorf("attempt 1 at 2026-09-10 20:09:03: %w", truncated),
++		errors.New("attempt 2 at 2026-09-10 20:09:20: status 401 (url=U, model=M): invalid api key"),
++	)
++	if info, ok := RequestErrorInfoFromError(permanent); ok {
++		t.Errorf("RequestErrorInfoFromError = %+v, true; want the 401 attempt to carry no metadata", info)
++	}
++	if got := FinalAttempt(permanent).Error(); !strings.Contains(got, "invalid api key") {
++		t.Errorf("FinalAttempt = %q, want the attempt the request ended on", got)
++	}
++
++	// The mirror case: the last attempt is the truncated one, so the metadata
++	// does apply.
++	transient := errors.Join(
++		errors.New("attempt 1 at 2026-09-10 20:09:03: status 500"),
++		fmt.Errorf("attempt 2 at 2026-09-10 20:09:20: %w", truncated),
++	)
++	info, ok := RequestErrorInfoFromError(transient)
++	if !ok || !info.Retryable {
++		t.Errorf("RequestErrorInfoFromError = %+v, %v; want the truncated final attempt to be retryable", info, ok)
++	}
++}
++
++// A provider that gives up wraps the accumulated attempts behind one closing
++// message. The verdict still belongs to the attempt inside, not to the first one
++// the wrapper happens to reach.
++func TestFinalAttemptSeesThroughAClosingWrapper(t *testing.T) {
++	truncated := TruncatedStream("incomplete chat completion stream: no finish reason", nil)
++	wrapped := fmt.Errorf("openai request failed after 16 attempts: %w", errors.Join(
++		fmt.Errorf("attempt 1: %w", truncated),
++		errors.New("attempt 2: status 401 (url=U, model=M): invalid api key"),
++	))
++	if info, ok := RequestErrorInfoFromError(wrapped); ok {
++		t.Errorf("RequestErrorInfoFromError = %+v, true; want the 401 attempt to carry no metadata", info)
++	}
++	if got := FinalAttempt(wrapped).Error(); !strings.Contains(got, "invalid api key") {
++		t.Errorf("FinalAttempt = %q, want the attempt the request ended on", got)
++	}
++}
++
++// A closing message wrapped more than once still resolves to the attempts
++// underneath it, or the fix would only hold for the depth it was written at.
++func TestFinalAttemptSeesThroughNestedWrappers(t *testing.T) {
++	wrapped := fmt.Errorf("LLM request failed: %w", fmt.Errorf("openai request failed after 16 attempts: %w", errors.Join(
++		fmt.Errorf("attempt 1: %w", TruncatedStream("incomplete chat completion stream: no finish reason", nil)),
++		errors.New("attempt 2: status 401 (url=U, model=M): invalid api key"),
++	)))
++	if info, ok := RequestErrorInfoFromError(wrapped); ok {
++		t.Errorf("RequestErrorInfoFromError = %+v, true; want the 401 attempt to carry no metadata", info)
++	}
++	if got := FinalAttempt(wrapped).Error(); !strings.Contains(got, "invalid api key") {
++		t.Errorf("FinalAttempt = %q, want the attempt the request ended on", got)
++	}
++}
++
++// A wrapper that hides no join is itself the final error: stepping through it
++// would drop the message the provider ended on.
++func TestFinalAttemptKeepsAPlainWrapper(t *testing.T) {
++	wrapped := fmt.Errorf("openai request failed: %w", TruncatedStream("incomplete chat completion stream: no finish reason", nil))
++	if got := FinalAttempt(wrapped).Error(); got != wrapped.Error() {
++		t.Errorf("FinalAttempt = %q, want the wrapper itself %q", got, wrapped.Error())
++	}
++	// The metadata is still found, because errors.As walks the wrapper.
++	info, ok := RequestErrorInfoFromError(wrapped)
++	if !ok || !info.Retryable {
++		t.Errorf("RequestErrorInfoFromError = %+v, %v; want the truncated stream to stay retryable", info, ok)
++	}
++}
++
++// A single error is its own final attempt, and a nil error has none.
++func TestFinalAttemptLeavesUnjoinedErrorsAlone(t *testing.T) {
++	plain := errors.New("just the one")
++	if got := FinalAttempt(plain); got != plain {
++		t.Errorf("FinalAttempt(%v) = %v, want the error itself", plain, got)
++	}
++	if got := FinalAttempt(nil); got != nil {
++		t.Errorf("FinalAttempt(nil) = %v, want nil", got)
++	}
++}
 diff --git a/loop/loop.go b/loop/loop.go
-index 4b265e1..84d324f 100644
+index 4b265e1..7a9c88c 100644
 --- a/loop/loop.go
 +++ b/loop/loop.go
 @@ -315,14 +315,9 @@ func (l *Loop) ProcessOneTurn(ctx context.Context) error {
@@ -394,6 +721,117 @@ index 4b265e1..84d324f 100644
 +		if err := l.recordMessage(recordCtx, toolMessage, llm.Usage{}, otherUsage); err != nil {
  			return fmt.Errorf("%w: tool result message: %v", errMessagePersistence, err)
  		}
+ 
+@@ -1223,6 +1183,34 @@ func isRetryableError(err error) bool {
+ 			return true
+ 		}
+ 	}
++	return isTruncatedStreamText(lower)
++}
++
++// truncatedStreamPatterns are the provider wordings for a stream that ended
++// before the provider said why it stopped. llm.TruncatedStream already marks
++// these retryable through structured metadata; the wording is matched as well so
++// that a copy which lost its chain — reformatted, or read back from a stored
++// message — is still recognised for what it is.
++//
++// Each entry is the whole phrase its site emits. A looser prefix would also
++// match a provider body quoting it, and "chat completion stream failed after
++// response started" is deliberately absent: two sites share that wording and
++// only one of them is a cut stream.
++var truncatedStreamPatterns = []string{
++	"incomplete chat completion stream: no finish reason",
++	"incomplete stream: no stop_reason received",
++	"incomplete stream: no response.completed event",
++	"no message_start event in stream",
++}
++
++// isTruncatedStreamText reports whether an already-lowercased error message
++// describes a truncated provider stream.
++func isTruncatedStreamText(lower string) bool {
++	for _, p := range truncatedStreamPatterns {
++		if strings.Contains(lower, p) {
++			return true
++		}
++	}
+ 	return false
+ }
+ 
+@@ -1250,6 +1238,11 @@ func IsRetryableLLMError(err error) bool {
+ 	if info, ok := llm.RequestErrorInfoFromError(err); ok {
+ 		return info.Retryable
+ 	}
++	// The whole error is read here, not just its final attempt: a provider that
++	// gives up says so in a closing message rather than in the last attempt it
++	// recorded, and dropping that message would call a stall permanent. The hard
++	// non-retryable list below is what keeps an earlier attempt's wording from
++	// speaking for a request that ended for good.
+ 	lower := strings.ToLower(err.Error())
+ 
+ 	// Hard non-retryable signals override anything else.
+@@ -1271,6 +1264,10 @@ func IsRetryableLLMError(err error) bool {
+ 		}
+ 	}
+ 
++	if isTruncatedStreamText(lower) {
++		return true
++	}
++
+ 	retryableSubstrings := []string{
+ 		// Transport-layer
+ 		"eof",
+diff --git a/loop/loop_test.go b/loop/loop_test.go
+index 2b1fdd3..90e6bf4 100644
+--- a/loop/loop_test.go
++++ b/loop/loop_test.go
+@@ -1704,6 +1704,17 @@ func TestIsRetryableError(t *testing.T) {
+ 		{"structured non-retryable overrides EOF text", &testRequestError{message: "EOF", info: llm.RequestErrorInfo{}}, false},
+ 		{"rate limit not in tight set", fmt.Errorf("rate limit exceeded"), false},
+ 		{"503 not in tight set", fmt.Errorf("upstream returned 503"), false},
++		{"truncated stream", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil), true},
++		{"truncated stream text only", fmt.Errorf("attempt 1 at 2026-09-10 20:09:03: url=https://openrouter.ai/api/v1/chat/completions model=openrouter/free: incomplete chat completion stream: no finish reason"), true},
++		// The structured verdict answers for the attempt the request ended on,
++		// so a permanent 401 after a cut stream is not repeated on that basis.
++		// Its wording still is, because this classifier has no non-retryable
++		// list — one extra attempt out of the two it is allowed, which is what
++		// the pre-existing "eof" patterns have always cost here too.
++		{"permanent failure after a truncated attempt", errors.Join(
++			fmt.Errorf("attempt 1: %w", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)),
++			fmt.Errorf("attempt 2: status 401 (url=U, model=M): invalid api key"),
++		), true},
+ 		{"generic error", fmt.Errorf("something went wrong"), false},
+ 	}
+ 
+@@ -1740,6 +1751,30 @@ func TestIsRetryableLLMError(t *testing.T) {
+ 		{"invalid api key not retryable", fmt.Errorf("invalid api key"), false},
+ 		{"invalid_request_error not retryable", fmt.Errorf("invalid_request_error: messages.0.content.0.thinking.signature: Field required"), false},
+ 		{"model_not_found not retryable", fmt.Errorf("model_not_found: The model gpt-foo does not exist"), false},
++		// The failure that ended conversation c2H2VP7 mid-install: the SSE
++		// stream was cut before any finish_reason arrived, the turn stopped
++		// after one attempt, and the Retry button was disabled because this
++		// classifier called a truncated stream permanent.
++		{"truncated stream retryable", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil), true},
++		{"truncated stream text only retryable", fmt.Errorf("attempt 1 at 2026-09-10 20:09:03: url=https://openrouter.ai/api/v1/chat/completions model=openrouter/free: incomplete chat completion stream: no finish reason"), true},
++		{"anthropic truncated stream retryable", fmt.Errorf("incomplete stream: no stop_reason received (stream may have been truncated)"), true},
++		{"responses api truncated stream retryable", fmt.Errorf("incomplete stream: no response.completed event"), true},
++		{"stream cut after start retryable", llm.TruncatedStream("chat completion stream failed after response started", io.ErrUnexpectedEOF), true},
++		// A frame the client cannot decode is a schema mismatch, not a cut
++		// stream: repeating the request would fail identically.
++		{"undecodable frame not retryable", fmt.Errorf("chat completion stream failed after response started: invalid character '{' after top-level value"), false},
++		// A truncated stream on an earlier attempt must not make the failure the
++		// request actually ended on look repeatable.
++		{"permanent failure after a truncated attempt not retryable", errors.Join(
++			fmt.Errorf("attempt 1: %w", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)),
++			fmt.Errorf("attempt 2: status 401 (url=U, model=M): invalid api key"),
++		), false},
++		// A provider that gives up says so in its closing message rather than in
++		// the last attempt it recorded. Reading only the final attempt would
++		// call this stall permanent and disable the Retry button on it.
++		{"closing message decides a stall", fmt.Errorf("openai request failed after 16 attempts (context cancelled during backoff): %w", errors.Join(
++			fmt.Errorf("attempt 1 at X: TLS error: %w", errors.New("tls: bad record MAC")),
++		)), true},
+ 		{"generic error not retryable", fmt.Errorf("something weird happened"), false},
+ 	}
  
 diff --git a/server/platform_prompt_test.go b/server/platform_prompt_test.go
 new file mode 100644

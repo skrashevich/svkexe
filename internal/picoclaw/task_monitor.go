@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,12 +18,38 @@ import (
 // dashboard reloads every 5s, so this is the resolution the owner sees.
 const TaskPollInterval = 15 * time.Second
 
-// taskPollTimeout bounds one VM's progress query. A VM that cannot answer in
-// time keeps its recorded state and is asked again on the next round.
-const taskPollTimeout = 20 * time.Second
+// taskPollTimeout bounds one round with a VM. A VM that cannot answer in time
+// keeps its recorded state and is asked again on the next round. Resuming a task
+// is the longest round: the progress query, the failure details, the resume
+// itself and the failure text, so this has to leave room for all of them rather
+// than for a single query.
+const taskPollTimeout = 45 * time.Second
 
 // maxTaskErrorLen keeps an agent error readable in the VM card.
 const maxTaskErrorLen = 500
+
+// maxTaskResumes bounds how many times the gateway picks a task back up after
+// the agent's turn died on a failure the agent itself calls transient. A
+// provider hiccup clears in an attempt or two; a task that keeps dying the same
+// way is a real failure the owner has to see, not a loop to feed forever.
+//
+// This is the only brake on everything below it. Each resume is a whole turn,
+// and a turn is already several LLM requests: the agent loop retries twice, and
+// some providers retry inside that again. Raising this multiplies through all of
+// them, so raise it only with that arithmetic in hand.
+const maxTaskResumes = 3
+
+// taskResumeTimeout bounds the resume request. The agent answers it before the
+// resumed turn runs, so this only has to cover loading the conversation.
+const taskResumeTimeout = 15 * time.Second
+
+// maxTaskResumeAge is how old a failure may be for the gateway to pick it back
+// up on its own. Polling is a matter of seconds, so a live hiccup is always well
+// inside this; the window exists so that a turn which died while the gateway was
+// down — or one on a VM whose conversation was only just traced back, possibly
+// months after the task was handed over — is reported to the owner instead of
+// waking an install nobody is watching.
+const maxTaskResumeAge = time.Hour
 
 // conversationIDRE matches the IDs the agent hands out. The ID is interpolated
 // into SQL that runs inside the VM, so anything else is refused rather than
@@ -101,7 +128,7 @@ func RefreshTaskState(ctx context.Context, rt runtime.ContainerRuntime, database
 		return fmt.Errorf("task progress for %s: refusing conversation ID %q", c.IncusName, c.InitialTaskConversation)
 	}
 
-	state, reason, err := pollTaskState(ctx, rt, c.IncusName, c.InitialTaskConversation)
+	state, reason, err := pollTaskState(ctx, rt, database, c)
 	if err != nil {
 		return fmt.Errorf("read task progress for %s: %w", c.IncusName, err)
 	}
@@ -195,10 +222,18 @@ func queryAgentDB(ctx context.Context, rt runtime.ContainerRuntime, incusName, q
 // agent loop keeps while a turn runs, and the last message of the conversation
 // says how the turn ended: an "agent" message is a completed answer, an
 // "error" message is a failure the owner has to see.
-func pollTaskState(ctx context.Context, rt runtime.ContainerRuntime, incusName, conversationID string) (state, reason string, err error) {
+//
+// A "slug" message is skipped, exactly as the agent skips it when it decides
+// whether to offer Retry. Naming a conversation is a separate LLM call that
+// races the first turn, so its marker can land after the turn has already
+// finished; counting it as the last message would report a finished task as cut
+// short, and would hide a failure the gateway could otherwise resume.
+func pollTaskState(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) (state, reason string, err error) {
+	incusName, conversationID := c.IncusName, c.InitialTaskConversation
 	query := fmt.Sprintf(
 		`SELECT COALESCE((SELECT agent_working FROM conversations WHERE conversation_id='%[1]s'), -1)`+
-			` || '|' || COALESCE((SELECT type FROM messages WHERE conversation_id='%[1]s' ORDER BY sequence_id DESC LIMIT 1), '');`,
+			` || '|' || COALESCE((SELECT type FROM messages WHERE conversation_id='%[1]s'`+
+			` AND type != 'slug' ORDER BY sequence_id DESC LIMIT 1), '');`,
 		conversationID)
 	out, err := queryAgentDB(ctx, rt, incusName, query)
 	if err != nil {
@@ -225,12 +260,132 @@ func pollTaskState(ctx context.Context, rt runtime.ContainerRuntime, incusName, 
 	case "agent":
 		return db.TaskDone, "", nil
 	case "error":
-		return db.TaskFailed, taskErrorText(ctx, rt, incusName, conversationID), nil
+		return resolveFailedTurn(ctx, rt, database, c)
 	default:
 		// The agent clears agent_working for every unfinished turn on startup
 		// and does not resume it, so an idle conversation that never produced
 		// an answer was cut short rather than merely slow.
 		return db.TaskFailed, "the agent stopped before answering; the VM or the agent restarted mid-task", nil
+	}
+}
+
+// resolveFailedTurn decides what a turn that ended on an error means for the
+// task. A cut stream or a provider hiccup is not the end of the job: the agent
+// marks such a failure retryable, and asking it to pick the conversation back
+// up continues from the work already done instead of throwing it away and
+// waiting for the owner to notice. Only a failure the agent calls permanent, or
+// one that keeps coming back, is reported as a failed task.
+func resolveFailedTurn(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) (state, reason string, err error) {
+	turn, err := failedTurnDetails(ctx, rt, c.IncusName, c.InitialTaskConversation)
+	if err != nil {
+		return "", "", err
+	}
+	if turn.resumable(c.InitialTaskResumes) {
+		resumed, err := resumeConversation(ctx, rt, c)
+		if err != nil {
+			// The request never reached the agent, so nothing was spent: a VM
+			// that is briefly out of reach while it reboots must not be able to
+			// exhaust the budget of a task nobody ever asked to resume. The next
+			// round asks again, and maxTaskResumeAge ends it either way.
+			return "", "", err
+		}
+		// The agent answered, so the attempt is charged whether or not it took
+		// the task back. A resume the agent declines leaves its own message log
+		// untouched, and only this count can stop the gateway asking forever.
+		spent, err := database.CountInitialTaskResume(c.ID)
+		if err != nil {
+			// The request has already gone out, so the failure is in the
+			// bookkeeping, not in the resume. Reporting the turn as running is
+			// the honest answer; refusing to record it would say the task is
+			// still waiting while the agent works on it, and would ask again on
+			// the next round with nothing counted.
+			log.Printf("picoclaw: %s resumed its task but the attempt could not be counted: %v", c.IncusName, err)
+			if resumed {
+				return db.TaskWorking, "", nil
+			}
+			return "", "", err
+		}
+		c.InitialTaskResumes = spent
+		if resumed {
+			log.Printf("picoclaw: asked %s to resume its task after a transient agent failure (resume %d of %d)", c.IncusName, spent, maxTaskResumes)
+			return db.TaskWorking, "", nil
+		}
+	}
+	text := taskErrorText(ctx, rt, c.IncusName, c.InitialTaskConversation)
+	if turn.retryable && c.InitialTaskResumes >= maxTaskResumes {
+		text = fmt.Sprintf("%s (resumed %d times without getting through)", text, c.InitialTaskResumes)
+	}
+	return db.TaskFailed, text, nil
+}
+
+// failedTurn is what the agent's database says about the failure a task's turn
+// ended on.
+type failedTurn struct {
+	// retryable is the agent's own verdict, stored on the error message.
+	retryable bool
+	// age is how long ago the failure was recorded, measured by the VM's own
+	// clock so gateway and guest never have to agree on the time.
+	age time.Duration
+}
+
+// resumable reports whether the gateway should pick this failure back up
+// instead of handing it to the owner. spent is what the task's budget has
+// already cost.
+func (t failedTurn) resumable(spent int) bool {
+	return t.retryable && spent < maxTaskResumes && t.age <= maxTaskResumeAge
+}
+
+// failedTurnDetails reads the agent's verdict on the latest failure and how old
+// it is. The age is computed inside the VM, so the gateway and the guest never
+// have to agree on the time; an undatable failure answers "unknown" rather than
+// a number, and is treated as too old to touch.
+func failedTurnDetails(ctx context.Context, rt runtime.ContainerRuntime, incusName, conversationID string) (failedTurn, error) {
+	const latest = `(SELECT %s FROM messages WHERE conversation_id='%s' AND type='error' ORDER BY sequence_id DESC LIMIT 1)`
+	query := fmt.Sprintf(
+		`SELECT COALESCE(%[1]s, 0) || '|' || COALESCE(%[2]s, 'unknown');`,
+		fmt.Sprintf(latest, `json_extract(user_data, '$.retryable')`, conversationID),
+		fmt.Sprintf(latest, `CAST(MAX(0, (julianday('now') - julianday(created_at)) * 86400) AS INTEGER)`, conversationID),
+	)
+	out, err := queryAgentDB(ctx, rt, incusName, query)
+	if err != nil {
+		return failedTurn{}, err
+	}
+	flag, age, ok := strings.Cut(strings.TrimSpace(string(out)), "|")
+	if !ok {
+		return failedTurn{}, fmt.Errorf("unexpected failure reply %q", strings.TrimSpace(string(out)))
+	}
+	turn := failedTurn{retryable: flag == "1", age: maxTaskResumeAge + time.Second}
+	if age != "unknown" {
+		seconds, err := strconv.Atoi(age)
+		if err != nil {
+			return failedTurn{}, fmt.Errorf("unexpected failure age %q", age)
+		}
+		turn.age = time.Duration(seconds) * time.Second
+	}
+	return turn, nil
+}
+
+// resumeConversation asks the agent to re-run the request its turn died on. It
+// reports whether the agent took the task back; an agent that refuses is not an
+// error to raise, it is the answer that this failure is final. A VM that cannot
+// be reached at all is an error, so the task keeps its state and is asked again
+// on the next round.
+func resumeConversation(ctx context.Context, rt runtime.ContainerRuntime, c *db.Container) (bool, error) {
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/conversation/%s/retry", Port, c.InitialTaskConversation)
+	out, err := rt.Exec(ctx, c.IncusName, []string{
+		"curl", "--silent", "--show-error", "--max-time", strconv.Itoa(int(taskResumeTimeout.Seconds())),
+		"--output", "/dev/null", "--write-out", "%{http_code}",
+		"--request", "POST", "--header", RequireHeader + ": " + c.OwnerID, url,
+	})
+	if err != nil {
+		return false, fmt.Errorf("ask %s to resume conversation %s: %w", c.IncusName, c.InitialTaskConversation, err)
+	}
+	switch code := strings.TrimSpace(string(out)); code {
+	case "200", "202":
+		return true, nil
+	default:
+		log.Printf("picoclaw: %s refused to resume conversation %s (HTTP %s)", c.IncusName, c.InitialTaskConversation, code)
+		return false, nil
 	}
 }
 

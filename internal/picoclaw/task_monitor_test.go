@@ -3,6 +3,7 @@ package picoclaw
 import (
 	"context"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -65,6 +66,295 @@ func TestRefreshTaskStateReportsProgress(t *testing.T) {
 	}
 }
 
+// Naming a conversation is a separate LLM call that races the first turn, so its
+// marker can land after the turn already ended. Reading it as the last message
+// would report a finished task as cut short and hide a failure the gateway could
+// have resumed — which is how the truncated-stream failure went unnoticed.
+func TestRefreshTaskStateLooksPastASlugMarker(t *testing.T) {
+	database, guest, c := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.agentError = "the stream ended early"
+	guest.failedTurn = "1|0"
+
+	if err := RefreshTaskState(context.Background(), guest, database, c); err != nil {
+		t.Fatal(err)
+	}
+	var progress string
+	for _, cmd := range guest.commands {
+		if strings.Contains(cmd, "agent_working") {
+			progress = cmd
+		}
+	}
+	if !strings.Contains(progress, "type != 'slug'") {
+		t.Fatalf("the progress query counts a slug marker as the last message: %s", progress)
+	}
+	if guest.resumes != 1 {
+		t.Fatalf("asked the agent to resume %d times, want 1", guest.resumes)
+	}
+}
+
+// A turn that died on a failure the agent itself calls transient — a cut
+// stream, a provider hiccup — must be picked back up rather than written off:
+// the agent keeps the work it already did, and the owner is not asked to
+// restart an install from the beginning because a socket closed early.
+func TestRefreshTaskStateResumesATransientFailure(t *testing.T) {
+	cases := []struct {
+		name        string
+		failedTurn  string
+		wantState   string
+		wantReason  string
+		wantResumes int
+	}{
+		{
+			name:        "first transient failure is resumed",
+			failedTurn:  "1|0",
+			wantState:   db.TaskWorking,
+			wantResumes: 1,
+		},
+		{
+			name:        "a permanent failure is not resumed at all",
+			failedTurn:  "0|0",
+			wantState:   db.TaskFailed,
+			wantReason:  "the stream ended early",
+			wantResumes: 0,
+		},
+		{
+			// A gateway that was down, or one that has only just traced a task
+			// back to its conversation, must not wake an install nobody has
+			// been watching. The owner is told instead.
+			name:        "a failure older than the window is left to the owner",
+			failedTurn:  "1|" + strconv.Itoa(int(maxTaskResumeAge.Seconds())+1),
+			wantState:   db.TaskFailed,
+			wantReason:  "the stream ended early",
+			wantResumes: 0,
+		},
+		{
+			name:        "a failure the VM cannot date is left to the owner",
+			failedTurn:  "1|unknown",
+			wantState:   db.TaskFailed,
+			wantReason:  "the stream ended early",
+			wantResumes: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			database, guest, c := deliveredFixture(t)
+			guest.progress = "0|error"
+			guest.agentError = "the stream ended early"
+			guest.failedTurn = tc.failedTurn
+
+			if err := RefreshTaskState(context.Background(), guest, database, c); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := database.GetContainerByID("vm")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.InitialTaskState != tc.wantState {
+				t.Fatalf("state=%q, want %q", updated.InitialTaskState, tc.wantState)
+			}
+			if !strings.Contains(updated.InitialTaskError, tc.wantReason) {
+				t.Fatalf("reason=%q, want it to mention %q", updated.InitialTaskError, tc.wantReason)
+			}
+			if guest.resumes != tc.wantResumes {
+				t.Fatalf("asked the agent to resume %d times, want %d", guest.resumes, tc.wantResumes)
+			}
+		})
+	}
+}
+
+// A task that keeps dying the same way has to stop being resumed and reach the
+// owner, and the budget has to hold even when the agent records nothing new: a
+// resume the agent declines leaves its message log untouched, so only the count
+// the gateway keeps itself can bound this.
+func TestRefreshTaskStateStopsResumingAfterTheBudget(t *testing.T) {
+	database, guest, _ := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.agentError = "the stream ended early"
+	guest.failedTurn = "1|0"
+
+	// Every round finds the same failure and the agent never records another
+	// one, which is exactly the shape that could otherwise loop forever.
+	for round := 1; round <= maxTaskResumes+1; round++ {
+		current, err := database.GetContainerByID("vm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := RefreshTaskState(context.Background(), guest, database, current); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.SetInitialTaskState("vm", db.TaskSent, current.InitialTaskError); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if guest.resumes != maxTaskResumes {
+		t.Fatalf("asked the agent to resume %d times, want it to stop at %d", guest.resumes, maxTaskResumes)
+	}
+
+	final, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshTaskState(context.Background(), guest, database, final); err != nil {
+		t.Fatal(err)
+	}
+	done, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.InitialTaskState != db.TaskFailed {
+		t.Fatalf("state=%q, want %q once the budget is spent", done.InitialTaskState, db.TaskFailed)
+	}
+	if !strings.Contains(done.InitialTaskError, "the stream ended early") {
+		t.Fatalf("reason=%q, want the agent's own wording", done.InitialTaskError)
+	}
+	if !strings.Contains(done.InitialTaskError, "resumed") {
+		t.Fatalf("reason=%q, want it to say the gateway already resumed the task", done.InitialTaskError)
+	}
+}
+
+// Handing the task over again starts a fresh conversation, so it must start
+// with a fresh budget too.
+func TestRetryingATaskClearsTheResumeBudget(t *testing.T) {
+	database, guest, c := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.agentError = "the stream ended early"
+	guest.failedTurn = "1|0"
+
+	if err := RefreshTaskState(context.Background(), guest, database, c); err != nil {
+		t.Fatal(err)
+	}
+	spent, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spent.InitialTaskResumes != 1 {
+		t.Fatalf("resumes=%d, want the resume to have been counted", spent.InitialTaskResumes)
+	}
+
+	if err := database.SetInitialTaskState("vm", db.TaskFailed, "gave up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RetryInitialTask("vm"); err != nil {
+		t.Fatal(err)
+	}
+	requeued, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued.InitialTaskResumes != 0 {
+		t.Fatalf("resumes=%d, want a re-queued task to start over", requeued.InitialTaskResumes)
+	}
+}
+
+// An agent that refuses the resume has answered the question: this failure is
+// final, and the owner has to see it instead of watching a task that says it is
+// working while nothing runs.
+func TestRefreshTaskStateFailsWhenTheAgentRefusesToResume(t *testing.T) {
+	database, guest, c := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.agentError = "the stream ended early"
+	guest.failedTurn = "1|0"
+	guest.resumeStatus = "409"
+
+	if err := RefreshTaskState(context.Background(), guest, database, c); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InitialTaskState != db.TaskFailed {
+		t.Fatalf("state=%q, want %q", updated.InitialTaskState, db.TaskFailed)
+	}
+	if !strings.Contains(updated.InitialTaskError, "the stream ended early") {
+		t.Fatalf("reason=%q, want the agent's own wording", updated.InitialTaskError)
+	}
+}
+
+// A VM that cannot be reached has not refused anything, so the task keeps its
+// state and the next round asks again instead of burning a resume. A VM that
+// stays out of reach for a while — rebooting, or a loaded host — must still find
+// its budget intact when it comes back, or a few seconds of trouble would kill
+// the task and claim resumes that never happened.
+func TestRefreshTaskStateKeepsStateWhenTheResumeCannotBeSent(t *testing.T) {
+	database, guest, _ := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.agentError = "the stream ended early"
+	guest.failedTurn = "1|0"
+	guest.fail = "/retry"
+
+	for round := 0; round <= maxTaskResumes; round++ {
+		current, err := database.GetContainerByID("vm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := RefreshTaskState(context.Background(), guest, database, current); err == nil {
+			t.Fatal("unreachable VM reported as a verdict")
+		}
+		unchanged, err := database.GetContainerByID("vm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unchanged.InitialTaskState != db.TaskSent {
+			t.Fatalf("round %d: state=%q, want it left at %q", round, unchanged.InitialTaskState, db.TaskSent)
+		}
+		if unchanged.InitialTaskResumes != 0 {
+			t.Fatalf("round %d: charged %d resumes the agent never received", round, unchanged.InitialTaskResumes)
+		}
+	}
+
+	// Once the VM answers again, the whole budget is still there.
+	guest.fail = ""
+	recovered, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshTaskState(context.Background(), guest, database, recovered); err != nil {
+		t.Fatal(err)
+	}
+	working, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if working.InitialTaskState != db.TaskWorking {
+		t.Fatalf("state=%q, want the recovered VM to be resumed", working.InitialTaskState)
+	}
+	if working.InitialTaskResumes != 1 {
+		t.Fatalf("resumes=%d, want only the one the agent actually received", working.InitialTaskResumes)
+	}
+}
+
+// The conversation ID reaches the agent inside a URL, and the owner ID inside a
+// header. Neither may travel through a shell.
+func TestResumeRequestGoesStraightToTheAgent(t *testing.T) {
+	database, guest, c := deliveredFixture(t)
+	guest.progress = "0|error"
+	guest.failedTurn = "1|0"
+
+	if err := RefreshTaskState(context.Background(), guest, database, c); err != nil {
+		t.Fatal(err)
+	}
+	var resume string
+	for _, cmd := range guest.commands {
+		if strings.Contains(cmd, "/retry") {
+			resume = cmd
+		}
+	}
+	if resume == "" {
+		t.Fatal("no resume request reached the agent")
+	}
+	if strings.Contains(resume, "sh -c") {
+		t.Errorf("the resume went through a shell: %s", resume)
+	}
+	if !strings.Contains(resume, RequireHeader+": "+c.OwnerID) {
+		t.Errorf("the resume was not attributed to the owner: %s", resume)
+	}
+	if !strings.Contains(resume, "/api/conversation/"+c.InitialTaskConversation+"/retry") {
+		t.Errorf("the resume named the wrong conversation: %s", resume)
+	}
+}
+
 // A VM that cannot answer right now has not failed its task: the recorded
 // state has to survive until the VM can be reached again.
 func TestRefreshTaskStateKeepsStateWhenVMIsUnreachable(t *testing.T) {
@@ -117,24 +407,6 @@ func TestRefreshTaskStatesOnlyPollsUnfinishedTasks(t *testing.T) {
 		t.Fatalf("kept polling a finished task: %v", guest.commands)
 	}
 	_ = c
-}
-
-// The agent has to name the conversation, otherwise progress could never be
-// reported and the owner would watch a task that says nothing forever.
-func TestDeliverInitialTaskFailsWithoutConversationID(t *testing.T) {
-	database, guest, c := newTaskFixture(t, "do the thing")
-	guest.newConversation = `{"status":"accepted"}`
-
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err == nil {
-		t.Fatal("delivery without a conversation reported as success")
-	}
-	updated, err := database.GetContainerByID("vm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.InitialTaskState != db.TaskFailed {
-		t.Fatalf("state=%q, want %q", updated.InitialTaskState, db.TaskFailed)
-	}
 }
 
 // stuckFixture returns the shape gateways older than the conversation column
@@ -305,5 +577,23 @@ func TestRefreshTaskStatesLeavesAStoppedVMForItsNextStart(t *testing.T) {
 	}
 	if started.InitialTaskState != db.TaskDone {
 		t.Fatalf("state=%q, want the restarted VM to report %q", started.InitialTaskState, db.TaskDone)
+	}
+}
+
+// The agent has to name the conversation, otherwise progress could never be
+// reported and the owner would watch a task that says nothing forever.
+func TestDeliverInitialTaskFailsWithoutConversationID(t *testing.T) {
+	database, guest, c := newTaskFixture(t, "do the thing")
+	guest.newConversation = `{"status":"accepted"}`
+
+	if err := DeliverInitialTask(context.Background(), guest, database, c); err == nil {
+		t.Fatal("delivery without a conversation reported as success")
+	}
+	updated, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InitialTaskState != db.TaskFailed {
+		t.Fatalf("state=%q, want %q", updated.InitialTaskState, db.TaskFailed)
 	}
 }

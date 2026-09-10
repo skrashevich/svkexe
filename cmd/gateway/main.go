@@ -39,6 +39,12 @@ import (
 	"github.com/skrashevich/svkexe/internal/version"
 )
 
+// shutdownGrace is how long in-flight requests have to finish before the
+// gateway stops waiting for them. Every restart is a hole in service — the
+// updater replaces the binary and restarts the unit — so this is sized to let
+// ordinary requests land, not to outlast a streamed LLM turn.
+const shutdownGrace = 5 * time.Second
+
 func main() {
 	// -version short-circuits before any env-based configuration is read, so
 	// it works even in an environment missing required vars like DOMAIN.
@@ -250,12 +256,31 @@ func main() {
 	log.Println("shutting down...")
 	stopAgents()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Fatalf("graceful shutdown failed: %v", err)
-	}
+	stopServer(httpServer, shutdownGrace)
 	log.Println("stopped")
+}
+
+// stopServer takes the HTTP server down, giving requests already in flight
+// grace to finish and closing whatever is still open when that runs out.
+//
+// Some connections never go idle by themselves: a VM's agent streaming a turn
+// through the LLM proxy holds one for as long as the model keeps talking, and an
+// open agent UI holds another. Waiting for those means the gateway is
+// unreachable for the whole grace period, which is what turns an update into a
+// visible outage — the updater replaces the binary and restarts the unit, so
+// every second spent here is a second of 502s. Closing them is the cheaper end
+// of the trade: an agent whose stream is cut retries it, and a browser
+// reconnects.
+func stopServer(srv *http.Server, grace time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err == nil {
+		return
+	}
+	log.Printf("closing connections still open after %s", grace)
+	if err := srv.Close(); err != nil {
+		log.Printf("close listeners: %v", err)
+	}
 }
 
 // hostRouter is what the top-level handler needs from the container proxy: it

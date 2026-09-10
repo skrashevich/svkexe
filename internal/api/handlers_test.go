@@ -156,6 +156,37 @@ func TestCreateContainer(t *testing.T) {
 	}
 }
 
+// A VM has to be usable right after creation, without a separate start call.
+func TestCreateContainerStartsIt(t *testing.T) {
+	srv, database := newTestServer(t)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, authedRequest(http.MethodPost, "/api/containers", []byte(`{"name":"autostart"}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got dbpkg.Container
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Status != "running" {
+		t.Errorf("response status = %q, want running", got.Status)
+	}
+
+	stored, err := database.GetContainerByID(got.ID)
+	if err != nil {
+		t.Fatalf("load container: %v", err)
+	}
+	if stored.Status != "running" {
+		t.Errorf("stored status = %q, want running", stored.Status)
+	}
+
+	rt := srv.runtime.(*mockRuntime)
+	if c := rt.containers["incus-autostart"]; c == nil || c.Status != "running" {
+		t.Errorf("runtime container not started: %+v", c)
+	}
+}
+
 func TestCreateContainer_MissingName(t *testing.T) {
 	srv, _ := newTestServer(t)
 	body, _ := json.Marshal(map[string]any{"image": "shelley/base"})

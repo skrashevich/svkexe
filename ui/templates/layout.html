@@ -307,7 +307,20 @@
         }
         .vm-task-sent { border-left-color: var(--ok); }
         .vm-task-pending { border-left-color: var(--fg-mute); }
+        .vm-task-working { border-left-color: var(--accent); }
+        .vm-task-done { border-left-color: var(--ok); }
         .vm-task-failed { border-left-color: var(--danger); }
+        /* The agent works for minutes, so the card says so without the
+           full-card busy overlay, which would hide the VM's own controls. */
+        .vm-task-spinner {
+            width: 11px;
+            height: 11px;
+            flex: none;
+            border-radius: 50%;
+            border: 2px solid var(--line);
+            border-top-color: var(--accent);
+            animation: spin 0.7s linear infinite;
+        }
         .vm-task-head {
             display: flex;
             align-items: center;

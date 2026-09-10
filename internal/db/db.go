@@ -79,6 +79,9 @@ func (db *DB) migrate() error {
 		"initial_task":       "TEXT NOT NULL DEFAULT ''",
 		"initial_task_state": "TEXT NOT NULL DEFAULT ''",
 		"initial_task_error": "TEXT NOT NULL DEFAULT ''",
+		// Names the agent conversation the task runs in, so progress can be
+		// polled after delivery.
+		"initial_task_conversation": "TEXT NOT NULL DEFAULT ''",
 	} {
 		exists, err := columnExists(db, "containers", column)
 		if err != nil {

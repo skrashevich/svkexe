@@ -221,11 +221,22 @@ conversation, and runs with your own LLM key — so it starts spending your quot
 right away. The agent treats it as a normal message, which means it may answer
 or ask for clarification instead of building everything unattended.
 
-Delivery happens once. Its state shows on the VM card: `pending` until the VM is
-up, `sent` once the agent accepted it, or `failed` with the reason — most often
-no configured model, which you fix by adding an LLM key and pressing Retry. A
+Delivery happens once, and the VM card then follows the work itself:
+
+| State | Means |
+|---|---|
+| `pending` | the VM is not up yet |
+| `sent` | the agent accepted the task and is starting |
+| `working` | the agent is running the task right now |
+| `done` | the agent finished its turn without an error |
+| `failed` | delivery failed, or the agent ended on an error — the reason is shown |
+
+The gateway polls the agent every 15 seconds for as long as a task can still
+change state, and stops once it is `done` or `failed`. A failure is most often
+no configured model, which you fix by adding an LLM key and pressing Retry; a
 failed task never retries by itself, so nothing fires unexpectedly on a later
-restart.
+restart. While a task is live the card links straight to its conversation in the
+agent's own interface.
 
 The REST API takes the same text as `initial_task` on `POST /api/containers`,
 and `POST /api/containers/{id}/task/retry` re-queues a failed one.

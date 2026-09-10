@@ -22,6 +22,13 @@ type guestRuntime struct {
 	fail     string
 	// models overrides what a model-listing query returns.
 	models string
+	// newConversation overrides the agent's reply to a posted task.
+	newConversation string
+	// progress is what the agent's database reports for a task conversation,
+	// in the "agent_working|last message type" form the query returns.
+	progress string
+	// agentError is the text stored on the task's last error message.
+	agentError string
 }
 
 func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, error) {
@@ -53,6 +60,15 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 			return []byte(g.models), nil
 		}
 		return []byte("svkexe-test/model\n"), nil
+	case strings.Contains(text, "/api/conversations/new"):
+		if g.newConversation != "" {
+			return []byte(g.newConversation), nil
+		}
+		return []byte(`{"status":"accepted","conversation_id":"cTASK01"}`), nil
+	case strings.Contains(text, "agent_working"):
+		return []byte(g.progress + "\n"), nil
+	case strings.Contains(text, "json_extract(llm_data"):
+		return []byte(g.agentError + "\n"), nil
 	}
 	return nil, nil
 }

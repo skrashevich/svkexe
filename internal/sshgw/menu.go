@@ -177,7 +177,31 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 		return
 	}
 
-	fmt.Fprintf(sess, "VM %q created.\r\n", name)
+	// Incus hands back a stopped instance, so bring it up as part of creation —
+	// a new VM is expected to be usable without a separate "start" command.
+	if !strings.EqualFold(dbContainer.Status, "running") {
+		fmt.Fprintf(sess, "Starting VM %q...\r\n", name)
+		if err := s.runtime.Start(ctx, dbContainer.IncusName); err != nil {
+			_ = s.db.UpdateContainerStatus(dbContainer.ID, "stopped", dbContainer.IPAddress)
+			fmt.Fprintf(sess, "Error starting VM: %v\r\n", err)
+			return
+		}
+	}
+	if rtc, err := s.runtime.Get(ctx, dbContainer.IncusName); err == nil && rtc != nil {
+		dbContainer.IPAddress = rtc.IP
+	}
+
+	if s.materializer != nil {
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, dbContainer, s.picoclawLLMCfg); err != nil {
+			_ = s.db.UpdateContainerStatus(dbContainer.ID, "error", dbContainer.IPAddress)
+			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
+			return
+		}
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, dbContainer.ID)
+	}
+
+	_ = s.db.UpdateContainerStatus(dbContainer.ID, "running", dbContainer.IPAddress)
+	fmt.Fprintf(sess, "VM %q created and running.\r\n", name)
 }
 
 func (s *Server) cmdRm(ctx context.Context, sess gssh.Session, user *db.User, params []string) {

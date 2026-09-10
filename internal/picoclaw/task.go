@@ -89,15 +89,38 @@ func DeliverInitialTask(ctx context.Context, rt runtime.ContainerRuntime, databa
 	post := fmt.Sprintf(
 		"curl --fail --silent --show-error --max-time 30 -H %q -H 'Content-Type: application/json' --data @%s http://127.0.0.1:%d/api/conversations/new; result=$?; rm -f %s; exit $result",
 		RequireHeader+": "+c.OwnerID, taskFilePath, Port, taskFilePath)
-	if _, err := rt.Exec(ctx, c.IncusName, []string{"sh", "-c", post}); err != nil {
+	out, err := rt.Exec(ctx, c.IncusName, []string{"sh", "-c", post})
+	if err != nil {
 		return fail("the agent did not accept the task", err)
 	}
 
-	if err := database.SetInitialTaskState(c.ID, db.TaskSent, ""); err != nil {
+	// Without the conversation the task still runs, but its progress can never
+	// be reported, so a missing ID is a delivery failure the owner can retry.
+	conversationID, err := parseConversationID(out)
+	if err != nil {
+		return fail("the agent did not name the conversation it opened", err)
+	}
+
+	if err := database.SetInitialTaskDelivered(c.ID, conversationID); err != nil {
 		return fmt.Errorf("record task delivery for %s: %w", c.IncusName, err)
 	}
-	log.Printf("picoclaw: initial task delivered to %s using model %s", c.IncusName, model)
+	log.Printf("picoclaw: initial task delivered to %s as conversation %s using model %s", c.IncusName, conversationID, model)
 	return nil
+}
+
+// parseConversationID reads the conversation the agent opened for the task out
+// of its /api/conversations/new reply.
+func parseConversationID(out []byte) (string, error) {
+	var reply struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal(out, &reply); err != nil {
+		return "", fmt.Errorf("decode agent reply %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	if !validConversationID(reply.ConversationID) {
+		return "", fmt.Errorf("agent returned conversation ID %q", reply.ConversationID)
+	}
+	return reply.ConversationID, nil
 }
 
 // resolveTaskModel picks the model the task will run on.

@@ -54,7 +54,9 @@ List all containers owned by the authenticated user.
 
 #### `POST /api/containers`
 
-Create a new container.
+Create a new container. The container is started and its agent configured
+before the response is written, so this call takes as long as the VM needs to
+come up — there is no separate start step.
 
 **Request body:**
 ```json
@@ -68,7 +70,7 @@ Create a new container.
 {
   "id": "container-uuid",
   "name": "my-vm",
-  "status": "creating"
+  "status": "running"
 }
 ```
 

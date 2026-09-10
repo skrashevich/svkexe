@@ -25,9 +25,20 @@ const (
 	TaskPending = "pending"
 	// TaskSent means the agent accepted the task and opened a conversation.
 	TaskSent = "sent"
-	// TaskFailed means delivery failed; the owner has to retry explicitly.
+	// TaskWorking means the agent is currently running the task's turn.
+	TaskWorking = "working"
+	// TaskDone means the agent finished the turn without an error.
+	TaskDone = "done"
+	// TaskFailed means delivery failed or the agent ended its turn on an error;
+	// the owner has to retry explicitly.
 	TaskFailed = "failed"
 )
+
+// TaskInProgress reports whether a task state is still expected to change on
+// its own, i.e. whether it is worth polling the agent for progress.
+func TaskInProgress(state string) bool {
+	return state == TaskSent || state == TaskWorking
+}
 
 // Container represents a managed Incus container.
 type Container struct {
@@ -49,22 +60,27 @@ type Container struct {
 	// first comes up.
 	InitialTask string
 	// InitialTaskState is empty when no task was requested, otherwise
-	// TaskPending, TaskSent or TaskFailed.
+	// TaskPending, TaskSent, TaskWorking, TaskDone or TaskFailed.
 	InitialTaskState string
-	// InitialTaskError explains the last failed delivery.
+	// InitialTaskError explains the last failed delivery, or the error the
+	// agent ended its turn on.
 	InitialTaskError string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// InitialTaskConversation is the agent conversation the task runs in. It is
+	// what progress polling watches, so it is empty until delivery succeeded.
+	InitialTaskConversation string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 // containerColumns keeps every read of a container in sync.
-const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, created_at, updated_at`
+const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, initial_task_conversation, created_at, updated_at`
 
 func scanContainer(row interface{ Scan(...any) error }) (*Container, error) {
 	c := &Container{}
 	err := row.Scan(&c.ID, &c.Name, &c.OwnerID, &c.IncusName, &c.Status, &c.IPAddress,
 		&c.CPULimit, &c.MemoryMB, &c.DiskGB, &c.AppPort, &c.AppPublic,
-		&c.InitialTask, &c.InitialTaskState, &c.InitialTaskError, &c.CreatedAt, &c.UpdatedAt)
+		&c.InitialTask, &c.InitialTaskState, &c.InitialTaskError, &c.InitialTaskConversation,
+		&c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -266,11 +282,49 @@ func (db *DB) SetInitialTaskState(id, state, reason string) error {
 	return nil
 }
 
+// SetInitialTaskDelivered records that the agent accepted the task, together
+// with the conversation progress polling has to watch.
+func (db *DB) SetInitialTaskDelivered(id, conversationID string) error {
+	_, err := db.Exec(
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		TaskSent, conversationID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("record initial task delivery: %w", err)
+	}
+	return nil
+}
+
+// ListContainersWithTaskInProgress returns the running VMs whose task is still
+// expected to progress, i.e. the ones worth polling the agent about.
+func (db *DB) ListContainersWithTaskInProgress() ([]*Container, error) {
+	rows, err := db.Query(
+		`SELECT `+containerColumns+` FROM containers
+		 WHERE initial_task_conversation != '' AND initial_task_state IN (?, ?) AND status = 'running'
+		 ORDER BY updated_at`,
+		TaskSent, TaskWorking,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list containers with a running task: %w", err)
+	}
+	defer rows.Close()
+
+	var containers []*Container
+	for rows.Next() {
+		c, err := scanContainer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan container: %w", err)
+		}
+		containers = append(containers, c)
+	}
+	return containers, rows.Err()
+}
+
 // RetryInitialTask re-queues a failed task. Delivery never retries on its own,
 // so a task written weeks ago cannot fire on an unrelated restart.
 func (db *DB) RetryInitialTask(id string) error {
 	res, err := db.Exec(
-		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', updated_at = CURRENT_TIMESTAMP
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', initial_task_conversation = '', updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND initial_task != '' AND initial_task_state = ?`,
 		TaskPending, id, TaskFailed,
 	)

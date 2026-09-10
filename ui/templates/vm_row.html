@@ -26,18 +26,30 @@
     <div class="vm-task vm-task-{{.InitialTaskState}}">
         <div class="vm-task-head">
             <span class="vm-task-label">Initial task</span>
-            {{if eq .InitialTaskState "sent"}}
-            <span class="vm-task-state">delivered to the agent</span>
-            {{else if eq .InitialTaskState "pending"}}
+            {{if eq .InitialTaskState "pending"}}
             <span class="vm-task-state">waiting for the VM to come up</span>
+            {{else if eq .InitialTaskState "sent"}}
+            <span class="vm-task-spinner" aria-hidden="true"></span>
+            <span class="vm-task-state">handed to the agent, starting…</span>
+            {{else if eq .InitialTaskState "working"}}
+            <span class="vm-task-spinner" aria-hidden="true"></span>
+            <span class="vm-task-state">the agent is working on it</span>
+            {{else if eq .InitialTaskState "done"}}
+            <span class="vm-task-state">the agent finished this task</span>
             {{else}}
-            <span class="vm-task-state">not delivered</span>
+            <span class="vm-task-state">did not finish</span>
             <button class="btn btn-secondary btn-sm"
                 hx-post="/dashboard/vms/{{.ID}}/task/retry"
                 hx-target="#vm-{{.ID}}"
                 hx-swap="outerHTML">
                 Retry
             </button>
+            {{end}}
+            {{if and .InitialTaskConversation (eq .Status "running")}}
+            <a class="vm-link" target="_blank"
+               href="https://agent-{{.Name}}.{{domain}}/c/{{.InitialTaskConversation}}">
+                Watch
+            </a>
             {{end}}
         </div>
         <div class="vm-task-text">{{.InitialTask}}</div>

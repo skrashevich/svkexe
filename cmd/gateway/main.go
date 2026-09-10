@@ -207,6 +207,10 @@ func main() {
 	defer stopAgents()
 	go picoclaw.ReconcileRunning(agentCtx, database, rt, materializer, picoclawLLM)
 
+	// Follow the tasks handed to agents, so the dashboard shows whether one is
+	// still working, finished, or failed.
+	go picoclaw.MonitorTasks(agentCtx, database, rt, picoclaw.TaskPollInterval)
+
 	// Wait for shutdown signal.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

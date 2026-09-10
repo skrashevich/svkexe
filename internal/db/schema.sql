@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS containers (
     initial_task TEXT NOT NULL DEFAULT '',
     initial_task_state TEXT NOT NULL DEFAULT '',
     initial_task_error TEXT NOT NULL DEFAULT '',
+    initial_task_conversation TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

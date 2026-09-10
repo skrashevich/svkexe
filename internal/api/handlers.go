@@ -125,13 +125,32 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.EqualFold(rtContainer.Status, "running") {
+	// Incus hands back a stopped instance, so bring it up as part of creation —
+	// a new VM is expected to be usable without a separate start call.
+	if !strings.EqualFold(rtContainer.Status, "running") {
+		if err := s.runtime.Start(r.Context(), rtContainer.Name); err != nil {
+			_ = s.db.UpdateContainerStatus(dbContainer.ID, "stopped", dbContainer.IPAddress)
+			http.Error(w, "failed to start container: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if rtc, err := s.runtime.Get(r.Context(), rtContainer.Name); err == nil && rtc != nil {
+		dbContainer.IPAddress = rtc.IP
+	}
+
+	if s.materializer != nil {
 		if err := picoclaw.SetupContainer(r.Context(), s.runtime, s.materializer, dbContainer, s.picoclawLLMCfg); err != nil {
 			_ = s.db.UpdateContainerStatus(dbContainer.ID, "error", dbContainer.IPAddress)
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, dbContainer.ID)
+	}
+
+	dbContainer.Status = "running"
+	if err := s.db.UpdateContainerStatus(dbContainer.ID, "running", dbContainer.IPAddress); err != nil {
+		http.Error(w, "failed to update status", http.StatusInternalServerError)
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, dbContainer)

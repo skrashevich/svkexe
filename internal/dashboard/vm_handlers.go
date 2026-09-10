@@ -169,16 +169,32 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 			_ = d.db.UpdateContainerStatus(c.ID, "error", "")
 			return
 		}
-		_ = d.db.UpdateContainerStatus(c.ID, rtContainer.Status, rtContainer.IP)
-
-		if strings.EqualFold(rtContainer.Status, "running") {
-			if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c, d.picoclawLLMCfg); err != nil {
-				log.Printf("PicoClaw setup failed for %s: %v", incusName, err)
-				_ = d.db.UpdateContainerStatus(c.ID, "error", rtContainer.IP)
-			} else {
-				picoclaw.DeliverInitialTaskByID(ctx, d.runtime, d.db, c.ID)
+		// Incus hands back a stopped instance, so bring it up as part of
+		// creation — a new VM is expected to be usable without pressing Start.
+		if !strings.EqualFold(rtContainer.Status, "running") {
+			if err := d.runtime.Start(ctx, incusName); err != nil {
+				log.Printf("async VM start failed for %s: %v", incusName, err)
+				_ = d.db.UpdateContainerStatus(c.ID, "stopped", rtContainer.IP)
+				return
 			}
 		}
+
+		ip := rtContainer.IP
+		if rtc, err := d.runtime.Get(ctx, incusName); err == nil && rtc != nil {
+			ip = rtc.IP
+		}
+		c.IPAddress = ip
+
+		if d.materializer != nil {
+			if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c, d.picoclawLLMCfg); err != nil {
+				log.Printf("PicoClaw setup failed for %s: %v", incusName, err)
+				_ = d.db.UpdateContainerStatus(c.ID, "error", ip)
+				return
+			}
+			picoclaw.DeliverInitialTaskByID(ctx, d.runtime, d.db, c.ID)
+		}
+
+		_ = d.db.UpdateContainerStatus(c.ID, "running", ip)
 	}()
 
 	// Return updated VM list immediately (VM visible with "creating" badge).

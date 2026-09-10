@@ -9,22 +9,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
-	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/ui"
 )
 
 // Dashboard holds dependencies for the web dashboard.
 type Dashboard struct {
-	db           *db.DB
-	runtime      runtime.ContainerRuntime
-	materializer *secrets.Materializer
-	domain        string
-	encKey        []byte
+	db             *db.DB
+	runtime        runtime.ContainerRuntime
+	materializer   *secrets.Materializer
+	domain         string
+	encKey         []byte
 	picoclawLLMCfg *picoclaw.LLMProxyConfig
-	templates     *template.Template
-	funcMap       template.FuncMap
+	templates      *template.Template
+	funcMap        template.FuncMap
 }
 
 // NewDashboard creates a Dashboard and parses all HTML templates.
@@ -62,14 +62,14 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 	}
 
 	return &Dashboard{
-		db:            database,
-		runtime:       rt,
-		materializer:  materializer,
-		domain:        domain,
-		encKey:        encKey,
+		db:             database,
+		runtime:        rt,
+		materializer:   materializer,
+		domain:         domain,
+		encKey:         encKey,
 		picoclawLLMCfg: picoclawLLM,
-		templates:     tmpl,
-		funcMap:       funcMap,
+		templates:      tmpl,
+		funcMap:        funcMap,
 	}, nil
 }
 
@@ -83,6 +83,7 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms/{id}/start", d.postStartVM)
 	r.Post("/vms/{id}/stop", d.postStopVM)
 	r.Post("/vms/{id}/recreate", d.postRecreateVM)
+	r.Post("/vms/{id}/publish", d.postPublish)
 	r.Delete("/vms/{id}", d.deleteVM)
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)

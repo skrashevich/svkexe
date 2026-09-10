@@ -110,6 +110,12 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	// The name becomes a subdomain label, so it has to be checked here too and
+	// not only on the REST path.
+	if !dbpkg.ValidContainerName(name) {
+		http.Error(w, `Use lowercase letters, digits and hyphens (2-63 chars). Names may not start with "agent-" or a port prefix like "3000-".`, http.StatusBadRequest)
+		return
+	}
 
 	cpuLimit := formInt(r, "cpu_limit", 2)
 	memoryMB := formInt(r, "memory_mb", 2048)

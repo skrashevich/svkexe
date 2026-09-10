@@ -13,7 +13,7 @@ See [agent architecture, build and migration](docs/PICOCLAW.md) for the preserve
 
 - **Persistent Linux VMs** via Incus LXC containers with native systemd
 - **PicoClaw coding agent with Shelley UI** per container — web-based, multi-conversation, multi-model AI assistant
-- **Dynamic subdomain routing** — each VM accessible at `https://{name}.yourdomain.com`
+- **Dynamic subdomain routing** — your workload at `https://{name}.yourdomain.com`, the agent at `https://agent-{name}.yourdomain.com`
 - **WebSocket/SSE proxy** for real-time PicoClaw interactions
 - **Web Shell** (xterm.js) for browser-based terminal access
 - **SSH Gateway** with interactive VM menu and direct connect (`ssh vm@host`)
@@ -209,6 +209,31 @@ The REST API accepts the same settings at `POST /api/keys`, for example:
 ```
 
 User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.
+
+### Workload routing
+
+Each VM exposes two different things, on two separate hosts:
+
+| URL | Serves | Who can reach it |
+|---|---|---|
+| `https://{name}.{domain}/` | your service, on the VM's configured port (default `3000`) | owner, share links, and anyone at all when the VM is public |
+| `https://{port}-{name}.{domain}/` | your service on any other port | owner and share links only |
+| `https://agent-{name}.{domain}/` | the PicoClaw web interface | the owner only |
+
+Set the port and the Private/Public switch on the VM card in the dashboard, or
+via `PUT /api/containers/{id}/publish` with `{"port":3000,"public":true}`.
+
+**Public** serves the configured port to anonymous visitors — use it when the
+service is meant to be public or does its own authentication. It applies to that
+one port and nothing else: `{port}-{name}` hosts and the agent always require
+your session. Switching back to Private closes access immediately.
+
+The workload never receives `X-ExeDev-*` identity headers in either mode, so it
+cannot mistake a gateway header for a signed-in user.
+
+Because these hosts are single-label, a wildcard `*.{domain}` certificate covers
+all of them. VM names therefore cannot start with `agent-` or a port prefix like
+`3000-`.
 
 ## Architecture
 

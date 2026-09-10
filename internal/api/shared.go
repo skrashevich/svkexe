@@ -31,7 +31,9 @@ func (s *Server) createSharedLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch container to get its name for building the URL.
+	// Fetch container to get its name for building the URL. A share points at
+	// the workload host: it grants access to what the VM serves, never to the
+	// agent, which can run commands inside the container.
 	container, err := s.db.GetContainerByID(containerID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

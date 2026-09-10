@@ -10,35 +10,7 @@ import (
 // Instead of coupling the test to the real db.DB, we verify behavior
 // via httptest by running a real backend server and a real proxy pointed at it.
 
-// TestExtractSubdomain verifies Host header parsing.
-func TestExtractSubdomain(t *testing.T) {
-	p := &ContainerProxy{domain: "example.com"}
-
-	cases := []struct {
-		host     string
-		wantName string
-		wantSvc  string
-		ok       bool
-	}{
-		{"mybox.example.com", "mybox", "", true},
-		{"mybox.example.com:8080", "mybox", "", true},
-		{"picoclaw.mybox.example.com", "mybox", "picoclaw", true},
-		{"shelley.mybox.example.com", "mybox", "shelley", true},
-		{"example.com", "", "", false},
-		{"other.domain.com", "", "", false},
-		{"a.b.c.example.com", "", "", false}, // triple-nested rejected
-		{"", "", "", false},
-		{".example.com", "", "", false},
-	}
-
-	for _, tc := range cases {
-		got, ok := p.extractSubdomain(tc.host)
-		if ok != tc.ok || got.ContainerName != tc.wantName || got.Service != tc.wantSvc {
-			t.Errorf("extractSubdomain(%q) = (%+v, %v), want (name=%q svc=%q, %v)",
-				tc.host, got, ok, tc.wantName, tc.wantSvc, tc.ok)
-		}
-	}
-}
+// Host parsing is covered by TestExtractSubdomainRoutes in routing_test.go.
 
 // TestIsRunning verifies status helper.
 func TestIsRunning(t *testing.T) {
@@ -165,12 +137,12 @@ func TestProxyContainerNotFound(t *testing.T) {
 
 func TestProxyOwnershipDenied(t *testing.T) {
 	containers := map[string]*fakeContainer{
-		"boxA": {ownerID: "userA", status: "running", ipAddress: "127.0.0.1"},
+		"box-a": {ownerID: "userA", status: "running", ipAddress: "127.0.0.1"},
 	}
 	tp := newTestProxy("example.com", containers)
 	rr := httptest.NewRecorder()
-	// userB tries to access boxA owned by userA
-	tp.ServeHTTP(rr, makeRequest("boxA.example.com", "userB"))
+	// userB tries to access box-a owned by userA
+	tp.ServeHTTP(rr, makeRequest("box-a.example.com", "userB"))
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", rr.Code)
 	}
@@ -178,12 +150,12 @@ func TestProxyOwnershipDenied(t *testing.T) {
 
 func TestProxyMissingUserID(t *testing.T) {
 	containers := map[string]*fakeContainer{
-		"boxA": {ownerID: "userA", status: "running", ipAddress: "127.0.0.1"},
+		"box-a": {ownerID: "userA", status: "running", ipAddress: "127.0.0.1"},
 	}
 	tp := newTestProxy("example.com", containers)
 	rr := httptest.NewRecorder()
 	// request with no X-ExeDev-Userid header
-	tp.ServeHTTP(rr, makeRequest("boxA.example.com", ""))
+	tp.ServeHTTP(rr, makeRequest("box-a.example.com", ""))
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for missing user, got %d", rr.Code)
 	}
@@ -191,11 +163,11 @@ func TestProxyMissingUserID(t *testing.T) {
 
 func TestProxyStoppedContainer(t *testing.T) {
 	containers := map[string]*fakeContainer{
-		"boxA": {ownerID: "userA", status: "stopped", ipAddress: "127.0.0.1"},
+		"box-a": {ownerID: "userA", status: "stopped", ipAddress: "127.0.0.1"},
 	}
 	tp := newTestProxy("example.com", containers)
 	rr := httptest.NewRecorder()
-	tp.ServeHTTP(rr, makeRequest("boxA.example.com", "userA"))
+	tp.ServeHTTP(rr, makeRequest("box-a.example.com", "userA"))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rr.Code)
 	}
@@ -212,11 +184,11 @@ func TestProxyForwardsToBackend(t *testing.T) {
 	backendAddr := backend.Listener.Addr().String()
 
 	containers := map[string]*fakeContainer{
-		"boxA": {ownerID: "userA", status: "running", ipAddress: backendAddr},
+		"box-a": {ownerID: "userA", status: "running", ipAddress: backendAddr},
 	}
 	tp := newTestProxy("example.com", containers)
 	rr := httptest.NewRecorder()
-	tp.ServeHTTP(rr, makeRequest("boxA.example.com", "userA"))
+	tp.ServeHTTP(rr, makeRequest("box-a.example.com", "userA"))
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200 from backend, got %d", rr.Code)
 	}

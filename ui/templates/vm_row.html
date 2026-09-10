@@ -7,15 +7,38 @@
         </div>
         {{if eq .Status "running"}}
         <div class="vm-card-links">
-            <a href="https://{{.Name}}.{{domain}}/" target="_blank" class="vm-link vm-link-accent">
+            <a href="https://agent-{{.Name}}.{{domain}}/" target="_blank" class="vm-link vm-link-accent">
                 PicoClaw
             </a>
-            <a href="https://{{.Name}}.{{domain}}/" target="_blank" class="vm-link">
+            <a href="https://{{.Name}}.{{domain}}/" target="_blank" class="vm-link"
+               title="Your service on port {{.AppPort}} in this VM">
                 Open &rarr;
             </a>
         </div>
         {{end}}
     </div>
+
+    <form class="vm-publish"
+        hx-post="/dashboard/vms/{{.ID}}/publish"
+        hx-target="#vm-{{.ID}}"
+        hx-swap="outerHTML">
+        <label class="vm-publish-field">
+            <span>Port</span>
+            <input name="app_port" type="number" min="1" max="65535" value="{{.AppPort}}">
+        </label>
+        <label class="vm-publish-field vm-publish-toggle">
+            <input name="app_public" type="checkbox" value="1" {{if .AppPublic}}checked{{end}}>
+            <span>Public</span>
+        </label>
+        <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+        <span class="vm-publish-hint">
+            {{if .AppPublic}}
+            Anyone with the link reaches port {{.AppPort}}. PicoClaw stays private.
+            {{else}}
+            Only you and share links reach port {{.AppPort}}.
+            {{end}}
+        </span>
+    </form>
 
     <div class="vm-card-specs">
         <div class="vm-spec">CPU <span class="vm-spec-val">{{.CPULimit}} vCPU</span></div>

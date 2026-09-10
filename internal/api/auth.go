@@ -49,10 +49,10 @@ func clearSessionCookie(w http.ResponseWriter) {
 
 // pageData is the root context passed to the inline HTML templates.
 type pageData struct {
-	Title        string
-	Error        string
+	Title         string
+	Error         string
 	AllowRegister bool
-	Email        string
+	Email         string
 }
 
 var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>

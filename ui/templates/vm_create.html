@@ -15,7 +15,12 @@
             <div class="form-group">
                 <label for="vm-name">Name</label>
                 <input type="text" id="vm-name" name="name" placeholder="my-vm" required
-                       pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, numbers and hyphens">
+                       pattern="(?!agent-)(?![0-9]{1,5}-)[a-z0-9][a-z0-9\-]{0,61}[a-z0-9]"
+                       title="Lowercase letters, numbers and hyphens (2-63 chars). Cannot start with &quot;agent-&quot; or a port prefix like &quot;3000-&quot;, which are reserved for VM URLs.">
+                <div class="form-hint">
+                    Becomes your VM's address: your service at <code>name.{{domain}}</code>,
+                    PicoClaw at <code>agent-name.{{domain}}</code>.
+                </div>
             </div>
             <div class="form-group">
                 <label for="vm-cpu">CPU</label>

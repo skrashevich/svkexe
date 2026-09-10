@@ -297,6 +297,41 @@
         .vm-link-accent { color: var(--accent); border-color: oklch(0.76 0.18 45 / 0.3); }
         .vm-link-accent:hover { border-color: var(--accent); }
 
+        .vm-publish {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+            padding: 10px 14px;
+            background: var(--bg-inset);
+            border: 1px solid var(--line-soft);
+            border-radius: var(--radius);
+        }
+        .vm-publish-field {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--fg-mute);
+        }
+        .vm-publish-field input[type="number"] {
+            width: 84px;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            color: var(--fg);
+            background: var(--bg);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+        .vm-publish-toggle { cursor: pointer; }
+        .vm-publish-hint {
+            flex: 1 1 100%;
+            font-size: 0.7rem;
+            color: var(--fg-mute);
+        }
+
         .vm-card-specs {
             display: grid;
             grid-template-columns: 1fr 1fr;

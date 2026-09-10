@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,12 +49,6 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep old Shelley links working while exposing the PicoClaw service name.
-	if info.Service != "" && info.Service != "shelley" && info.Service != "picoclaw" {
-		http.Error(w, "unknown service", http.StatusNotFound)
-		return
-	}
-
 	// Security Invariant S2 / S3: identity comes from the session cookie — we
 	// never trust incoming X-ExeDev-* headers for subdomain traffic.
 	userID := p.authenticate(r)
@@ -62,11 +58,28 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var container *db.Container
 	var err error
 
+	// A published workload is reachable without any credential. Only the bare
+	// VM host qualifies: the agent can run commands, and an explicit-port host
+	// would expose listeners the owner never chose to publish.
+	if info.Kind == routeApp && info.Port == 0 && userID == "" {
+		public, publicErr := p.db.GetContainerByNameOnly(info.ContainerName)
+		if publicErr == nil && public.AppPublic {
+			p.forward(w, r, public, public.AppPort)
+			return
+		}
+	}
+
 	shareToken := r.URL.Query().Get("share")
 	if shareToken == "" {
 		if cookie, err := r.Cookie("svkexe_share"); err == nil {
 			shareToken = cookie.Value
 		}
+	}
+	// A share grants the workload, never the agent: handing out a shell is not
+	// what "share this VM" should mean.
+	if shareToken != "" && info.Kind == routeAgent {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 	if shareToken != "" {
 		link, linkErr := p.db.GetSharedLinkByToken(shareToken)
@@ -87,10 +100,11 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		// The agent requires a trusted identity even for shared access. A
-		// host-only cookie carries the grant to subsequent API and asset calls;
+		// A host-only cookie carries the grant to subsequent API and asset calls;
 		// validating it on every request makes revocation immediate.
-		r.Header.Set("X-ExeDev-Userid", "share:"+link.ID)
+		if info.Kind == routeAgent {
+			r.Header.Set("X-ExeDev-Userid", "share:"+link.ID)
+		}
 		if r.URL.Query().Get("share") != "" {
 			http.SetCookie(w, &http.Cookie{Name: "svkexe_share", Value: shareToken,
 				Path: "/", HttpOnly: true, Secure: p.domain != "", SameSite: http.SameSiteLaxMode,
@@ -109,7 +123,11 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		r.Header.Set("X-ExeDev-Userid", userID)
+		// Only the agent consumes this header; the workload authenticates its
+		// own users and must not treat a gateway header as proof of identity.
+		if info.Kind == routeAgent {
+			r.Header.Set("X-ExeDev-Userid", userID)
+		}
 	} else {
 		if strings.Contains(r.Header.Get("Accept"), "text/html") {
 			http.Redirect(w, r, "https://"+p.domain+"/login", http.StatusSeeOther)
@@ -119,6 +137,18 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	port := agentPort
+	if info.Kind == routeApp {
+		port = container.AppPort
+		if info.Port != 0 {
+			port = info.Port
+		}
+	}
+	p.forward(w, r, container, port)
+}
+
+// forward proxies an authorized request to the given in-VM port.
+func (p *ContainerProxy) forward(w http.ResponseWriter, r *http.Request, container *db.Container, port int) {
 	// Reject requests to stopped containers.
 	if !isRunning(container.Status) {
 		http.Error(w, "container is not running", http.StatusServiceUnavailable)
@@ -145,24 +175,50 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target := &url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(container.IPAddress, fmt.Sprintf("%d", agentPort)),
+		Host:   net.JoinHostPort(container.IPAddress, strconv.Itoa(port)),
 	}
 
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	proxy := newReverseProxy(target)
+	// A dead port is the owner's own misconfiguration, not a gateway fault, so
+	// say which port had no listener instead of a bare "internal error".
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("proxy: %s port %d unreachable: %v", container.IncusName, port, err)
+		http.Error(w, fmt.Sprintf("nothing is listening on port %d in this VM", port), http.StatusBadGateway)
+	}
 	proxy.ServeHTTP(w, r)
 }
+
+// routeKind distinguishes the two things a VM exposes.
+type routeKind int
+
+const (
+	// routeApp is the user's own workload — the point of the VM.
+	routeApp routeKind = iota
+	// routeAgent is the PicoClaw web interface.
+	routeAgent
+)
+
+// explicitPortRE splits the "{port}-{name}" workload host.
+var explicitPortRE = regexp.MustCompile(`^([0-9]{1,5})-(.+)$`)
 
 // subdomainInfo holds the result of parsing a subdomain.
 type subdomainInfo struct {
 	// ContainerName is the VM name portion of the subdomain.
 	ContainerName string
-	// Service is the optional service prefix (e.g. "shelley"). Empty for direct VM access.
-	Service string
+	// Kind selects the workload or the agent.
+	Kind routeKind
+	// Port overrides the VM's configured app port. Zero means "use the
+	// configured one" and is the only form eligible for public access.
+	Port int
 }
 
-// extractSubdomain parses "{name}.{domain}" or "{service}.{name}.{domain}"
-// from the Host header. Returns the parsed info and true on success.
+// extractSubdomain parses the Host header into a route. Recognized forms:
+//
+//	{name}.{domain}          the workload, on the VM's configured port
+//	{port}-{name}.{domain}   the workload, on an explicit port
+//	agent-{name}.{domain}    the PicoClaw interface
+//	{picoclaw|shelley}.{name}.{domain}  legacy agent links
 func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
 	// Strip port if present.
 	h := host
@@ -183,17 +239,40 @@ func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
 		return subdomainInfo{}, false
 	}
 
-	// Check for service.name pattern (e.g. "picoclaw.my-vm").
-	if idx := strings.IndexByte(prefix, '.'); idx != -1 {
-		service := prefix[:idx]
-		name := prefix[idx+1:]
-		if name == "" || strings.Contains(name, ".") {
+	// Legacy "{service}.{name}" links from before the agent moved to its own
+	// single-label host. Kept working; they need extra certificate coverage.
+	if service, name, nested := strings.Cut(prefix, "."); nested {
+		if service != "picoclaw" && service != "shelley" {
 			return subdomainInfo{}, false
 		}
-		return subdomainInfo{ContainerName: name, Service: service}, true
+		if !db.ValidContainerName(name) {
+			return subdomainInfo{}, false
+		}
+		return subdomainInfo{ContainerName: name, Kind: routeAgent}, true
 	}
 
-	return subdomainInfo{ContainerName: prefix}, true
+	if name, ok := strings.CutPrefix(prefix, db.AgentHostPrefix); ok {
+		if !db.ValidContainerName(name) {
+			return subdomainInfo{}, false
+		}
+		return subdomainInfo{ContainerName: name, Kind: routeAgent}, true
+	}
+
+	if m := explicitPortRE.FindStringSubmatch(prefix); m != nil {
+		port, err := strconv.Atoi(m[1])
+		if err != nil || !db.ValidAppPort(port) {
+			return subdomainInfo{}, false
+		}
+		if !db.ValidContainerName(m[2]) {
+			return subdomainInfo{}, false
+		}
+		return subdomainInfo{ContainerName: m[2], Kind: routeApp, Port: port}, true
+	}
+
+	if !db.ValidContainerName(prefix) {
+		return subdomainInfo{}, false
+	}
+	return subdomainInfo{ContainerName: prefix, Kind: routeApp}, true
 }
 
 // isRunning returns true for statuses considered "running".

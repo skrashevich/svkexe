@@ -128,6 +128,7 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 			r.Post("/start", s.startContainer)
 			r.Post("/stop", s.stopContainer)
 			r.Post("/recreate", s.recreateContainer)
+			r.Put("/publish", s.updatePublish)
 			r.Post("/share", s.createSharedLink)
 			r.Get("/shares", s.listSharedLinks)
 		})

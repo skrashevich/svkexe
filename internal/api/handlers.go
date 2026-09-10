@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -22,10 +21,8 @@ func containerIDFromURL(r *http.Request) string {
 	return chi.URLParam(r, "id")
 }
 
-var containerNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-
 func validContainerName(name string) bool {
-	return len(name) >= 2 && len(name) <= 63 && containerNameRE.MatchString(name)
+	return dbpkg.ValidContainerName(name)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -68,7 +65,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validContainerName(req.Name) {
-		http.Error(w, "invalid container name: use lowercase letters, digits, and hyphens (2-63 chars)", http.StatusBadRequest)
+		http.Error(w, "invalid container name: use lowercase letters, digits, and hyphens (2-63 chars); names may not start with \"agent-\" or a port prefix like \"3000-\"", http.StatusBadRequest)
 		return
 	}
 	if _, err := s.db.GetContainerByName(req.Name, userID); err == nil {

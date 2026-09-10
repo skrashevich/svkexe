@@ -69,6 +69,22 @@ func (db *DB) migrate() error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS containers_owner_name_idx ON containers(owner_id, name)`); err != nil {
 		return fmt.Errorf("create containers_owner_name_idx: %w", err)
 	}
+	// Existing VMs must stay private after the upgrade, so both columns default
+	// to the safe value rather than to whatever the workload happens to serve.
+	for column, definition := range map[string]string{
+		"app_port":   "INTEGER NOT NULL DEFAULT 3000",
+		"app_public": "INTEGER NOT NULL DEFAULT 0",
+	} {
+		exists, err := columnExists(db, "containers", column)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.Exec("ALTER TABLE containers ADD COLUMN " + column + " " + definition); err != nil {
+				return err
+			}
+		}
+	}
 	for _, column := range []string{"base_url", "models"} {
 		exists, err := columnExists(db, "api_keys", column)
 		if err != nil {

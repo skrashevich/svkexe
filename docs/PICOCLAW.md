@@ -8,8 +8,8 @@ Each VM runs `/usr/local/bin/picoclaw` on port 9000. This is svkexe's integratio
 - The original rich prompt/history representation, including images, reasoning blocks, tool IDs, usage accounting and ordered tool-result persistence. A provider adapter avoids converting these into plain text.
 - The existing application API and database schema. Conversation history survives the upgrade; only the file names change (see below).
 - Guest state lives at `/data/picoclaw.db`, `/etc/picoclaw/picoclaw.json` and `/etc/picoclaw/env`. Pre-rename VMs carried `/data/shelley.db` and `/etc/shelley/`; setup moves them, including any `-wal`/`-shm` sidecars, and the move is conditional so repeated setups stay idempotent.
-- `https://<vm>.<domain>/`, `https://picoclaw.<vm>.<domain>/` and old `https://shelley.<vm>.<domain>/` links use the same ownership-checked proxy.
-- The dashboard uses `<vm>.<domain>` so a normal `*.<domain>` TLS certificate covers agent links. Service-prefixed aliases require additional certificate coverage at the external reverse proxy.
+- The agent is served at `https://agent-<vm>.<domain>/`, on its own single-label host so a normal `*.<domain>` TLS certificate covers it. Legacy `https://picoclaw.<vm>.<domain>/` and `https://shelley.<vm>.<domain>/` links still resolve, but nested hosts need extra certificate coverage at the external reverse proxy.
+- `https://<vm>.<domain>/` serves the user's own workload, not the agent. See [workload routing](../README.md#workload-routing).
 - The former `/usr/local/bin/shelley` symlink and `shelley.service` alias are removed during migration, so the guest exposes only the name that actually runs.
 - Provider keys configured by the user still use the retained model adapters. The gateway's custom models use the exact `/api/llm/v1` endpoint and internal bearer token. `llm_gateway` is deliberately not set: that Shelley setting expects exe.dev's provider-specific API.
 

@@ -198,6 +198,74 @@ func TestCardShowsTaskAndRetries(t *testing.T) {
 	}
 }
 
+// A VM that is off has no agent running, so its card must not claim the task is
+// being handed over; the state is read back when the VM starts again.
+func TestCardShowsAnInProgressTaskOnHoldWhileTheVMIsOff(t *testing.T) {
+	router, database, owner := newPublishDashboard(t)
+	if err := database.CreateContainer(&db.Container{
+		ID: "vm", Name: "box", OwnerID: owner.ID, IncusName: "box", Status: "running",
+		InitialTask: "install nginx",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetInitialTaskState("vm", db.TaskSent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	body := post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
+	if !strings.Contains(body, "handed to the agent, starting") {
+		t.Error("a running VM stopped reporting the hand-over")
+	}
+
+	if err := database.UpdateContainerStatus("vm", "stopped", ""); err != nil {
+		t.Fatal(err)
+	}
+	body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
+	if strings.Contains(body, "handed to the agent, starting") {
+		t.Error("a stopped VM still claims the agent is starting")
+	}
+	if !strings.Contains(body, "on hold while the VM is not running") {
+		t.Errorf("card does not say the task is on hold: %s", body)
+	}
+	if strings.Contains(body, "vm-task-spinner") {
+		t.Error("a stopped VM still spins on its task")
+	}
+
+	// A VM in error or being rebuilt is not polled either, so its card must not
+	// claim the agent is starting.
+	for _, status := range []string{"error", "recreating"} {
+		if err := database.UpdateContainerStatus("vm", status, ""); err != nil {
+			t.Fatal(err)
+		}
+		body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
+		if strings.Contains(body, "handed to the agent, starting") {
+			t.Errorf("a VM in %q still claims the agent is starting", status)
+		}
+	}
+
+	// A VM that is still being created is not off: the task really was just
+	// handed over, because delivery runs before the VM is marked running.
+	if err := database.UpdateContainerStatus("vm", "creating", ""); err != nil {
+		t.Fatal(err)
+	}
+	body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
+	if !strings.Contains(body, "handed to the agent, starting") {
+		t.Error("a VM that is still coming up reports its task as on hold")
+	}
+
+	// The state itself must survive, so the next start can resolve it.
+	if err := database.UpdateContainerStatus("vm", "stopped", ""); err != nil {
+		t.Fatal(err)
+	}
+	c, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialTaskState != db.TaskSent {
+		t.Fatalf("state=%q, want it kept at %q", c.InitialTaskState, db.TaskSent)
+	}
+}
+
 func TestRetryTaskEnforcesOwnership(t *testing.T) {
 	router, database, _ := newPublishDashboard(t)
 	if _, err := database.EnsureUser("intruder", "intruder@example.com"); err != nil {

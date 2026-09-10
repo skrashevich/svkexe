@@ -131,6 +131,61 @@ func TestRetryOnlyFromFailed(t *testing.T) {
 	}
 }
 
+// A task delivered by a gateway that did not yet record conversations still
+// has to be polled, otherwise it reports "handed to the agent" for good.
+func TestListContainersWithTaskInProgressIncludesUnrecordedConversation(t *testing.T) {
+	database := newTaskDB(t)
+	if err := database.CreateContainer(&Container{
+		ID: "vm", Name: "box", OwnerID: "owner", IncusName: "box", Status: "running",
+		InitialTask: "do the thing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetInitialTaskState("vm", TaskSent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := database.ListContainersWithTaskInProgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != "vm" {
+		t.Fatalf("got %d VMs to poll, want the one with the unrecorded conversation", len(pending))
+	}
+
+	// Once the conversation is known it is neither overwritten by a later
+	// lookup nor reported as recorded, so no caller polls one the VM never
+	// agreed to.
+	if err := database.SetInitialTaskConversation("vm", "cFOUND"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetInitialTaskConversation("vm", "cOTHER"); err == nil {
+		t.Fatal("a known conversation was silently replaced")
+	}
+	c, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialTaskConversation != "cFOUND" {
+		t.Fatalf("conversation=%q, want the first one recorded", c.InitialTaskConversation)
+	}
+	if c.InitialTaskState != TaskSent {
+		t.Fatalf("state=%q, recording a conversation must not change it", c.InitialTaskState)
+	}
+
+	// A stopped VM cannot answer, so it is not polled until it starts again.
+	if err := database.UpdateContainerStatus("vm", "stopped", ""); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = database.ListContainersWithTaskInProgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("got %d VMs to poll, want none while the VM is stopped", len(pending))
+	}
+}
+
 func TestRetryWithoutTaskFails(t *testing.T) {
 	database := newTaskDB(t)
 	if err := database.CreateContainer(&Container{

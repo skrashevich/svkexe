@@ -28,6 +28,8 @@
             <span class="vm-task-label">Initial task</span>
             {{if eq .InitialTaskState "pending"}}
             <span class="vm-task-state">waiting for the VM to come up</span>
+            {{else if and (ne .Status "running") (ne .Status "creating") (or (eq .InitialTaskState "sent") (eq .InitialTaskState "working"))}}
+            <span class="vm-task-state">on hold while the VM is not running; picked back up on its next start</span>
             {{else if eq .InitialTaskState "sent"}}
             <span class="vm-task-spinner" aria-hidden="true"></span>
             <span class="vm-task-state">handed to the agent, starting…</span>

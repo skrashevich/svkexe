@@ -316,12 +316,38 @@ func (db *DB) SetInitialTaskDelivered(id, conversationID string) error {
 	return nil
 }
 
+// SetInitialTaskConversation records the conversation a delivered task turned
+// out to run in, without touching its state. It only fills a gap: a task whose
+// conversation is already known is left alone.
+func (db *DB) SetInitialTaskConversation(id, conversationID string) error {
+	res, err := db.Exec(
+		`UPDATE containers SET initial_task_conversation = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND initial_task_conversation = ''`,
+		conversationID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("record initial task conversation: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record initial task conversation: %w", err)
+	}
+	// Saying nothing here would leave the caller believing a conversation it
+	// does not have, and polling one the VM never agreed to.
+	if changed == 0 {
+		return fmt.Errorf("no task waiting for conversation %q", conversationID)
+	}
+	return nil
+}
+
 // ListContainersWithTaskInProgress returns the running VMs whose task is still
-// expected to progress, i.e. the ones worth polling the agent about.
+// expected to progress, i.e. the ones worth polling the agent about. A VM whose
+// conversation was never recorded is included too: the gateway has to look that
+// conversation up rather than leave the task reported as starting forever.
 func (db *DB) ListContainersWithTaskInProgress() ([]*Container, error) {
 	rows, err := db.Query(
 		`SELECT `+containerColumns+` FROM containers
-		 WHERE initial_task_conversation != '' AND initial_task_state IN (?, ?) AND status = 'running'
+		 WHERE initial_task_state IN (?, ?) AND status = 'running'
 		 ORDER BY updated_at`,
 		TaskSent, TaskWorking,
 	)

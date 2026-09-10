@@ -2,6 +2,7 @@ package picoclaw
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"regexp"
@@ -81,15 +82,24 @@ func RefreshTaskState(ctx context.Context, rt runtime.ContainerRuntime, database
 	if c == nil || rt == nil || database == nil {
 		return nil
 	}
-	if !db.TaskInProgress(c.InitialTaskState) || c.InitialTaskConversation == "" {
+	if !db.TaskInProgress(c.InitialTaskState) {
 		return nil
-	}
-	if !validConversationID(c.InitialTaskConversation) {
-		return fmt.Errorf("task progress for %s: refusing conversation ID %q", c.IncusName, c.InitialTaskConversation)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, taskPollTimeout)
 	defer cancel()
+
+	if c.InitialTaskConversation == "" {
+		if err := adoptConversation(ctx, rt, database, c); err != nil {
+			return err
+		}
+		if c.InitialTaskConversation == "" {
+			return nil
+		}
+	}
+	if !validConversationID(c.InitialTaskConversation) {
+		return fmt.Errorf("task progress for %s: refusing conversation ID %q", c.IncusName, c.InitialTaskConversation)
+	}
 
 	state, reason, err := pollTaskState(ctx, rt, c.IncusName, c.InitialTaskConversation)
 	if err != nil {
@@ -105,6 +115,82 @@ func RefreshTaskState(ctx context.Context, rt runtime.ContainerRuntime, database
 	return nil
 }
 
+// lostConversationReason is what the owner is told when the task cannot be
+// traced back to a conversation. Retrying hands the task over again, which is
+// the only way left to get an answer.
+const lostConversationReason = "the gateway cannot tell which conversation this task runs in; retry to hand it to the agent again"
+
+// adoptConversation fills in the conversation a delivered task actually runs
+// in. Gateways older than the initial_task_conversation column handed tasks to
+// the agent without recording the conversation, and those VMs would otherwise
+// report "handed to the agent" for good: nothing polls them, and only a failed
+// task can be retried. On c the conversation is left empty when the task was
+// given up on, so the caller stops rather than polling nothing.
+func adoptConversation(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) error {
+	if strings.TrimSpace(c.InitialTask) == "" {
+		// Nothing to look up and nothing to retry either, so the state is left
+		// exactly as it is rather than pointing the owner at a dead button.
+		return nil
+	}
+	found, err := findConversationByTask(ctx, rt, c.IncusName, c.InitialTask)
+	if err != nil {
+		return fmt.Errorf("find the conversation of the task on %s: %w", c.IncusName, err)
+	}
+	if found == "" {
+		if err := database.SetInitialTaskState(c.ID, db.TaskFailed, lostConversationReason); err != nil {
+			return fmt.Errorf("record the lost task on %s: %w", c.IncusName, err)
+		}
+		c.InitialTaskState = db.TaskFailed
+		c.InitialTaskError = lostConversationReason
+		log.Printf("picoclaw: task on %s has no conversation in the VM; owner has to retry it", c.IncusName)
+		return nil
+	}
+	if err := database.SetInitialTaskConversation(c.ID, found); err != nil {
+		return fmt.Errorf("record the conversation of the task on %s: %w", c.IncusName, err)
+	}
+	c.InitialTaskConversation = found
+	log.Printf("picoclaw: task on %s runs in conversation %s", c.IncusName, found)
+	return nil
+}
+
+// findConversationByTask returns the conversation whose opening request is this
+// VM's task, or "" when the agent has no such conversation. The task is
+// user-supplied text, so it travels as a hex literal: nothing but [0-9a-f]
+// reaches the VM, and there is no quoting left for it to escape.
+func findConversationByTask(ctx context.Context, rt runtime.ContainerRuntime, incusName, task string) (string, error) {
+	// sequence_id is numbered per conversation, so a conversation's opening
+	// request is the lowest one of its own. Should several conversations open
+	// with the same text, the newest is the one the last delivery started.
+	query := fmt.Sprintf(
+		`SELECT conversation_id FROM messages AS m WHERE type='user'`+
+			` AND json_extract(llm_data, '$.Content[0].Text') = CAST(x'%s' AS TEXT)`+
+			` AND sequence_id = (SELECT MIN(sequence_id) FROM messages AS m2`+
+			` WHERE m2.conversation_id = m.conversation_id AND m2.type='user')`+
+			` ORDER BY created_at DESC, rowid DESC LIMIT 1;`,
+		hex.EncodeToString([]byte(task)))
+	out, err := queryAgentDB(ctx, rt, incusName, query)
+	if err != nil {
+		return "", err
+	}
+	found := strings.TrimSpace(string(out))
+	if found == "" {
+		return "", nil
+	}
+	if !validConversationID(found) {
+		return "", fmt.Errorf("agent named conversation %q", found)
+	}
+	return found, nil
+}
+
+// queryAgentDB asks the agent's own database a question. It is opened
+// read-only: watching a task must not disturb the agent, and must not bring a
+// missing database into existence either — sqlite3 creates an empty file for a
+// failing read, and an empty file at DBPath would silently defeat the
+// shelley.db migration a VM that has not been set up yet still needs.
+func queryAgentDB(ctx context.Context, rt runtime.ContainerRuntime, incusName, query string) ([]byte, error) {
+	return rt.Exec(ctx, incusName, []string{"sqlite3", "-readonly", DBPath, query})
+}
+
 // pollTaskState reads the agent's own database. agent_working is the flag the
 // agent loop keeps while a turn runs, and the last message of the conversation
 // says how the turn ended: an "agent" message is a completed answer, an
@@ -114,7 +200,7 @@ func pollTaskState(ctx context.Context, rt runtime.ContainerRuntime, incusName, 
 		`SELECT COALESCE((SELECT agent_working FROM conversations WHERE conversation_id='%[1]s'), -1)`+
 			` || '|' || COALESCE((SELECT type FROM messages WHERE conversation_id='%[1]s' ORDER BY sequence_id DESC LIMIT 1), '');`,
 		conversationID)
-	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, query})
+	out, err := queryAgentDB(ctx, rt, incusName, query)
 	if err != nil {
 		return "", "", err
 	}
@@ -156,7 +242,7 @@ func taskErrorText(ctx context.Context, rt runtime.ContainerRuntime, incusName, 
 		`SELECT COALESCE(json_extract(llm_data, '$.Content[0].Text'), '') FROM messages`+
 			` WHERE conversation_id='%s' AND type='error' ORDER BY sequence_id DESC LIMIT 1;`,
 		conversationID)
-	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, query})
+	out, err := queryAgentDB(ctx, rt, incusName, query)
 	if err != nil {
 		return fallback
 	}

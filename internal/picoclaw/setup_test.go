@@ -29,6 +29,9 @@ type guestRuntime struct {
 	progress string
 	// agentError is the text stored on the task's last error message.
 	agentError string
+	// taskLookup is the conversation the agent's database reports for a task
+	// whose conversation the gateway never recorded.
+	taskLookup string
 }
 
 func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, error) {
@@ -67,6 +70,8 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 		return []byte(`{"status":"accepted","conversation_id":"cTASK01"}`), nil
 	case strings.Contains(text, "agent_working"):
 		return []byte(g.progress + "\n"), nil
+	case strings.Contains(text, "CAST(x'"):
+		return []byte(g.taskLookup + "\n"), nil
 	case strings.Contains(text, "json_extract(llm_data"):
 		return []byte(g.agentError + "\n"), nil
 	}

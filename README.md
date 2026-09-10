@@ -291,7 +291,12 @@ Delivery happens once, and the VM card then follows the work itself:
 | `failed` | delivery failed, or the agent ended on an error — the reason is shown |
 
 The gateway polls the agent every 15 seconds for as long as a task can still
-change state, and stops once it is `done` or `failed`. A failure is most often
+change state, and stops once it is `done` or `failed`. Only a running VM is
+polled; while one is off, its card says the task is on hold and picks the real
+state back up on the next start. A task the gateway cannot trace to a
+conversation — a VM whose task was handed over before the gateway recorded
+conversations — is found again by its opening message, and only reported
+`failed` when the agent has no such conversation. A failure is most often
 no configured model, which you fix by adding an LLM key and pressing Retry; a
 failed task never retries by itself, so nothing fires unexpectedly on a later
 restart. While a task is live the card links straight to its conversation in the

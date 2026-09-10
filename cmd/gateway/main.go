@@ -229,11 +229,14 @@ func main() {
 	// Upgrade agents in running VMs; stopped VMs are handled on their next start.
 	agentCtx, stopAgents := context.WithCancel(context.Background())
 	defer stopAgents()
-	go picoclaw.ReconcileRunning(agentCtx, database, rt, materializer, picoclawLLM)
-
-	// Follow the tasks handed to agents, so the dashboard shows whether one is
-	// still working, finished, or failed.
-	go picoclaw.MonitorTasks(agentCtx, database, rt, picoclaw.TaskPollInterval)
+	// Only once that pass is done are the tasks handed to agents followed, so
+	// the dashboard learns whether each one is still working, finished or
+	// failed: a VM polled mid-upgrade is asked about an agent that is still
+	// being installed and migrated.
+	go func() {
+		picoclaw.ReconcileRunning(agentCtx, database, rt, materializer, picoclawLLM)
+		picoclaw.MonitorTasks(agentCtx, database, rt, picoclaw.TaskPollInterval)
+	}()
 
 	// Re-check routed custom domains, so a name whose owner repointed it stops
 	// being served — and stops being a certificate this gateway renews — instead

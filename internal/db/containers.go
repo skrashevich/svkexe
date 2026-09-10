@@ -17,6 +17,16 @@ const (
 	// AgentPort mirrors picoclaw.Port — redeclared here to avoid importing the
 	// picoclaw package, which already depends on this one.
 	AgentPort = 9000
+
+	// MaxInitialTaskLen bounds the free-text task handed to the agent.
+	MaxInitialTaskLen = 4000
+
+	// TaskPending means the task still has to reach the agent.
+	TaskPending = "pending"
+	// TaskSent means the agent accepted the task and opened a conversation.
+	TaskSent = "sent"
+	// TaskFailed means delivery failed; the owner has to retry explicitly.
+	TaskFailed = "failed"
 )
 
 // Container represents a managed Incus container.
@@ -35,17 +45,26 @@ type Container struct {
 	// AppPublic serves the workload without a session. It never applies to the
 	// agent or to explicit-port hosts.
 	AppPublic bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// InitialTask is free text handed to the agent once, right after the VM
+	// first comes up.
+	InitialTask string
+	// InitialTaskState is empty when no task was requested, otherwise
+	// TaskPending, TaskSent or TaskFailed.
+	InitialTaskState string
+	// InitialTaskError explains the last failed delivery.
+	InitialTaskError string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // containerColumns keeps every read of a container in sync.
-const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, created_at, updated_at`
+const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, created_at, updated_at`
 
 func scanContainer(row interface{ Scan(...any) error }) (*Container, error) {
 	c := &Container{}
 	err := row.Scan(&c.ID, &c.Name, &c.OwnerID, &c.IncusName, &c.Status, &c.IPAddress,
-		&c.CPULimit, &c.MemoryMB, &c.DiskGB, &c.AppPort, &c.AppPublic, &c.CreatedAt, &c.UpdatedAt)
+		&c.CPULimit, &c.MemoryMB, &c.DiskGB, &c.AppPort, &c.AppPublic,
+		&c.InitialTask, &c.InitialTaskState, &c.InitialTaskError, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +123,22 @@ func (db *DB) CreateContainer(c *Container) error {
 	if !ValidAppPort(c.AppPort) {
 		return fmt.Errorf("invalid app port %d", c.AppPort)
 	}
+	c.InitialTask = strings.TrimSpace(c.InitialTask)
+	if len(c.InitialTask) > MaxInitialTaskLen {
+		return fmt.Errorf("task must be at most %d characters", MaxInitialTaskLen)
+	}
+	// Asking for a task is what queues it; a VM without one must stay inert.
+	if c.InitialTask != "" {
+		c.InitialTaskState = TaskPending
+	} else {
+		c.InitialTaskState = ""
+	}
 	_, err := db.Exec(
-		`INSERT INTO containers (id, name, owner_id, incus_name, status, ip_address, cpu_limit, memory_mb, disk_gb, app_port, app_public)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO containers (id, name, owner_id, incus_name, status, ip_address, cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.Name, c.OwnerID, c.IncusName, c.Status, c.IPAddress,
 		c.CPULimit, c.MemoryMB, c.DiskGB, c.AppPort, c.AppPublic,
+		c.InitialTask, c.InitialTaskState,
 	)
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)
@@ -220,6 +250,39 @@ func (db *DB) DeleteContainer(id string) error {
 	_, err := db.Exec(`DELETE FROM containers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete container: %w", err)
+	}
+	return nil
+}
+
+// SetInitialTaskState records the outcome of a delivery attempt.
+func (db *DB) SetInitialTaskState(id, state, reason string) error {
+	_, err := db.Exec(
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		state, reason, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update initial task state: %w", err)
+	}
+	return nil
+}
+
+// RetryInitialTask re-queues a failed task. Delivery never retries on its own,
+// so a task written weeks ago cannot fire on an unrelated restart.
+func (db *DB) RetryInitialTask(id string) error {
+	res, err := db.Exec(
+		`UPDATE containers SET initial_task_state = ?, initial_task_error = '', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND initial_task != '' AND initial_task_state = ?`,
+		TaskPending, id, TaskFailed,
+	)
+	if err != nil {
+		return fmt.Errorf("retry initial task: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("retry initial task: %w", err)
+	}
+	if changed == 0 {
+		return fmt.Errorf("no failed task to retry")
 	}
 	return nil
 }

@@ -49,6 +49,8 @@ type createContainerRequest struct {
 	CPULimit int    `json:"cpu_limit"`
 	MemoryMB int    `json:"memory_mb"`
 	DiskGB   int    `json:"disk_gb"`
+	// InitialTask is handed to the agent once the VM is up.
+	InitialTask string `json:"initial_task"`
 }
 
 // createContainer handles POST /api/containers
@@ -111,6 +113,8 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		CPULimit:  req.CPULimit,
 		MemoryMB:  req.MemoryMB,
 		DiskGB:    req.DiskGB,
+
+		InitialTask: req.InitialTask,
 	}
 	if err := s.db.CreateContainer(dbContainer); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -127,6 +131,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, dbContainer.ID)
 	}
 
 	writeJSON(w, http.StatusCreated, dbContainer)
@@ -303,6 +308,7 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		picoclaw.DeliverInitialTaskByID(setupCtx, s.runtime, s.db, id)
 	}
 
 	// Fetch fresh IP from runtime after start.

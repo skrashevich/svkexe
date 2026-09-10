@@ -238,6 +238,7 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
 		}
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -298,6 +299,7 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
 		}
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)

@@ -74,6 +74,11 @@ func (db *DB) migrate() error {
 	for column, definition := range map[string]string{
 		"app_port":   "INTEGER NOT NULL DEFAULT 3000",
 		"app_public": "INTEGER NOT NULL DEFAULT 0",
+		// An upgraded VM has no queued task, so the empty state keeps delivery
+		// from firing on its next start.
+		"initial_task":       "TEXT NOT NULL DEFAULT ''",
+		"initial_task_state": "TEXT NOT NULL DEFAULT ''",
+		"initial_task_error": "TEXT NOT NULL DEFAULT ''",
 	} {
 		exists, err := columnExists(db, "containers", column)
 		if err != nil {

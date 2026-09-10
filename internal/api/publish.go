@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/picoclaw"
 )
 
 // publishRequest is the JSON body for PUT /api/containers/{id}/publish.
@@ -36,6 +37,25 @@ func (s *Server) updatePublish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save publish settings", http.StatusInternalServerError)
 		return
 	}
+	c, err := s.db.GetContainerByID(id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// retryInitialTask handles POST /api/containers/{id}/task/retry. Ownership is
+// enforced by OwnershipMiddleware on the parent route.
+func (s *Server) retryInitialTask(w http.ResponseWriter, r *http.Request) {
+	id := containerIDFromURL(r)
+	if err := s.db.RetryInitialTask(id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Delivery records its own outcome, so the VM is re-read afterwards to
+	// report whether this attempt actually reached the agent.
+	picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, id)
 	c, err := s.db.GetContainerByID(id)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

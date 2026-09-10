@@ -297,6 +297,47 @@
         .vm-link-accent { color: var(--accent); border-color: oklch(0.76 0.18 45 / 0.3); }
         .vm-link-accent:hover { border-color: var(--accent); }
 
+        .vm-task {
+            margin-bottom: 12px;
+            padding: 10px 14px;
+            background: var(--bg-inset);
+            border: 1px solid var(--line-soft);
+            border-left-width: 3px;
+            border-radius: var(--radius);
+        }
+        .vm-task-sent { border-left-color: var(--ok); }
+        .vm-task-pending { border-left-color: var(--fg-mute); }
+        .vm-task-failed { border-left-color: var(--danger); }
+        .vm-task-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .vm-task-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--fg-dim);
+        }
+        .vm-task-state {
+            flex: 1;
+            font-size: 0.7rem;
+            color: var(--fg-mute);
+        }
+        .vm-task-text {
+            font-size: 0.78rem;
+            color: var(--fg-dim);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .vm-task-error {
+            margin-top: 6px;
+            font-size: 0.7rem;
+            color: var(--danger);
+        }
+
         .vm-publish {
             display: flex;
             align-items: center;

@@ -18,6 +18,8 @@ type guestRuntime struct {
 	commands []string
 	files    map[string][]byte
 	fail     string
+	// models overrides what a model-listing query returns.
+	models string
 }
 
 func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, error) {
@@ -43,6 +45,9 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	case strings.Contains(text, "SELECT 1 FROM sqlite_master"):
 		return []byte("1\n"), nil
 	case strings.Contains(text, "SELECT model_id"):
+		if g.models != "" {
+			return []byte(g.models), nil
+		}
 		return []byte("svkexe-test/model\n"), nil
 	}
 	return nil, nil

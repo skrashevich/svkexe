@@ -210,6 +210,23 @@ The REST API accepts the same settings at `POST /api/keys`, for example:
 
 User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.
 
+### Initial task
+
+When creating a VM you can describe, in plain text, what should be on it. The
+text is handed to the agent as its first instruction once the VM is up, in a new
+conversation, and runs with your own LLM key — so it starts spending your quota
+right away. The agent treats it as a normal message, which means it may answer
+or ask for clarification instead of building everything unattended.
+
+Delivery happens once. Its state shows on the VM card: `pending` until the VM is
+up, `sent` once the agent accepted it, or `failed` with the reason — most often
+no configured model, which you fix by adding an LLM key and pressing Retry. A
+failed task never retries by itself, so nothing fires unexpectedly on a later
+restart.
+
+The REST API takes the same text as `initial_task` on `POST /api/containers`,
+and `POST /api/containers/{id}/task/retry` re-queues a failed one.
+
 ### Workload routing
 
 Each VM exposes two different things, on two separate hosts:

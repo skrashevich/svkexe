@@ -153,3 +153,99 @@ func TestCreateFormShowsBothHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateFormOffersInitialTask(t *testing.T) {
+	router, _, _ := newPublishDashboard(t)
+	req := httptest.NewRequest(http.MethodGet, "/vms/create", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `name="initial_task"`) {
+		t.Error("create form has no task field")
+	}
+}
+
+func TestCardShowsTaskAndRetries(t *testing.T) {
+	router, database, owner := newPublishDashboard(t)
+	if err := database.CreateContainer(&db.Container{
+		ID: "vm", Name: "box", OwnerID: owner.ID, IncusName: "box", Status: "running",
+		InitialTask: "install nginx",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetInitialTaskState("vm", db.TaskFailed, "no model is configured"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}})
+	body := rec.Body.String()
+	for _, want := range []string{"install nginx", "no model is configured", "/dashboard/vms/vm/task/retry"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("card does not show %q", want)
+		}
+	}
+
+	// Retry re-queues the task; with no runtime configured delivery cannot run,
+	// so the state stays pending rather than silently flipping to sent.
+	if rec := post(t, router, "/vms/vm/task/retry", nil); rec.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	c, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialTaskState != db.TaskPending {
+		t.Fatalf("state=%q, want %q", c.InitialTaskState, db.TaskPending)
+	}
+}
+
+func TestRetryTaskEnforcesOwnership(t *testing.T) {
+	router, database, _ := newPublishDashboard(t)
+	if _, err := database.EnsureUser("intruder", "intruder@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateContainer(&db.Container{
+		ID: "vm", Name: "box", OwnerID: "intruder", IncusName: "box", Status: "running",
+		InitialTask: "install nginx",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetInitialTaskState("vm", db.TaskFailed, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(t, router, "/vms/vm/task/retry", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", rec.Code)
+	}
+	c, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialTaskState != db.TaskFailed {
+		t.Fatal("a non-owner re-queued someone else's task")
+	}
+}
+
+func TestCreateVMStoresTask(t *testing.T) {
+	router, database, owner := newPublishDashboard(t)
+	rec := post(t, router, "/vms", url.Values{"name": {"taskbox"}, "initial_task": {"install nginx"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	c, err := database.GetContainerByName("taskbox", owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialTask != "install nginx" || c.InitialTaskState != db.TaskPending {
+		t.Fatalf("task=%q state=%q", c.InitialTask, c.InitialTaskState)
+	}
+}
+
+func TestCreateVMRejectsOversizedTask(t *testing.T) {
+	router, _, _ := newPublishDashboard(t)
+	rec := post(t, router, "/vms", url.Values{
+		"name":         {"bigbox"},
+		"initial_task": {strings.Repeat("x", db.MaxInitialTaskLen+1)},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}

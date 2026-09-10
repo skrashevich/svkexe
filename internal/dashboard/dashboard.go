@@ -84,6 +84,7 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms/{id}/stop", d.postStopVM)
 	r.Post("/vms/{id}/recreate", d.postRecreateVM)
 	r.Post("/vms/{id}/publish", d.postPublish)
+	r.Post("/vms/{id}/task/retry", d.postRetryTask)
 	r.Delete("/vms/{id}", d.deleteVM)
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)

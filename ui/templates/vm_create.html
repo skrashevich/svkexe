@@ -23,6 +23,15 @@
                 </div>
             </div>
             <div class="form-group">
+                <label for="vm-task">What should be on this VM?</label>
+                <textarea id="vm-task" name="initial_task" rows="3" maxlength="4000"
+                          placeholder="e.g. a Node.js API on port 3000 that returns the current time"></textarea>
+                <div class="form-hint">
+                    Optional. Sent to the agent as its first instruction once the VM is up,
+                    using your LLM key. Leave empty to start with an idle VM.
+                </div>
+            </div>
+            <div class="form-group">
                 <label for="vm-cpu">CPU</label>
                 <select id="vm-cpu" name="cpu_limit">
                     <option value="1">1 vCPU</option>

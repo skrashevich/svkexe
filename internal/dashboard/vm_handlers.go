@@ -137,15 +137,24 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		CPULimit:  cpuLimit,
 		MemoryMB:  memoryMB,
 		DiskGB:    diskGB,
+
+		InitialTask: r.FormValue("initial_task"),
 	}
 	if err := d.db.CreateContainer(c); err != nil {
-		http.Error(w, "failed to persist VM", http.StatusInternalServerError)
+		http.Error(w, "failed to persist VM: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Create the Incus container asynchronously — the UI polls every 5s and
 	// will pick up the status change from "creating" to "stopped".
 	go func() {
+		// This runs detached, so a nil runtime would panic the whole gateway
+		// rather than fail one request.
+		if d.runtime == nil {
+			log.Printf("async VM create for %s: no container runtime configured", incusName)
+			_ = d.db.UpdateContainerStatus(c.ID, "error", "")
+			return
+		}
 		ctx := context.Background()
 		rtContainer, err := d.runtime.Create(ctx, runtime.CreateOpts{
 			Name:     name,
@@ -166,6 +175,8 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 			if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c.ID, incusName, user.ID, d.picoclawLLMCfg); err != nil {
 				log.Printf("PicoClaw setup failed for %s: %v", incusName, err)
 				_ = d.db.UpdateContainerStatus(c.ID, "error", rtContainer.IP)
+			} else {
+				picoclaw.DeliverInitialTaskByID(ctx, d.runtime, d.db, c.ID)
 			}
 		}
 	}()
@@ -222,6 +233,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		picoclaw.DeliverInitialTaskByID(setupCtx, d.runtime, d.db, id)
 	}
 
 	// Fetch fresh IP from runtime after start.

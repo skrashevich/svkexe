@@ -105,7 +105,7 @@ func newTestServerWithUpdater(t *testing.T, upd *updater.Service) *Server {
 	}
 	testAdminToken = adminSess.Token
 
-	return NewServer(database, newMockRuntime(), testEncKey, "", nil, nil, nil, nil, upd)
+	return NewServer(database, newMockRuntime(), testEncKey, "", nil, nil, nil, nil, upd, nil)
 }
 
 // seedStatus writes an update status file the way scripts/update.sh would.

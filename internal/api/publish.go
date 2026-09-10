@@ -45,7 +45,7 @@ func (s *Server) updatePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	// Keep what the agent knows about its published port in step with what the
 	// owner just set, without failing the save when the VM cannot be reached.
-	if err := picoclaw.RefreshEnvironmentGuide(r.Context(), s.runtime, c); err != nil {
+	if err := picoclaw.RefreshEnvironmentGuide(r.Context(), s.runtime, s.db, c); err != nil {
 		log.Printf("publish settings for %s: refresh agent guide: %v", c.IncusName, err)
 	}
 	writeJSON(w, http.StatusOK, c)

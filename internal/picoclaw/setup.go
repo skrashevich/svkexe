@@ -24,7 +24,11 @@ var setupLocks sync.Map // container name -> turn-safe setup semaphore
 // whole container is taken rather than its identifiers alone: the agent is also
 // told the address and port its work will be served on, which only the record
 // knows.
-func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, c *db.Container, llmCfg *LLMProxyConfig) error {
+//
+// database is passed through to the environment guide, which uses it to name
+// the VM's custom domains. It may be nil in tests, which then simply get a
+// guide without them.
+func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, m *secrets.Materializer, c *db.Container, llmCfg *LLMProxyConfig) error {
 	if c == nil {
 		return fmt.Errorf("setup PicoClaw: no container given")
 	}
@@ -93,7 +97,7 @@ rm -rf %[3]s
 	}
 	// Written before the agent starts, so its first conversation already knows
 	// where this VM's work is published.
-	if err := writeEnvironmentGuide(ctx, rt, c); err != nil {
+	if err := writeEnvironmentGuide(ctx, rt, database, c); err != nil {
 		return err
 	}
 	var env []byte

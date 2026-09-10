@@ -2,11 +2,13 @@ package dashboard
 
 import (
 	"html/template"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
@@ -25,6 +27,7 @@ type Dashboard struct {
 	encKey         []byte
 	picoclawLLMCfg *picoclaw.LLMProxyConfig
 	updater        *updater.Service
+	aliases        *aliases.Manager
 	templates      *template.Template
 	funcMap        template.FuncMap
 }
@@ -32,7 +35,10 @@ type Dashboard struct {
 // NewDashboard creates a Dashboard and parses all HTML templates.
 // upd may be nil, in which case the system page reports that this deployment
 // cannot update itself.
-func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service) (*Dashboard, error) {
+// aliasVerifier may be nil, in which case custom domains can be added but
+// never verify, and therefore never route — the same trade-off NewServer
+// documents for the REST API.
+func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *secrets.Materializer, domain string, encKey []byte, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service, aliasVerifier aliases.Verifier) (*Dashboard, error) {
 	funcMap := template.FuncMap{
 		"formatTime": func(t time.Time) string {
 			return t.Format("2006-01-02 15:04")
@@ -73,6 +79,7 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 		encKey:         encKey,
 		picoclawLLMCfg: picoclawLLM,
 		updater:        upd,
+		aliases:        aliases.New(database, rt, aliasVerifier, domain),
 		templates:      tmpl,
 		funcMap:        funcMap,
 	}, nil
@@ -90,6 +97,9 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms/{id}/recreate", d.postRecreateVM)
 	r.Post("/vms/{id}/publish", d.postPublish)
 	r.Post("/vms/{id}/task/retry", d.postRetryTask)
+	r.Post("/vms/{id}/aliases", d.postAddAlias)
+	r.Post("/vms/{id}/aliases/{aliasID}/verify", d.postVerifyAlias)
+	r.Delete("/vms/{id}/aliases/{aliasID}", d.deleteAlias)
 	r.Delete("/vms/{id}", d.deleteVM)
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)
@@ -140,6 +150,16 @@ func (d *Dashboard) render(w http.ResponseWriter, tmplName string, data interfac
 	if err := d.templates.ExecuteTemplate(w, tmplName, data); err != nil {
 		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// renderCard renders a single VM card with its custom domains attached. A
+// failure to look up the aliases is logged, not returned: the VM itself is
+// still there and its card must still render, just without a DNS section.
+func (d *Dashboard) renderCard(w http.ResponseWriter, c *db.Container) {
+	if err := d.db.AttachAliases(c); err != nil {
+		log.Printf("render card for %s: attach aliases: %v", c.IncusName, err)
+	}
+	d.render(w, "vm_card", c)
 }
 
 // partialPatterns lists glob patterns for template files that only define

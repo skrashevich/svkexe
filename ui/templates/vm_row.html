@@ -79,6 +79,65 @@
         </span>
     </form>
 
+    <div class="vm-aliases">
+        <div class="vm-aliases-head">
+            <span class="vm-aliases-label">Custom domains</span>
+        </div>
+        {{if .Aliases}}
+        <ul class="vm-alias-list">
+            {{range .Aliases}}
+            <li class="vm-alias-row">
+                <div class="vm-alias-main">
+                    {{if and .Verified (eq $.Status "running")}}
+                    <a href="https://{{.Hostname}}/" target="_blank" class="vm-alias-host">{{.Hostname}}</a>
+                    {{else}}
+                    <span class="vm-alias-host">{{.Hostname}}</span>
+                    {{end}}
+                    {{if .Verified}}
+                    <span class="badge badge-running">verified</span>
+                    {{else}}
+                    <span class="badge badge-stopped">unverified</span>
+                    {{end}}
+                </div>
+                {{if .LastError}}<div class="vm-alias-error">{{.LastError}}</div>{{end}}
+                <div class="vm-alias-actions">
+                    <button class="btn btn-secondary btn-sm"
+                        hx-post="/dashboard/vms/{{$.ID}}/aliases/{{.ID}}/verify"
+                        hx-target="#vm-{{$.ID}}"
+                        hx-swap="outerHTML">
+                        Re-check
+                    </button>
+                    <button class="btn btn-danger btn-sm"
+                        hx-delete="/dashboard/vms/{{$.ID}}/aliases/{{.ID}}"
+                        hx-target="#vm-{{$.ID}}"
+                        hx-swap="outerHTML"
+                        hx-confirm="Remove custom domain '{{.Hostname}}'?">
+                        Remove
+                    </button>
+                </div>
+            </li>
+            {{end}}
+        </ul>
+        {{end}}
+        {{if and (not .AppPublic) .Aliases}}
+        <p class="vm-alias-warning">
+            A custom domain only reaches a <strong>published</strong> workload or a share link:
+            the session cookie is scoped to {{domain}} and never reaches a custom domain.
+        </p>
+        {{end}}
+        <form class="vm-alias-add"
+            hx-post="/dashboard/vms/{{.ID}}/aliases"
+            hx-target="#vm-{{.ID}}"
+            hx-swap="outerHTML">
+            <input name="hostname" type="text" placeholder="app.example.org" autocomplete="off">
+            <button type="submit" class="btn btn-secondary btn-sm">Add domain</button>
+        </form>
+        <p class="vm-alias-hint">
+            Point a CNAME at <code>{{domain}}</code>, then add the hostname here and re-check it.
+            A custom domain never exposes the PicoClaw agent.
+        </p>
+    </div>
+
     <div class="vm-card-specs">
         <div class="vm-spec">CPU <span class="vm-spec-val">{{.CPULimit}} vCPU</span></div>
         <div class="vm-spec">RAM <span class="vm-spec-val">{{.MemoryMB}} MB</span></div>

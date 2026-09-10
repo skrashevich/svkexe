@@ -125,6 +125,19 @@ func (db *DB) DeleteUser(id string) error {
 	); err != nil {
 		return fmt.Errorf("delete user: remove shared_links: %w", err)
 	}
+	// Custom domains go with the VMs they point at, for the same reason
+	// DeleteContainer removes them explicitly: the foreign-key pragma is set on
+	// whichever pooled connection Open happened to use, so ON DELETE CASCADE is
+	// not something this statement can count on. A surviving row would keep
+	// answering the on-demand TLS check for a hostname no account owns, so the
+	// certificate would be renewed forever, and the unique index would hold the
+	// name against everyone with no UI left to release it.
+	if _, err := tx.Exec(
+		`DELETE FROM container_aliases WHERE container_id IN (SELECT id FROM containers WHERE owner_id = ?)`,
+		id,
+	); err != nil {
+		return fmt.Errorf("delete user: remove container aliases: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM containers WHERE owner_id = ?`, id); err != nil {
 		return fmt.Errorf("delete user: remove containers: %w", err)
 	}

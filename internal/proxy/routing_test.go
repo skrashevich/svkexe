@@ -76,8 +76,11 @@ type routingFixture struct {
 	backend *httptest.Server
 	// lastHeaders records what the workload actually received.
 	lastHeaders http.Header
-	database    *db.DB
-	sessionID   string
+	// lastHost records the address the request was proxied to, which is how a
+	// test can tell which in-VM port the gateway picked.
+	lastHost  string
+	database  *db.DB
+	sessionID string
 }
 
 func newRoutingFixture(t *testing.T) *routingFixture {
@@ -96,6 +99,7 @@ func newRoutingFixture(t *testing.T) *routingFixture {
 	f := &routingFixture{database: database}
 	f.backend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.lastHeaders = r.Header.Clone()
+		f.lastHost = r.Host
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(f.backend.Close)
@@ -129,6 +133,7 @@ func newRoutingFixture(t *testing.T) *routingFixture {
 func (f *routingFixture) get(t *testing.T, host string, session string) *httptest.ResponseRecorder {
 	t.Helper()
 	f.lastHeaders = nil
+	f.lastHost = ""
 	r := httptest.NewRequest(http.MethodGet, "https://"+host+"/", nil)
 	if session != "" {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})

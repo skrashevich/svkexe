@@ -1,6 +1,15 @@
 {
 	email {$ACME_EMAIL}
 	admin off
+
+	# Custom domains are certificate names nobody configured here in advance,
+	# so they can only be issued on demand. The gateway is asked first and
+	# answers 200 only for a hostname a VM owner has claimed AND whose DNS was
+	# observed pointing here — without that gate this block would let anyone
+	# drive certificate requests for names they do not control.
+	on_demand_tls {
+		ask http://gateway:8080/api/tls/check
+	}
 }
 
 # Gateway root and container subdomains both terminate at the Go gateway —
@@ -28,6 +37,16 @@
 *.{$DOMAIN} {
 	tls {
 		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+	import gateway_backend
+}
+
+# Anything else: a domain a VM owner pointed at this gateway with a CNAME. The
+# two blocks above are more specific and keep winning for the platform's own
+# names, so this only ever sees hostnames the gateway did not issue itself.
+https:// {
+	tls {
+		on_demand
 	}
 	import gateway_backend
 }

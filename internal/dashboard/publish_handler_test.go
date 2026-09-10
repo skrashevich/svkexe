@@ -25,7 +25,7 @@ func newPublishDashboard(t *testing.T) (*chi.Mux, *db.DB, *db.User) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDashboard(database, nil, nil, "example.com", []byte("01234567890123456789012345678901"), nil, nil)
+	d, err := NewDashboard(database, nil, nil, "example.com", []byte("01234567890123456789012345678901"), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

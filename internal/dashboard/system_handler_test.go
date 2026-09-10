@@ -51,7 +51,7 @@ func newSystemRouter(t *testing.T, upd *updater.Service, role string) *chi.Mux {
 		t.Fatal(err)
 	}
 
-	d, err := NewDashboard(database, nil, nil, "example.com", []byte("01234567890123456789012345678901"), nil, upd)
+	d, err := NewDashboard(database, nil, nil, "example.com", []byte("01234567890123456789012345678901"), nil, upd, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

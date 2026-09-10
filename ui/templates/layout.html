@@ -386,6 +386,83 @@
             color: var(--fg-mute);
         }
 
+        .vm-aliases {
+            margin-bottom: 12px;
+            padding: 10px 14px;
+            background: var(--bg-inset);
+            border: 1px solid var(--line-soft);
+            border-radius: var(--radius);
+        }
+        .vm-aliases-head { margin-bottom: 6px; }
+        .vm-aliases-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--fg-dim);
+        }
+        .vm-alias-list {
+            list-style: none;
+            margin: 0 0 8px;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .vm-alias-row {
+            padding: 8px 10px;
+            background: var(--bg);
+            border: 1px solid var(--line-soft);
+            border-radius: 6px;
+        }
+        .vm-alias-main {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .vm-alias-host {
+            font-family: var(--mono);
+            font-size: 0.78rem;
+            color: var(--fg);
+            overflow-wrap: anywhere;
+        }
+        .vm-alias-error {
+            margin-top: 4px;
+            font-size: 0.7rem;
+            color: var(--danger);
+        }
+        .vm-alias-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .vm-alias-warning {
+            margin: 0 0 8px;
+            font-size: 0.7rem;
+            color: var(--danger);
+        }
+        .vm-alias-add {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .vm-alias-add input[type="text"] {
+            flex: 1;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            color: var(--fg);
+            background: var(--bg);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+        .vm-alias-hint {
+            margin: 0;
+            font-size: 0.7rem;
+            color: var(--fg-mute);
+        }
+
         .vm-card-specs {
             display: grid;
             grid-template-columns: 1fr 1fr;

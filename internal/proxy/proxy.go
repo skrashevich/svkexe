@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -22,6 +23,10 @@ const agentPort = 9000
 // sessionCookieName mirrors api.SessionCookieName — redeclared here to avoid
 // importing the api package (which would create an import cycle).
 const sessionCookieName = "svkexe_session"
+
+// shareCookieName carries a share grant across the requests a page makes after
+// the one that presented the token.
+const shareCookieName = "svkexe_share"
 
 // ContainerProxy routes subdomain requests to the appropriate container.
 type ContainerProxy struct {
@@ -45,7 +50,18 @@ func New(database *db.DB, rt runtime.ContainerRuntime, domain string) *Container
 func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	info, ok := p.extractSubdomain(r.Host)
 	if !ok {
-		http.Error(w, "invalid host", http.StatusBadRequest)
+		// A name inside the gateway's own domain that does not parse is a
+		// malformed VM host, not somebody's custom domain — saying "invalid
+		// host" is more useful there than a lookup that cannot succeed. With no
+		// domain configured there is no such namespace, and every host that
+		// reaches here is one KnowsHost already claimed.
+		host := aliasHost(r.Host)
+		domain := strings.ToLower(p.domain)
+		if domain != "" && (host == domain || strings.HasSuffix(host, "."+domain)) {
+			http.Error(w, "invalid host", http.StatusBadRequest)
+			return
+		}
+		p.serveAlias(w, r, host)
 		return
 	}
 
@@ -69,12 +85,7 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	shareToken := r.URL.Query().Get("share")
-	if shareToken == "" {
-		if cookie, err := r.Cookie("svkexe_share"); err == nil {
-			shareToken = cookie.Value
-		}
-	}
+	shareToken := shareTokenFrom(r)
 	// A share grants the workload, never the agent: handing out a shell is not
 	// what "share this VM" should mean.
 	if shareToken != "" && info.Kind == routeAgent {
@@ -105,14 +116,7 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if info.Kind == routeAgent {
 			r.Header.Set("X-ExeDev-Userid", "share:"+link.ID)
 		}
-		if r.URL.Query().Get("share") != "" {
-			http.SetCookie(w, &http.Cookie{Name: "svkexe_share", Value: shareToken,
-				Path: "/", HttpOnly: true, Secure: p.domain != "", SameSite: http.SameSiteLaxMode,
-			})
-			query := r.URL.Query()
-			query.Del("share")
-			r.URL.RawQuery = query.Encode()
-		}
+		p.acceptShareCookie(w, r, shareToken)
 	} else if userID != "" {
 		container, err = p.db.GetContainerByName(info.ContainerName, userID)
 		if err == sql.ErrNoRows {
@@ -145,6 +149,103 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.forward(w, r, container, port)
+}
+
+// KnowsHost reports whether host is a custom domain this gateway serves. The
+// top-level handler asks before routing a request whose Host is not a VM
+// subdomain, so an unrelated name still lands on the API server instead of
+// being answered by the proxy.
+func (p *ContainerProxy) KnowsHost(host string) bool {
+	h := aliasHost(host)
+	if h == "" {
+		return false
+	}
+	// The gateway's own namespace is routed by subdomain and can never be an
+	// alias; ValidAliasHostname refuses to store one, and checking here keeps a
+	// stale row from ever shadowing a VM host.
+	if domain := strings.ToLower(p.domain); domain != "" && (h == domain || strings.HasSuffix(h, "."+domain)) {
+		return false
+	}
+	_, err := p.db.GetVerifiedAliasByHostname(h)
+	return err == nil
+}
+
+// serveAlias handles a request that arrived on a custom domain. An alias
+// reaches the workload and nothing else: the agent is a shell, and no hostname
+// an owner can add is allowed to become one.
+func (p *ContainerProxy) serveAlias(w http.ResponseWriter, r *http.Request, host string) {
+	// Nothing downstream may read an identity the gateway did not set, and on a
+	// custom domain the gateway asserts none at all.
+	r.Header.Del("X-ExeDev-Userid")
+	r.Header.Del("X-ExeDev-Email")
+
+	alias, err := p.db.GetVerifiedAliasByHostname(host)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "unknown host", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	container, err := p.db.GetContainerByID(alias.ContainerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "unknown host", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if container.AppPublic {
+		p.forward(w, r, container, container.AppPort)
+		return
+	}
+
+	// The session cookie is scoped to the gateway's own domain and is never
+	// sent to a custom one, so there is no signed-in owner to recognise here. A
+	// share link is the only credential that travels with the request.
+	if token := shareTokenFrom(r); token != "" {
+		link, linkErr := p.db.GetSharedLinkByToken(token)
+		if linkErr == nil && link.ContainerID == container.ID {
+			p.acceptShareCookie(w, r, token)
+			p.forward(w, r, container, container.AppPort)
+			return
+		}
+	}
+
+	http.Error(w, "this VM's workload is not published — publish it from the dashboard or open this domain through a share link", http.StatusForbidden)
+}
+
+// shareTokenFrom reads a share token from the query string, falling back to the
+// cookie a previous request left behind.
+func shareTokenFrom(r *http.Request) string {
+	if token := r.URL.Query().Get("share"); token != "" {
+		return token
+	}
+	if cookie, err := r.Cookie(shareCookieName); err == nil {
+		return cookie.Value
+	}
+	return ""
+}
+
+// acceptShareCookie turns a token that arrived in the query string into a
+// host-only cookie, so the grant carries to the API and asset calls the page
+// makes next, and drops it from the URL the workload sees. It is re-validated
+// on every request, which is what makes revocation immediate.
+func (p *ContainerProxy) acceptShareCookie(w http.ResponseWriter, r *http.Request, token string) {
+	if r.URL.Query().Get("share") == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: shareCookieName, Value: token,
+		Path: "/", HttpOnly: true, Secure: p.domain != "", SameSite: http.SameSiteLaxMode,
+	})
+	query := r.URL.Query()
+	query.Del("share")
+	r.URL.RawQuery = query.Encode()
 }
 
 // forward proxies an authorized request to the given in-VM port.
@@ -220,14 +321,7 @@ type subdomainInfo struct {
 //	agent-{name}.{domain}    the PicoClaw interface
 //	{picoclaw|shelley}.{name}.{domain}  legacy agent links
 func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
-	// Strip port if present.
-	h := host
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		// Ensure it's not an IPv6 address without brackets.
-		if strings.Count(host, ":") == 1 {
-			h = host[:idx]
-		}
-	}
+	h := hostWithoutPort(host)
 
 	suffix := "." + p.domain
 	if !strings.HasSuffix(h, suffix) {
@@ -273,6 +367,27 @@ func (p *ContainerProxy) extractSubdomain(host string) (subdomainInfo, bool) {
 		return subdomainInfo{}, false
 	}
 	return subdomainInfo{ContainerName: prefix, Kind: routeApp}, true
+}
+
+// hostWithoutPort strips the ":port" a browser appends to the Host header.
+// Case is deliberately left alone: VM subdomains are matched exactly, so that
+// "UPPER.example.com" stays a name no VM answers to rather than silently
+// resolving to a different VM than the one that was typed.
+func hostWithoutPort(host string) string {
+	h := host
+	// A bare IPv6 address has several colons and no port to strip.
+	if idx := strings.LastIndex(host, ":"); idx != -1 && strings.Count(host, ":") == 1 {
+		h = host[:idx]
+	}
+	return h
+}
+
+// aliasHost normalises a Host header for an alias lookup. Unlike a VM
+// subdomain, a custom domain is a name its owner typed into their own DNS, and
+// DNS is case-insensitive — matching it strictly would reject the very
+// hostname the certificate was issued for.
+func aliasHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(hostWithoutPort(host)), "."))
 }
 
 // isRunning returns true for statuses considered "running".

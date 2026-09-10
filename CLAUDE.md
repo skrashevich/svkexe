@@ -49,6 +49,8 @@ Caddy (TLS, header strip) → Go Gateway (:8080) → Incus containers (LXC)
 | `internal/llmproxy` | OpenRouter proxy with model fallback chain |
 | `internal/secrets` | AES-256 encryption of LLM keys, materialization to tmpfs |
 | `internal/picoclaw` | PicoClaw setup, migration and retained application contract |
+| `internal/aliases` | Custom-domain lifecycle: claim, DNS verification, agent guide refresh |
+| `internal/dnscheck` | Verifies that a custom domain resolves to this gateway before it is routed |
 | `internal/ratelimit` | Per-user token bucket rate limiter |
 | `internal/auth` | Session management, bcrypt (cost 12) |
 | `internal/version` | Build metadata stamped in via `-ldflags -X` from the Makefile |

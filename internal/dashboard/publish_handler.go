@@ -48,10 +48,10 @@ func (d *Dashboard) postPublish(w http.ResponseWriter, r *http.Request) {
 	// The agent is told which port to serve on; a stale answer would have it
 	// configure software for a port that is no longer published. Not reaching
 	// the VM must not fail the setting the owner just saved.
-	if err := picoclaw.RefreshEnvironmentGuide(r.Context(), d.runtime, updated); err != nil {
+	if err := picoclaw.RefreshEnvironmentGuide(r.Context(), d.runtime, d.db, updated); err != nil {
 		log.Printf("publish settings for %s: refresh agent guide: %v", updated.IncusName, err)
 	}
-	d.render(w, "vm_card", updated)
+	d.renderCard(w, updated)
 }
 
 // postRetryTask handles POST /dashboard/vms/{id}/task/retry and re-renders the card.
@@ -79,5 +79,5 @@ func (d *Dashboard) postRetryTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	d.render(w, "vm_card", updated)
+	d.renderCard(w, updated)
 }

@@ -24,8 +24,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/api"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/dnscheck"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/proxy"
@@ -60,6 +62,10 @@ func main() {
 	sshHostKeyPath := getenv("SSH_HOST_KEY_PATH", "/var/lib/svkexe/ssh_host_key")
 	rateLimitRPS := getenv("RATE_LIMIT_RPS", "10")
 	rateLimitBurst := getenv("RATE_LIMIT_BURST", "20")
+	// Custom domains are only routed once they demonstrably resolve here. A
+	// deployment whose DOMAIN does not resolve to the gateway itself (behind a
+	// load balancer, or NAT) names its public addresses explicitly instead.
+	gatewayPublicIPs := getenv("GATEWAY_PUBLIC_IPS", "")
 	openRouterKey := getenv("OPENROUTER_API_KEY", "")
 	openRouterModels := getenv("OPENROUTER_MODELS", "anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash")
 	llmInternalToken := getenv("LLM_INTERNAL_TOKEN", "")
@@ -191,7 +197,8 @@ func main() {
 	updateSvc := updater.NewServiceFromEnv()
 
 	// Build API server and container proxy.
-	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM, updateSvc)
+	aliasVerifier := dnscheck.New(domain, strings.Split(gatewayPublicIPs, ","))
+	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM, updateSvc, aliasVerifier)
 	containerProxy := proxy.New(database, rt, domain)
 
 	// Top-level handler: route by Host header.
@@ -228,6 +235,11 @@ func main() {
 	// still working, finished, or failed.
 	go picoclaw.MonitorTasks(agentCtx, database, rt, picoclaw.TaskPollInterval)
 
+	// Re-check routed custom domains, so a name whose owner repointed it stops
+	// being served — and stops being a certificate this gateway renews — instead
+	// of staying verified forever.
+	go aliases.Reverify(agentCtx, database, rt, aliasVerifier, aliases.ReverifyInterval)
+
 	// Wait for shutdown signal.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -243,10 +255,20 @@ func main() {
 	log.Println("stopped")
 }
 
+// hostRouter is what the top-level handler needs from the container proxy: it
+// serves VM traffic, and it can say whether a host outside the gateway's own
+// domain is a custom domain one of its VMs claims.
+type hostRouter interface {
+	http.Handler
+	KnowsHost(host string) bool
+}
+
 // buildTopHandler returns an http.Handler that dispatches based on the Host header.
-// Requests to *.domain are forwarded to the container proxy.
-// All other requests are handled by the API server.
-func buildTopHandler(domain string, apiSrv http.Handler, cp http.Handler) http.Handler {
+// Requests to *.domain are forwarded to the container proxy, as are custom
+// domains an owner has pointed at their VM. All other requests are handled by
+// the API server, which is what keeps an unrelated Host from being answered
+// with somebody's workload.
+func buildTopHandler(domain string, apiSrv http.Handler, cp hostRouter) http.Handler {
 	subdomainSuffix := "." + domain
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
@@ -255,6 +277,12 @@ func buildTopHandler(domain string, apiSrv http.Handler, cp http.Handler) http.H
 			host = host[:idx]
 		}
 		if domain != "" && strings.HasSuffix(host, subdomainSuffix) && host != domain {
+			cp.ServeHTTP(w, r)
+			return
+		}
+		// The gateway's own domain is the dashboard and the API, never an
+		// alias, so it is checked first and never reaches the lookup.
+		if host != domain && cp.KnowsHost(r.Host) {
 			cp.ServeHTTP(w, r)
 			return
 		}

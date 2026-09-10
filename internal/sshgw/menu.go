@@ -192,7 +192,7 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 	}
 
 	if s.materializer != nil {
-		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, dbContainer, s.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.db, s.materializer, dbContainer, s.picoclawLLMCfg); err != nil {
 			_ = s.db.UpdateContainerStatus(dbContainer.ID, "error", dbContainer.IPAddress)
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
@@ -257,7 +257,7 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 
 	// Re-apply PicoClaw config on every start.
 	if s.materializer != nil {
-		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c, s.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.db, s.materializer, c, s.picoclawLLMCfg); err != nil {
 			_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
@@ -318,7 +318,7 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 
 	// Re-apply PicoClaw config on every start.
 	if s.materializer != nil {
-		if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c, s.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(ctx, s.runtime, s.db, s.materializer, c, s.picoclawLLMCfg); err != nil {
 			_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
@@ -541,7 +541,7 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 		return
 	}
 	fmt.Fprintf(sess, "Setting up PicoClaw...\r\n")
-	if err := picoclaw.SetupContainer(ctx, s.runtime, s.materializer, c, s.picoclawLLMCfg); err != nil {
+	if err := picoclaw.SetupContainer(ctx, s.runtime, s.db, s.materializer, c, s.picoclawLLMCfg); err != nil {
 		fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 		_ = s.db.UpdateContainerStatus(c.ID, "error", ip)
 		return

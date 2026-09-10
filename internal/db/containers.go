@@ -70,6 +70,11 @@ type Container struct {
 	InitialTaskConversation string
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+
+	// Aliases holds the VM's custom hostnames. It is not a column: reads leave
+	// it nil and callers that need it ask for it explicitly via AttachAliases,
+	// so request routing does not pay for a join it never looks at.
+	Aliases []*ContainerAlias
 }
 
 // containerColumns keeps every read of a container in sync.
@@ -261,10 +266,26 @@ func (db *DB) RenameContainer(id, newName string) error {
 	return nil
 }
 
-// DeleteContainer removes a container record by ID.
+// DeleteContainer removes a container record by ID, together with the custom
+// hostnames pointed at it. The aliases are deleted explicitly rather than left
+// to ON DELETE CASCADE: the foreign-key pragma is set on whichever pooled
+// connection Open happened to use, so cascading is not something every later
+// query can count on. A surviving alias row would keep a dead VM's hostname
+// claimed and unusable by anyone else.
 func (db *DB) DeleteContainer(id string) error {
-	_, err := db.Exec(`DELETE FROM containers WHERE id = ?`, id)
+	tx, err := db.Begin()
 	if err != nil {
+		return fmt.Errorf("delete container: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM container_aliases WHERE container_id = ?`, id); err != nil {
+		return fmt.Errorf("delete container aliases: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM containers WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete container: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("delete container: %w", err)
 	}
 	return nil

@@ -3,6 +3,7 @@ package picoclaw
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/skrashevich/svkexe/internal/db"
@@ -49,6 +50,17 @@ func environmentGuide(c *db.Container, domain string) []byte {
 		}
 	}
 
+	// The owner's own domains are the addresses they will actually share, so
+	// the agent has to name those rather than the platform host when it reports
+	// that something is live. Only verified aliases are routed at all.
+	if verified := verifiedAliases(c); len(verified) > 0 {
+		fmt.Fprintf(&b, "- The owner has pointed their own domains at this VM: %s. They reach the same port **%d** as the address above — prefer them when you tell the owner where their work is.\n",
+			strings.Join(verified, ", "), c.AppPort)
+		if !c.AppPublic {
+			b.WriteString("  Those domains only serve traffic while the port above is published, so they answer with an error until the owner publishes it.\n")
+		}
+	}
+
 	b.WriteString("\n## Making a service reachable\n\n")
 	b.WriteString("- Bind to `0.0.0.0`, not `127.0.0.1`. The platform proxies to this container's own address, so a service listening only on loopback is unreachable from the outside even though `curl localhost` works here.\n")
 	fmt.Fprintf(&b, "- Configure the port explicitly. If the software cannot use %d, tell the owner which port it needs so they can repoint the VM, rather than leaving it on a port nobody can reach.\n", c.AppPort)
@@ -57,12 +69,39 @@ func environmentGuide(c *db.Container, domain string) []byte {
 	return []byte(b.String())
 }
 
+// verifiedAliases renders the VM's custom domains as https URLs, skipping the
+// ones whose DNS check has not passed: an unverified alias is not routed, so
+// promising it to the agent would have it report an address that answers 404.
+func verifiedAliases(c *db.Container) []string {
+	var hosts []string
+	for _, a := range c.Aliases {
+		if a != nil && a.Verified {
+			hosts = append(hosts, "**https://"+a.Hostname+"/**")
+		}
+	}
+	return hosts
+}
+
 // writeEnvironmentGuide publishes the guide inside the VM. The agent reads it
 // on every new conversation, so refreshing the file is enough to change what
 // the agent believes about this VM.
-func writeEnvironmentGuide(ctx context.Context, rt runtime.ContainerRuntime, c *db.Container) error {
+// It loads the VM's custom domains itself rather than trusting the caller to
+// have attached them. Every path that rewrites the guide — first setup, a
+// publish-setting change, and an alias being added or removed — would otherwise
+// have to remember, and a caller that forgot would silently erase the owner's
+// domains from the guide instead of failing.
+//
+// database may be nil, which simply produces a guide without custom domains.
+func writeEnvironmentGuide(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) error {
 	if c == nil {
 		return nil
+	}
+	// A domain list that cannot be read is left out rather than fatal: the VM
+	// working matters more than the guide being complete.
+	if database != nil {
+		if err := database.AttachAliases(c); err != nil {
+			log.Printf("agent guide for %s: load custom domains: %v", c.IncusName, err)
+		}
 	}
 	if err := writeGuestFile(ctx, rt, c.IncusName, GuideFilePath, environmentGuide(c, Domain)); err != nil {
 		return err
@@ -76,9 +115,9 @@ func writeEnvironmentGuide(ctx context.Context, rt runtime.ContainerRuntime, c *
 // RefreshEnvironmentGuide updates a running VM after its publishing settings
 // change, so the next conversation sees the port and visibility the owner just
 // chose. A stopped VM picks the change up when it next starts.
-func RefreshEnvironmentGuide(ctx context.Context, rt runtime.ContainerRuntime, c *db.Container) error {
+func RefreshEnvironmentGuide(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) error {
 	if rt == nil || c == nil || !strings.EqualFold(c.Status, "running") {
 		return nil
 	}
-	return writeEnvironmentGuide(ctx, rt, c)
+	return writeEnvironmentGuide(ctx, rt, database, c)
 }

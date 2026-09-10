@@ -211,6 +211,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `GATEWAY_ENC_KEY` | | AES-256 key for API key encryption (hex, `openssl rand -hex 32`) |
 | `GATEWAY_COOKIE_SECURE` | `0` | Set to `1` when served over HTTPS |
 | `DOMAIN` | | Base domain for subdomain routing |
+| `GATEWAY_PUBLIC_IPS` | *(resolved from DOMAIN)* | Comma-separated public addresses of the gateway, used to verify custom domains. Set it when `DOMAIN` does not resolve to the address visitors reach (load balancer, NAT) |
 | `INCUS_SOCKET` | `/var/lib/incus/unix.socket` | Incus API socket |
 | `SSH_ADDR` | `:2222` | SSH gateway listen address |
 | `SSH_HOST_KEY_PATH` | `/var/lib/svkexe/ssh_host_key` | ED25519 host key (auto-generated if missing) |
@@ -324,6 +325,74 @@ Because these hosts are single-label, a wildcard `*.{domain}` certificate covers
 all of them. VM names therefore cannot start with `agent-` or a port prefix like
 `3000-`.
 
+### Custom domains (DNS aliases)
+
+A VM can also answer on domains you own, so a service can live at
+`https://app.example.org/` instead of `https://{name}.{domain}/`.
+
+1. Create a DNS record for the hostname pointing at the gateway — a `CNAME` to
+   `{domain}` is the usual choice, an `A` record to the gateway's address works
+   too.
+2. Add the hostname on the VM card in the dashboard, or with
+   `POST /api/containers/{id}/aliases` and `{"hostname":"app.example.org"}`.
+3. The gateway resolves the hostname and compares it with its own addresses. If
+   they overlap, the alias is **verified** and starts serving. If DNS has not
+   propagated yet the hostname is still saved, with the reason shown on the
+   card — fix the record and press **Re-check**.
+
+TLS is issued automatically. Caddy asks the gateway (`GET /api/tls/check`)
+before requesting a certificate and only proceeds for a verified alias, which is
+what keeps the deployment from being used to request certificates for hostnames
+nobody here controls.
+
+What an alias does **not** do:
+
+- **It never exposes the agent.** Custom domains reach the workload port only.
+  PicoClaw stays on `agent-{name}.{domain}` behind your session.
+- **It only serves a published workload.** Your session cookie is scoped to
+  `{domain}` and is never sent to a domain you own, so there is no way to sign in
+  on a custom domain. A private workload answers `403` there; publish the port,
+  or open the custom domain through a share link.
+- Verification is re-run hourly in the background, and whenever you press
+  **Re-check**. A hostname that has been repointed away stops being routed and
+  stops being a certificate the gateway renews. A check that cannot reach a
+  conclusion — DNS temporarily unavailable, or the gateway unable to resolve its
+  own address — changes nothing, so a DNS outage never takes working domains
+  offline.
+
+A hostname cannot fall under `{domain}` itself (those names are already routed
+by subdomain), and each VM is limited to 10.
+
+A **verified** hostname belongs to one VM platform-wide. A hostname that is only
+pending reserves nothing: two VMs may both have it waiting, and whichever one's
+DNS actually points here first gets it. Competing pending claims are then
+deleted. This is deliberate on both counts — adding a domain you do not control
+must not lock out the person who does, and a claim left parked on someone else's
+domain must not survive as an option on it.
+
+The DNS check proves that a hostname points at *this gateway*, not who owns it,
+so on a shared gateway any tenant can satisfy it for any name. Exclusivity comes
+from getting there first and keeping the record pointed here. That leaves a
+window: between pointing your DNS at the gateway and adding the hostname, anyone
+who knows the name could claim it.
+
+When that happens, an administrator can take the name back:
+
+```bash
+# See who holds it
+curl -b session.txt https://$DOMAIN/api/admin/aliases
+
+# Free it platform-wide, so the rightful owner can add it
+curl -b session.txt -X DELETE https://$DOMAIN/api/admin/aliases/app.example.org
+```
+
+Releasing deletes every claim on that hostname, verified or pending, and the
+action is logged with the administrator's email.
+
+If the gateway sits behind a load balancer or NAT, `DOMAIN` may not resolve to
+the address visitors actually reach, and verification would reject every alias.
+Set `GATEWAY_PUBLIC_IPS` to the real public addresses instead.
+
 ## Architecture
 
 ```
@@ -397,6 +466,13 @@ DELETE /api/containers/{id}         Delete container
 POST   /api/containers/{id}/share   Create shared link
 GET    /api/containers/{id}/shares  List shared links
 DELETE /api/shares/{token}          Revoke shared link
+GET    /api/containers/{id}/aliases List custom domains
+POST   /api/containers/{id}/aliases Add a custom domain
+POST   /api/containers/{id}/aliases/{aliasId}/verify  Re-run the DNS check
+DELETE /api/containers/{id}/aliases/{aliasId}         Remove a custom domain
+GET    /api/tls/check?domain=       Caddy on-demand TLS ask (unauthenticated)
+GET    /api/admin/aliases           List every custom domain and who holds it (admin)
+DELETE /api/admin/aliases/{host}    Free a custom domain platform-wide (admin)
 GET    /api/keys                    List LLM API keys
 POST   /api/keys                    Create LLM API key
 DELETE /api/keys/{id}               Revoke LLM API key

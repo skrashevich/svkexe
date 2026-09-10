@@ -69,6 +69,13 @@ func (db *DB) migrate() error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS containers_owner_name_idx ON containers(owner_id, name)`); err != nil {
 		return fmt.Errorf("create containers_owner_name_idx: %w", err)
 	}
+	// Custom domains were briefly unique across every row rather than only
+	// across verified ones, which let an unverified claim hold a name against
+	// its real owner. Dropping the old index is what lets those pending claims
+	// coexist until one of them actually verifies.
+	if _, err := db.Exec(`DROP INDEX IF EXISTS container_aliases_hostname_idx`); err != nil {
+		return fmt.Errorf("drop container_aliases_hostname_idx: %w", err)
+	}
 	// Existing VMs must stay private after the upgrade, so both columns default
 	// to the safe value rather than to whatever the workload happens to serve.
 	for column, definition := range map[string]string{

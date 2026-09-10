@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/dashboard"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
@@ -32,6 +33,8 @@ type Server struct {
 	llmProxy       *llmproxy.Proxy
 	picoclawLLMCfg *picoclaw.LLMProxyConfig
 	updater        *updater.Service
+	aliases        *aliases.Manager
+	aliasVerifier  aliases.Verifier
 }
 
 // NewServer constructs a Server with the given dependencies and registers routes.
@@ -40,7 +43,9 @@ type Server struct {
 // rl may be nil, in which case rate limiting is disabled.
 // upd may be nil, in which case the self-update endpoints report the
 // deployment as unable to update itself instead of failing.
-func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service) *Server {
+// aliasVerifier may be nil, in which case custom domains can be added but
+// never verify, and therefore never route.
+func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, domain string, materializer *secrets.Materializer, rl *ratelimit.Limiter, llmCfg *llmproxy.Config, picoclawLLM *picoclaw.LLMProxyConfig, upd *updater.Service, aliasVerifier aliases.Verifier) *Server {
 	s := &Server{
 		db:             database,
 		runtime:        rt,
@@ -51,6 +56,8 @@ func NewServer(database *db.DB, rt runtime.ContainerRuntime, encKey []byte, doma
 		rateLimiter:    rl,
 		picoclawLLMCfg: picoclawLLM,
 		updater:        upd,
+		aliases:        aliases.New(database, rt, aliasVerifier, domain),
+		aliasVerifier:  aliasVerifier,
 	}
 	if llmCfg != nil && llmCfg.APIKey != "" {
 		s.llmProxy = llmproxy.New(*llmCfg)
@@ -98,6 +105,15 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/register", s.registerPost)
 	})
 
+	// Caddy asks this before issuing a certificate for a custom domain, so it
+	// has no session to present. It is deliberately outside the rate-limited
+	// group: the limiter answers 429, Caddy reads anything but 200 as "do not
+	// issue", and throttling would then block certificate issuance and renewal
+	// for legitimate domains. The handler is bounded by being constant-cost
+	// instead — a syntax check rejects junk SNI before any database access, and
+	// what survives is a single lookup on a unique index.
+	r.Get("/api/tls/check", s.tlsCheck)
+
 	// LLM proxy — token-based auth, not session-based.
 	if s.llmProxy != nil {
 		r.Post("/api/llm/v1/chat/completions", s.llmProxy.ServeHTTP)
@@ -137,6 +153,14 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 			r.Post("/task/retry", s.retryInitialTask)
 			r.Post("/share", s.createSharedLink)
 			r.Get("/shares", s.listSharedLinks)
+
+			// Custom domains pointed at this VM.
+			r.Route("/aliases", func(r chi.Router) {
+				r.Get("/", s.listAliases)
+				r.Post("/", s.createAlias)
+				r.Post("/{aliasID}/verify", s.verifyAlias)
+				r.Delete("/{aliasID}", s.deleteAlias)
+			})
 		})
 
 		// Shared link management
@@ -162,11 +186,15 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 			r.Get("/update/check", s.adminUpdateCheck)
 			r.Get("/update/status", s.adminUpdateStatus)
 			r.Post("/update", s.adminUpdateStart)
+			// Custom domains platform-wide, and the operator's way to free a
+			// hostname held by the wrong account.
+			r.Get("/aliases", s.adminListAliases)
+			r.Delete("/aliases/{hostname}", s.adminReleaseAlias)
 		})
 	})
 
 	// Dashboard routes
-	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.picoclawLLMCfg, s.updater)
+	d, err := dashboard.NewDashboard(s.db, s.runtime, s.materializer, s.domain, s.encKey, s.picoclawLLMCfg, s.updater, s.aliasVerifier)
 	if err != nil {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}

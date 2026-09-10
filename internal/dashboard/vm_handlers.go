@@ -51,6 +51,11 @@ func (d *Dashboard) getVMs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// One batched lookup for the whole list beats one per card; a failure here
+	// must not keep the VM list itself from rendering.
+	if err := d.db.AttachAliases(containers...); err != nil {
+		log.Printf("get VMs for %s: attach aliases: %v", user.ID, err)
+	}
 
 	data := d.newData(r)
 	data.Containers = containers
@@ -79,6 +84,10 @@ func (d *Dashboard) getVMList(w http.ResponseWriter, r *http.Request) {
 				_ = d.db.UpdateContainerStatus(c.ID, c.Status, rtc.IP)
 			}
 		}
+	}
+
+	if err := d.db.AttachAliases(containers...); err != nil {
+		log.Printf("get VM list for %s: attach aliases: %v", user.ID, err)
 	}
 
 	data := d.newData(r)
@@ -186,7 +195,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		c.IPAddress = ip
 
 		if d.materializer != nil {
-			if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c, d.picoclawLLMCfg); err != nil {
+			if err := picoclaw.SetupContainer(ctx, d.runtime, d.db, d.materializer, c, d.picoclawLLMCfg); err != nil {
 				log.Printf("PicoClaw setup failed for %s: %v", incusName, err)
 				_ = d.db.UpdateContainerStatus(c.ID, "error", ip)
 				return
@@ -202,6 +211,9 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if err := d.db.AttachAliases(containers...); err != nil {
+		log.Printf("create VM for %s: attach aliases: %v", user.ID, err)
 	}
 	data := d.newData(r)
 	data.Containers = containers
@@ -243,7 +255,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 	if d.materializer != nil {
 		setupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		if err := picoclaw.SetupContainer(setupCtx, d.runtime, d.materializer, c, d.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(setupCtx, d.runtime, d.db, d.materializer, c, d.picoclawLLMCfg); err != nil {
 			log.Printf("start: PicoClaw setup failed for %s: %v", c.IncusName, err)
 			_ = d.db.UpdateContainerStatus(id, "error", c.IPAddress)
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
@@ -263,7 +275,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.Status = "running"
-	d.render(w, "vm_card", c)
+	d.renderCard(w, c)
 }
 
 // postStopVM handles POST /dashboard/vms/{id}/stop.
@@ -295,7 +307,7 @@ func (d *Dashboard) postStopVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.Status = "stopped"
-	d.render(w, "vm_card", c)
+	d.renderCard(w, c)
 }
 
 // postRecreateVM handles POST /dashboard/vms/{id}/recreate.
@@ -383,7 +395,7 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 			_ = d.db.UpdateContainerStatus(id, "error", "")
 			return
 		}
-		if err := picoclaw.SetupContainer(ctx, d.runtime, d.materializer, c, d.picoclawLLMCfg); err != nil {
+		if err := picoclaw.SetupContainer(ctx, d.runtime, d.db, d.materializer, c, d.picoclawLLMCfg); err != nil {
 			log.Printf("recreate: PicoClaw setup: %v", err)
 			_ = d.db.UpdateContainerStatus(id, "error", "")
 			return
@@ -394,7 +406,7 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 
 	// Return updated card immediately with "recreating" status.
 	c.Status = "recreating"
-	d.render(w, "vm_card", c)
+	d.renderCard(w, c)
 }
 
 // deleteVM handles DELETE /dashboard/vms/{id}.

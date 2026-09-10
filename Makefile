@@ -7,8 +7,15 @@ VERSION_PKG=github.com/skrashevich/svkexe/internal/version
 
 # Build metadata stamped into the binary via -ldflags -X. Fallbacks keep
 # `make gateway` working outside a git checkout (e.g. a source tarball).
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+#
+# safe.directory is declared explicitly because svkexe-update.service builds as
+# root from a checkout that need not be root-owned. git would then refuse with
+# "dubious ownership" and, since these fallbacks swallow the error, the binary
+# would be stamped "dev"/"unknown" — leaving the dashboard with no version to
+# show and nothing for the update check to compare against.
+GIT := git -c safe.directory=$(CURDIR)
+VERSION := $(shell $(GIT) describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT := $(shell $(GIT) rev-parse HEAD 2>/dev/null || echo unknown)
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PICOCLAW_VERSION := $(shell sed -n 's/^PICOCLAW_VERSION=//p' agent/upstream.env 2>/dev/null || echo unknown)
 SHELLEY_COMMIT := $(shell sed -n 's/^SHELLEY_COMMIT=//p' agent/upstream.env 2>/dev/null || echo unknown)

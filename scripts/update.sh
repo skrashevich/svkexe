@@ -379,6 +379,17 @@ fi
 
 [[ -f "${REPO_ROOT}/go.mod" ]] || die "Cannot find svkexe source at ${REPO_ROOT}"
 
+# All repository access goes through this wrapper.
+#
+# The checkout is not necessarily owned by root, and git refuses to touch a
+# repository owned by someone else ("detected dubious ownership"). Interactively
+# that is invisible, because git makes an exception when SUDO_UID says root got
+# here through sudo — but svkexe-update.service is started by systemd, where no
+# such variable exists, so the self-update would fail at the first fetch.
+# Declaring the path safe per-invocation fixes that without mutating root's
+# global git configuration.
+git_repo() { git -c safe.directory="${REPO_ROOT}" -C "${REPO_ROOT}" "$@"; }
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 BIN_NAME="svkexe-gateway"
@@ -392,16 +403,16 @@ export PATH="${GO_INSTALL_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
 
 OLD_COMMIT=""
 if [[ -d "${REPO_ROOT}/.git" ]]; then
-    OLD_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
+    OLD_COMMIT="$(git_repo rev-parse HEAD 2>/dev/null || true)"
     log "Pulling latest changes (branch: ${SVKEXE_BRANCH})…"
     # --tags: the Makefile stamps the binary with `git describe --tags`, and the
     # release-channel update check compares that string against the latest
     # release. Fetching without tags leaves it a bare SHA, which never matches
     # and makes the gateway advertise an update it just installed.
-    git -C "${REPO_ROOT}" fetch --tags origin "${SVKEXE_BRANCH}"
-    git -C "${REPO_ROOT}" checkout -q "${SVKEXE_BRANCH}"
-    git -C "${REPO_ROOT}" reset --hard "origin/${SVKEXE_BRANCH}"
-    COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+    git_repo fetch --tags origin "${SVKEXE_BRANCH}"
+    git_repo checkout -q "${SVKEXE_BRANCH}"
+    git_repo reset --hard "origin/${SVKEXE_BRANCH}"
+    COMMIT="$(git_repo rev-parse --short HEAD)"
     log "Updated to commit ${COMMIT}."
 else
     warn "${REPO_ROOT} is not a git repo — skipping pull, building from current state."
@@ -447,7 +458,7 @@ env HOME="/root" make -C "${REPO_ROOT}" build
 # The status file reports what was actually built, so re-read HEAD here: a
 # non-git checkout never set COMMIT above.
 if [[ -d "${REPO_ROOT}/.git" ]]; then
-    COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
+    COMMIT="$(git_repo rev-parse --short HEAD 2>/dev/null || true)"
 fi
 
 # ── Step 3: Install binary ──────────────────────────────────────────────────
@@ -491,10 +502,10 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
     if [[ -z "${OLD_COMMIT}" ]]; then
         log "No pre-pull commit recorded — skipping base image rebuild check."
     else
-        NEW_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+        NEW_COMMIT="$(git_repo rev-parse HEAD)"
         if [[ "${OLD_COMMIT}" == "${NEW_COMMIT}" ]]; then
             log "No new commits — skipping base image rebuild check."
-        elif git -C "${REPO_ROOT}" diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
+        elif git_repo diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
              | grep -qE '^(scripts/build-(image|agent)\.sh|agent/)'; then
             log "Base image inputs changed (build-image.sh, build-agent.sh or agent/) — rebuilding svkexe-base…"
             "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -130,23 +131,34 @@ func readConfiguredModel(ctx context.Context, rt runtime.ContainerRuntime, incus
 	return cfg.DefaultModel
 }
 
-// preferredModel picks the VM's configured default when it still exists,
-// otherwise a gateway-provided model, otherwise the owner's own.
+// preferredModel runs the task on one of the owner's own models whenever they
+// have any: the gateway list is deployment-wide and may name models this
+// account cannot reach. Their configured default is honoured when it is such a
+// model; otherwise the gateway serves as the fallback.
 func preferredModel(available []string, configured string) string {
-	if configured != "" {
-		for _, id := range available {
-			if id == configured {
-				return id
-			}
+	if user := firstWithPrefix(available, userModelPrefix); user != "" {
+		if strings.HasPrefix(configured, userModelPrefix) && slices.Contains(available, configured) {
+			return configured
 		}
+		return user
 	}
-	for _, id := range available {
-		if strings.HasPrefix(id, "svkexe-") {
+	if configured != "" && slices.Contains(available, configured) {
+		return configured
+	}
+	if gateway := firstWithPrefix(available, gatewayModelPrefix); gateway != "" {
+		return gateway
+	}
+	if len(available) > 0 {
+		return available[0]
+	}
+	return ""
+}
+
+func firstWithPrefix(ids []string, prefix string) string {
+	for _, id := range ids {
+		if strings.HasPrefix(id, prefix) {
 			return id
 		}
-	}
-	for _, id := range available {
-		return id
 	}
 	return ""
 }

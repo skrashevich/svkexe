@@ -2,6 +2,7 @@ package picoclaw
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,59 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/secrets"
 )
+
+// A VM created before the owner had keys runs on a gateway model from the
+// deployment-wide list. Once they add their own key, the VM must move to it:
+// the gateway list is shared and may name models this account cannot reach.
+func TestRefreshProviderKeysAdoptsOwnerDefaultModel(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "gateway.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	owner, err := database.EnsureUser("owner", "owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := []byte("01234567890123456789012345678901")
+	if err := database.SaveProviderKey("key", owner.ID, "openrouter", "secret", "https://host/api/v1", "openrouter/free,openrouter/other", enc); err != nil {
+		t.Fatal(err)
+	}
+	m := secrets.NewMaterializer(database, enc, t.TempDir())
+	guest := &guestRuntime{files: map[string][]byte{
+		ConfigFilePath: []byte(`{"default_model":"svkexe-cohere/north-mini-code:free"}`),
+	}}
+
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := guestDefaultModel(t, guest); got != "svkexe_user:openrouter:openrouter/free" {
+		t.Fatalf("default model = %q, want the owner's own model", got)
+	}
+
+	// A model of theirs that still exists is their own choice and stays put.
+	guest.files[ConfigFilePath] = []byte(`{"default_model":"svkexe_user:openrouter:openrouter/other"}`)
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := guestDefaultModel(t, guest); got != "svkexe_user:openrouter:openrouter/other" {
+		t.Fatalf("default model = %q, want the owner's choice preserved", got)
+	}
+
+	// The rewritten config must stay readable by the agent's unprivileged user.
+	if script := strings.Join(guest.commands, "\n"); !strings.Contains(script, "chmod 640 "+EnvFilePath+" "+ConfigFilePath) {
+		t.Errorf("config permissions not restored: %s", script)
+	}
+}
+
+func guestDefaultModel(t *testing.T, guest *guestRuntime) string {
+	t.Helper()
+	var cfg map[string]string
+	if err := json.Unmarshal(guest.files[ConfigFilePath], &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg["default_model"]
+}
 
 func TestProviderModelsSync(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "gateway.db"))

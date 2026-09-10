@@ -200,6 +200,27 @@ func TestDeliverInitialTaskNoopWithoutTask(t *testing.T) {
 	}
 }
 
+// The initial task is the first thing a new VM runs; sending it to a gateway
+// model the account cannot reach fails the task the owner just queued.
+func TestDeliverInitialTaskUsesOwnerModel(t *testing.T) {
+	database, guest, c := newTaskFixture(t, "do the thing")
+	guest.models = "svkexe-cohere/north-mini-code:free\nsvkexe_user:openrouter:openrouter/free\n"
+	guest.files[ConfigFilePath] = []byte(`{"default_model":"svkexe-cohere/north-mini-code:free"}`)
+
+	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(guest.files[taskFilePath], &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Model != "svkexe_user:openrouter:openrouter/free" {
+		t.Fatalf("task sent to %q, want the owner's own model", payload.Model)
+	}
+}
+
 func TestPreferredModel(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -207,9 +228,13 @@ func TestPreferredModel(t *testing.T) {
 		configured string
 		want       string
 	}{
-		{"configured wins", []string{"svkexe-a", "svkexe_user:p:b"}, "svkexe_user:p:b", "svkexe_user:p:b"},
-		{"gateway model before user model", []string{"svkexe_user:p:b", "svkexe-a"}, "", "svkexe-a"},
+		{"configured user model wins", []string{"svkexe-a", "svkexe_user:p:b", "svkexe_user:p:c"}, "svkexe_user:p:c", "svkexe_user:p:c"},
+		{"user model before gateway model", []string{"svkexe_user:p:b", "svkexe-a"}, "", "svkexe_user:p:b"},
+		{"gateway default gives way to the owner's key", []string{"svkexe-a", "svkexe_user:p:b"}, "svkexe-a", "svkexe_user:p:b"},
+		{"configured user model gone falls back to another", []string{"svkexe-a", "svkexe_user:p:b"}, "svkexe_user:p:gone", "svkexe_user:p:b"},
 		{"user model when no gateway model", []string{"svkexe_user:p:b"}, "", "svkexe_user:p:b"},
+		{"gateway model when the owner has no keys", []string{"other", "svkexe-a"}, "", "svkexe-a"},
+		{"configured gateway model honoured without user keys", []string{"svkexe-a", "svkexe-b"}, "svkexe-b", "svkexe-b"},
 		{"configured but absent falls back", []string{"svkexe-a"}, "svkexe-gone", "svkexe-a"},
 		{"nothing available", nil, "svkexe-gone", ""},
 	}

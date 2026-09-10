@@ -63,11 +63,18 @@ rm -rf %[3]s
 	if err := writeGuestFile(ctx, rt, incusName, "/etc/systemd/system/picoclaw.service", []byte(SystemdUnitContent())); err != nil {
 		return err
 	}
+	var providerModels []secrets.ProviderModel
+	if m != nil {
+		var err error
+		if providerModels, err = m.ProviderModels(ownerID); err != nil {
+			return fmt.Errorf("read provider models: %w", err)
+		}
+	}
 	cfg := map[string]string{}
 	// llm_gateway in the preserved frontend means exe.dev's provider-specific
 	// API, not an OpenAI endpoint. Configure only explicit DB-backed models.
-	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
-		cfg["default_model"] = "svkexe-" + llmCfg.Models[0]
+	if id := defaultModelID(providerModels, llmCfg); id != "" {
+		cfg["default_model"] = id
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -106,7 +113,7 @@ systemctl daemon-reload
 		return err
 	}
 	if m != nil {
-		if err := seedProviderModels(ctx, rt, m, incusName, ownerID); err != nil {
+		if err := seedProviderModels(ctx, rt, incusName, providerModels); err != nil {
 			return err
 		}
 	}
@@ -119,6 +126,20 @@ systemctl daemon-reload
 	}
 	log.Printf("picoclaw: setup complete for %s", incusName)
 	return nil
+}
+
+// defaultModelID is the model a VM opens with. The owner's own keys win over
+// the deployment-wide gateway list: that list is shared by every VM and can
+// name models this account has no access to, while a key the owner configured
+// is one they chose and can reach.
+func defaultModelID(providerModels []secrets.ProviderModel, llmCfg *LLMProxyConfig) string {
+	if len(providerModels) > 0 {
+		return providerModelID(providerModels[0])
+	}
+	if llmCfg != nil && llmCfg.BaseURL != "" && len(llmCfg.Models) > 0 {
+		return gatewayModelPrefix + llmCfg.Models[0]
+	}
+	return ""
 }
 
 func writeGuestFile(ctx context.Context, rt runtime.ContainerRuntime, name, path string, data []byte) error {

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/secrets"
 )
 
 type guestRuntime struct {
@@ -38,6 +40,8 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 		g.files[path] = data
 	}
 	switch {
+	case len(cmd) == 2 && cmd[0] == "cat":
+		return g.files[cmd[1]], nil
 	case len(cmd) == 2 && cmd[1] == "version":
 		return []byte(`{"version":"picoclaw-v0.3.1-svkexe","customized":true}`), nil
 	case strings.Contains(text, "is-active"):
@@ -58,6 +62,47 @@ func (g *guestRuntime) PushFile(_ context.Context, _, path string, data []byte) 
 }
 func (g *guestRuntime) PullFile(context.Context, string, string) ([]byte, error) {
 	return []byte("archive"), nil
+}
+
+// The gateway list is deployment-wide and can name models an account cannot
+// reach, so a VM whose owner has their own key must open on that key instead.
+func TestSetupPrefersOwnerModelOverGatewayList(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "picoclaw")
+	if err := os.WriteFile(binary, []byte("agent-binary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SVKEXE_AGENT_BINARY", binary)
+	database, err := db.Open(filepath.Join(t.TempDir(), "gateway.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	owner, err := database.EnsureUser("owner", "owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := []byte("01234567890123456789012345678901")
+	if err := database.SaveProviderKey("key", owner.ID, "openrouter", "secret", "https://host/api/v1", "openrouter/free", enc); err != nil {
+		t.Fatal(err)
+	}
+	m := secrets.NewMaterializer(database, enc, t.TempDir())
+	guest := &guestRuntime{files: map[string][]byte{}, models: "svkexe-cohere/north-mini-code:free\n"}
+	cfg := &LLMProxyConfig{BaseURL: "http://gateway/api/llm/v1", Token: "token", Models: []string{"cohere/north-mini-code:free"}}
+
+	if err := SetupContainer(t.Context(), guest, m, "id", "vm", owner.ID, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]string
+	if err := json.Unmarshal(guest.files[ConfigFilePath], &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["default_model"] != "svkexe_user:openrouter:openrouter/free" {
+		t.Fatalf("default model = %q, want the owner's own model", config["default_model"])
+	}
+	// The gateway models are still seeded, only demoted to a fallback.
+	if !strings.Contains(string(guest.files[ConfigDir+"/models.sql"]), "svkexe-cohere/north-mini-code:free") {
+		t.Error("gateway models no longer available in the VM")
+	}
 }
 
 func TestSetupMigrationAndGatewayConfiguration(t *testing.T) {

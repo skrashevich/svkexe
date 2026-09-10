@@ -209,6 +209,9 @@ The REST API accepts the same settings at `POST /api/keys`, for example:
 ```
 
 User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.
+When an owner has their own models, those are what a VM opens with and what the
+initial task runs on; the `OPENROUTER_MODELS` list stays available in the VM as a
+fallback for owners without keys.
 
 ### Initial task
 

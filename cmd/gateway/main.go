@@ -137,12 +137,17 @@ func main() {
 		log.Printf("LLM proxy enabled with %d models", len(models))
 	}
 
-	// Derive the LLM proxy URL for PicoClaw inside containers.
-	// This is independent of OpenRouter — containers need it whenever
-	// the gateway exposes an LLM endpoint.
+	// Derive the LLM proxy URL for PicoClaw inside containers. An explicit
+	// LLM_PROXY_URL names someone else's endpoint and is taken at its word; the
+	// URL derived from DOMAIN is only real while this gateway serves /api/llm,
+	// which needs OPENROUTER_API_KEY. Seeding models against a dead endpoint
+	// would hand every VM a default model that cannot answer.
 	llmProxyURL := getenv("LLM_PROXY_URL", "")
-	if llmProxyURL == "" && domain != "" {
+	if llmProxyURL == "" && domain != "" && llmCfg != nil {
 		llmProxyURL = "https://" + domain + "/api/llm/v1"
+	}
+	if llmProxyURL == "" && domain != "" {
+		log.Printf("LLM proxy disabled (no OPENROUTER_API_KEY): VMs get models only from their owners' own LLM keys")
 	}
 	if llmProxyURL != "" {
 		var models []string

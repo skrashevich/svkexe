@@ -2,7 +2,9 @@ package picoclaw
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,29 +12,56 @@ import (
 	"github.com/skrashevich/svkexe/internal/secrets"
 )
 
+// providerModelID is the agent-side identifier of a model backed by one of the
+// owner's own keys.
+func providerModelID(m secrets.ProviderModel) string {
+	return userModelPrefix + m.Provider + ":" + m.Model
+}
+
 func providerModelsSQL(models []secrets.ProviderModel) string {
 	var sql strings.Builder
-	sql.WriteString("PRAGMA busy_timeout=10000;\nBEGIN IMMEDIATE;\nDELETE FROM models WHERE model_id GLOB 'svkexe_user:*';\n")
+	fmt.Fprintf(&sql, "PRAGMA busy_timeout=10000;\nBEGIN IMMEDIATE;\nDELETE FROM models WHERE model_id GLOB '%s*';\n", userModelPrefix)
 	for _, m := range models {
 		fmt.Fprintf(&sql, "INSERT INTO models (model_id, display_name, provider_type, endpoint, api_key, model_name, max_tokens) VALUES (%s, %s, 'openai', %s, %s, %s, 200000);\n",
-			sqlQuote("svkexe_user:"+m.Provider+":"+m.Model), sqlQuote(m.Provider+" / "+m.Model), sqlQuote(m.BaseURL), sqlQuote(m.Key), sqlQuote(m.Model))
+			sqlQuote(providerModelID(m)), sqlQuote(m.Provider+" / "+m.Model), sqlQuote(m.BaseURL), sqlQuote(m.Key), sqlQuote(m.Model))
 	}
 	sql.WriteString("COMMIT;\n")
 	return sql.String()
 }
 
-func seedProviderModels(ctx context.Context, rt runtime.ContainerRuntime, m *secrets.Materializer, name, owner string) error {
-	models, err := m.ProviderModels(owner)
-	if err != nil {
-		return err
-	}
+func seedProviderModels(ctx context.Context, rt runtime.ContainerRuntime, name string, models []secrets.ProviderModel) error {
 	sqlPath := ConfigDir + "/provider-models.sql"
 	if err := writeGuestFile(ctx, rt, name, sqlPath, []byte(providerModelsSQL(models))); err != nil {
 		return err
 	}
 	apply := fmt.Sprintf("sqlite3 -bail %s < %s; result=$?; rm -f %s; exit $result", DBPath, sqlPath, sqlPath)
-	_, err = rt.Exec(ctx, name, []string{"sh", "-c", apply})
+	_, err := rt.Exec(ctx, name, []string{"sh", "-c", apply})
 	return err
+}
+
+// adoptProviderDefaultModel points the VM's default model at one of the owner's
+// own models once they have keys, unless the current default is a model of
+// theirs that still exists. A gateway default is deployment-wide and may name a
+// model this account cannot reach, so it must not survive the owner's own keys.
+func adoptProviderDefaultModel(ctx context.Context, rt runtime.ContainerRuntime, name string, models []secrets.ProviderModel) error {
+	if len(models) == 0 {
+		return nil
+	}
+	cfg := map[string]string{}
+	if out, err := rt.Exec(ctx, name, []string{"cat", ConfigFilePath}); err == nil {
+		// An unreadable or corrupt config is rewritten rather than trusted.
+		_ = json.Unmarshal(out, &cfg)
+	}
+	current := cfg["default_model"]
+	if slices.ContainsFunc(models, func(m secrets.ProviderModel) bool { return providerModelID(m) == current }) {
+		return nil
+	}
+	cfg["default_model"] = providerModelID(models[0])
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return writeGuestFile(ctx, rt, name, ConfigFilePath, data)
 }
 
 // RefreshProviderKeys applies provider changes to the running agent, including
@@ -58,10 +87,17 @@ func RefreshProviderKeys(ctx context.Context, rt runtime.ContainerRuntime, m *se
 	if err := writeGuestFile(ctx, rt, name, EnvFilePath, env); err != nil {
 		return err
 	}
-	if err := seedProviderModels(ctx, rt, m, name, owner); err != nil {
+	models, err := m.ProviderModels(owner)
+	if err != nil {
 		return err
 	}
-	protect := fmt.Sprintf("chown root:user %[1]s && chmod 640 %[1]s && systemctl restart picoclaw.service", EnvFilePath)
+	if err := seedProviderModels(ctx, rt, name, models); err != nil {
+		return err
+	}
+	if err := adoptProviderDefaultModel(ctx, rt, name, models); err != nil {
+		return err
+	}
+	protect := fmt.Sprintf("chown root:user %[1]s %[2]s && chmod 640 %[1]s %[2]s && systemctl restart picoclaw.service", EnvFilePath, ConfigFilePath)
 	if _, err := rt.Exec(ctx, name, []string{"sh", "-c", protect}); err != nil {
 		return err
 	}

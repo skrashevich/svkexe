@@ -14,6 +14,7 @@ import (
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/vmconfig"
 )
 
 // containerIDFromURL returns the {id} URL parameter.
@@ -39,6 +40,11 @@ func (s *Server) listContainers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Without this the serialised NestingAllowed is the zero value, so every VM
+	// would report the capability as forbidden regardless of the real setting.
+	if err := s.db.AttachNestingPolicy(containers...); err != nil {
+		log.Printf("list containers for %s: attach nesting policy: %v", userID, err)
+	}
 	writeJSON(w, http.StatusOK, containers)
 }
 
@@ -51,6 +57,11 @@ type createContainerRequest struct {
 	DiskGB   int    `json:"disk_gb"`
 	// InitialTask is handed to the agent once the VM is up.
 	InitialTask string `json:"initial_task"`
+	// Nesting decides whether the VM may run containers of its own. A body that
+	// omits it gets the platform default rather than Go's zero value: a caller
+	// that never heard of the field must not silently create a VM where Docker
+	// cannot start.
+	Nesting *bool `json:"nesting"`
 }
 
 // createContainer handles POST /api/containers
@@ -90,6 +101,17 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		req.DiskGB = 10
 	}
 
+	nestingAllowed, err := s.db.NestingAllowed()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	nesting := dbpkg.DefaultNesting
+	if req.Nesting != nil {
+		nesting = *req.Nesting
+	}
+	effectiveNesting := nestingAllowed && nesting
+
 	rtContainer, err := s.runtime.Create(r.Context(), runtime.CreateOpts{
 		Name:     req.Name,
 		OwnerID:  userID,
@@ -97,6 +119,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		CPULimit: req.CPULimit,
 		MemoryMB: req.MemoryMB,
 		DiskGB:   req.DiskGB,
+		Nesting:  effectiveNesting,
 	})
 	if err != nil {
 		http.Error(w, "failed to create container: "+err.Error(), http.StatusInternalServerError)
@@ -113,6 +136,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		CPULimit:  req.CPULimit,
 		MemoryMB:  req.MemoryMB,
 		DiskGB:    req.DiskGB,
+		Nesting:   nesting,
 
 		InitialTask: req.InitialTask,
 	}
@@ -123,6 +147,12 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "failed to persist container", http.StatusInternalServerError)
 		return
+	}
+
+	// The instance was built with the setting already on it, so the start below
+	// is what puts it in effect.
+	if err := vmconfig.MarkStarted(s.db, dbContainer, effectiveNesting); err != nil {
+		log.Printf("create %s: record nesting: %v", rtContainer.Name, err)
 	}
 
 	// Incus hands back a stopped instance, so bring it up as part of creation —
@@ -144,7 +174,7 @@ func (s *Server) createContainer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, dbContainer.ID)
+		picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, dbContainer.ID, s.picoclawLLMCfg)
 	}
 
 	dbContainer.Status = "running"
@@ -167,6 +197,9 @@ func (s *Server) getContainer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if err := s.db.AttachNestingPolicy(c); err != nil {
+		log.Printf("get container %s: attach nesting policy: %v", id, err)
 	}
 	writeJSON(w, http.StatusOK, c)
 }
@@ -230,6 +263,11 @@ func (s *Server) doRecreate(c *dbpkg.Container) {
 	id := c.ID
 
 	// The old VM must stay intact unless its data was successfully backed up.
+	// It is a real boot, running for as long as the backup takes, so it has to
+	// honour the current setting like any other.
+	if err := vmconfig.PrepareStart(ctx, s.runtime, s.db, c); err != nil {
+		log.Printf("recreate: apply nesting before backup for %s: %v", c.IncusName, err)
+	}
 	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
 		_ = s.db.UpdateContainerStatus(id, "error", "")
 		return
@@ -251,7 +289,13 @@ func (s *Server) doRecreate(c *dbpkg.Container) {
 		return
 	}
 
-	// Create new container from fresh image with same settings.
+	// Create new container from fresh image with same settings. The rebuild is
+	// the VM's chance to land on the current nesting setting, so it is resolved
+	// again rather than copied from what the old instance booted with.
+	effectiveNesting, err := vmconfig.EffectiveNesting(s.db, c)
+	if err != nil {
+		log.Printf("recreate: resolve nesting for %s: %v", c.IncusName, err)
+	}
 	if _, err := s.runtime.Create(ctx, runtime.CreateOpts{
 		Name:     c.Name,
 		OwnerID:  c.OwnerID,
@@ -259,9 +303,13 @@ func (s *Server) doRecreate(c *dbpkg.Container) {
 		CPULimit: c.CPULimit,
 		MemoryMB: c.MemoryMB,
 		DiskGB:   c.DiskGB,
+		Nesting:  effectiveNesting,
 	}); err != nil {
 		_ = s.db.UpdateContainerStatus(id, "error", "")
 		return
+	}
+	if err := vmconfig.MarkStarted(s.db, c, effectiveNesting); err != nil {
+		log.Printf("recreate: record nesting for %s: %v", c.IncusName, err)
 	}
 
 	// Start the new container.
@@ -311,7 +359,17 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The runtime only reads the nesting setting at boot, so this is the moment a
+	// pending change becomes real. Failing to write it must not block the start:
+	// the VM comes up on its previous setting and still owes a restart.
+	if err := vmconfig.PrepareStart(r.Context(), s.runtime, s.db, c); err != nil {
+		log.Printf("start %s: apply nesting: %v", c.IncusName, err)
+	}
+
 	if err := s.runtime.Start(r.Context(), c.IncusName); err != nil {
+		// A row left saying "running" after a start that did not happen would have
+		// the dashboard speak for a VM that is down.
+		_ = s.db.UpdateContainerStatus(id, "stopped", "")
 		http.Error(w, "failed to start container: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -327,7 +385,7 @@ func (s *Server) startContainer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(setupCtx, s.runtime, s.db, id)
+		picoclaw.DeliverInitialTaskByID(setupCtx, s.runtime, s.db, id, s.picoclawLLMCfg)
 	}
 
 	// Fetch fresh IP from runtime after start.

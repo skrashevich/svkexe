@@ -31,6 +31,7 @@
             <div class="form-group" style="flex:1;">
                 <label>API Key</label>
                 <input type="password" name="key" placeholder="Paste your API key..." autocomplete="off">
+                <div class="form-hint">Editing a saved connection? Leave this blank to keep its current key.</div>
             </div>
             <button type="submit" class="btn btn-primary" style="flex-shrink:0;">
                 Save connection
@@ -40,7 +41,7 @@
             <div class="form-group" style="flex:1;">
                 <label>Custom connection name</label>
                 <input name="name" pattern="[a-z0-9][a-z0-9-]{0,47}" placeholder="e.g. local or together">
-                <div class="form-hint">Required for Custom. Use lowercase letters, numbers and hyphens. Reuse a name to update it.</div>
+                <div class="form-hint">Required for Custom. Use lowercase letters, numbers and hyphens. To change a saved connection press <strong>Edit</strong> on its row — saving replaces the whole row, so retyping it by hand loses whatever you leave blank.</div>
             </div>
             <div class="form-group" style="flex:1;">
                 <label>Base URL</label>
@@ -137,5 +138,31 @@
     // filled Base URL beside a disabled Protocol, and the protocol they can read
     // on screen is silently left out of the submission.
     window.addEventListener("pageshow", syncProtocolState);
+
+    // Editing loads the stored connection back into the form. Saving replaces
+    // the whole row, so rotating a key by retyping the obvious fields would
+    // otherwise drop the protocol back to chat completions — which for a gateway
+    // like openmodel.ai turns every request into a 404, with the dashboard
+    // showing a protocol the owner never chose. The key itself is not loaded:
+    // only its mask is stored on the page.
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest("[data-edit-connection]");
+        if (!button) return;
+        var row = button.closest("tr");
+        var form = document.getElementById("llm-connection-form");
+        var provider = row.dataset.provider;
+        var custom = provider.indexOf("custom-") === 0;
+        form.elements.provider.value = custom ? "custom" : provider;
+        form.elements.name.value = custom ? provider.slice("custom-".length) : "";
+        form.elements.base_url.value = row.dataset.baseUrl;
+        form.elements.models.value = row.dataset.models;
+        form.elements.protocol.value = row.dataset.protocol;
+        // Left blank on purpose: the stored key is never rendered, and
+        // SaveProviderKey carries it over rather than replacing it with nothing.
+        form.elements.key.value = "";
+        presetFilled = false;
+        syncProtocolState();
+        form.elements.key.focus();
+    });
 </script>
 {{end}}

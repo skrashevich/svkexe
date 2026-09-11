@@ -36,6 +36,12 @@ type systemPageData struct {
 	StartError string
 	// Checked distinguishes "no update available" from "never looked".
 	Checked bool
+	// NestingAllowed is the deployment-wide ceiling on nested containers.
+	NestingAllowed bool
+	// NestingError explains a failed save of that switch. Like CheckError it is
+	// content inside a fragment rather than an HTTP failure, so the toggle can
+	// come back showing what is really stored.
+	NestingError string
 }
 
 // requireAdmin gates the system routes. The dashboard router runs behind the
@@ -59,6 +65,16 @@ func (d *Dashboard) newSystemData(r *http.Request) systemPageData {
 		Version:      version.Get(),
 		Run:          updater.RunState{State: updater.StateIdle},
 	}
+	// An unreadable setting must not render as "off": that would invite an admin
+	// to toggle it on and write over whatever is really stored. The error is
+	// rendered beside the switch instead, so a failed read is visible as a
+	// failure rather than as a decision.
+	allowed, err := d.db.NestingAllowed()
+	if err != nil {
+		data.NestingError = err.Error()
+		allowed = true
+	}
+	data.NestingAllowed = allowed
 	if d.updater == nil {
 		data.UnavailableReason = "this deployment was started without the update service"
 		return data
@@ -141,6 +157,27 @@ func (d *Dashboard) postUpdate(w http.ResponseWriter, r *http.Request) {
 		data.Run = st
 	}
 	d.render(w, "update_status", data)
+}
+
+// postNestingPolicy handles POST /dashboard/system/nesting — the deployment-wide
+// ceiling on nested containers.
+//
+// It only writes the setting. Every running VM keeps the nesting it booted with
+// until it restarts, which the VM cards then say out loud; rewriting dozens of
+// instances and bouncing them from one admin click would take the platform down
+// to enforce a policy that takes effect on the next start anyway.
+func (d *Dashboard) postNestingPolicy(w http.ResponseWriter, r *http.Request) {
+	if !d.requireAdmin(w, r) {
+		return
+	}
+	allowed := r.FormValue("nesting_allowed") != ""
+	if err := d.db.SetNestingAllowed(allowed); err != nil {
+		data := d.newSystemData(r)
+		data.NestingError = err.Error()
+		d.render(w, "nesting_policy", data)
+		return
+	}
+	d.render(w, "nesting_policy", d.newSystemData(r))
 }
 
 // getUpdateStatus handles GET /dashboard/system/status — the fragment the

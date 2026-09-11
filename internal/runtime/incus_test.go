@@ -10,11 +10,15 @@ import (
 // MockRuntime is a mock implementation of ContainerRuntime for testing.
 type MockRuntime struct {
 	containers map[string]*Container
+	// nesting records the security.nesting each container was last configured
+	// with, so a test can assert on what a start would put in effect.
+	nesting map[string]bool
 }
 
 func NewMockRuntime() *MockRuntime {
 	return &MockRuntime{
 		containers: make(map[string]*Container),
+		nesting:    make(map[string]bool),
 	}
 }
 
@@ -29,7 +33,19 @@ func (m *MockRuntime) Create(ctx context.Context, opts CreateOpts) (*Container, 
 		CreatedAt: time.Now(),
 	}
 	m.containers[name] = c
+	m.nesting[name] = opts.Nesting
 	return c, nil
+}
+
+// Nesting reports what SetNesting or Create last stored for a container.
+func (m *MockRuntime) Nesting(id string) bool { return m.nesting[id] }
+
+func (m *MockRuntime) SetNesting(ctx context.Context, id string, enabled bool) error {
+	if _, ok := m.containers[id]; !ok {
+		return ErrNotFound(id)
+	}
+	m.nesting[id] = enabled
+	return nil
 }
 
 func (m *MockRuntime) Start(ctx context.Context, id string) error {

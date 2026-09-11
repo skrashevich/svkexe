@@ -16,6 +16,7 @@ import (
 	dbpkg "github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/vmconfig"
 )
 
 // userFromCtx extracts the authenticated *db.User from context.
@@ -56,6 +57,9 @@ func (d *Dashboard) getVMs(w http.ResponseWriter, r *http.Request) {
 	if err := d.db.AttachAliases(containers...); err != nil {
 		log.Printf("get VMs for %s: attach aliases: %v", user.ID, err)
 	}
+	if err := d.db.AttachNestingPolicy(containers...); err != nil {
+		log.Printf("get VMs for %s: attach nesting policy: %v", user.ID, err)
+	}
 
 	data := d.newData(r)
 	data.Containers = containers
@@ -88,6 +92,9 @@ func (d *Dashboard) getVMList(w http.ResponseWriter, r *http.Request) {
 
 	if err := d.db.AttachAliases(containers...); err != nil {
 		log.Printf("get VM list for %s: attach aliases: %v", user.ID, err)
+	}
+	if err := d.db.AttachNestingPolicy(containers...); err != nil {
+		log.Printf("get VM list for %s: attach nesting policy: %v", user.ID, err)
 	}
 
 	data := d.newData(r)
@@ -130,6 +137,20 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	memoryMB := formInt(r, "memory_mb", 2048)
 	diskGB := formInt(r, "disk_gb", 10)
 
+	// A deployment that forbids nesting hides the checkbox rather than showing a
+	// dead one, so its absence must not be read as "the owner said no": the VM
+	// keeps the default wish and starts nesting the day the operator allows it
+	// again. Only a form that could carry the answer gets to decide it.
+	nestingAllowed, err := d.db.NestingAllowed()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	nesting := dbpkg.DefaultNesting
+	if nestingAllowed {
+		nesting = r.FormValue("nesting") != ""
+	}
+
 	if existing, _ := d.db.GetContainerByName(name, user.ID); existing != nil {
 		http.Error(w, "VM with this name already exists", http.StatusConflict)
 		return
@@ -146,6 +167,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		CPULimit:  cpuLimit,
 		MemoryMB:  memoryMB,
 		DiskGB:    diskGB,
+		Nesting:   nesting,
 
 		InitialTask: r.FormValue("initial_task"),
 	}
@@ -153,6 +175,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to persist VM: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	effectiveNesting := nestingAllowed && nesting
 
 	// Create the Incus container asynchronously — the UI polls every 5s and
 	// will pick up the status change from "creating" to "stopped".
@@ -172,11 +195,18 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 			CPULimit: cpuLimit,
 			MemoryMB: memoryMB,
 			DiskGB:   diskGB,
+			Nesting:  effectiveNesting,
 		})
 		if err != nil {
 			log.Printf("async VM create failed for %s: %v", incusName, err)
 			_ = d.db.UpdateContainerStatus(c.ID, "error", "")
 			return
+		}
+		// The instance was built with the setting already on it, so the start
+		// below puts it in effect; recording that here is what keeps the card
+		// from asking for a restart the VM does not need.
+		if err := vmconfig.MarkStarted(d.db, c, effectiveNesting); err != nil {
+			log.Printf("async VM create for %s: record nesting: %v", incusName, err)
 		}
 		// Incus hands back a stopped instance, so bring it up as part of
 		// creation — a new VM is expected to be usable without pressing Start.
@@ -200,7 +230,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 				_ = d.db.UpdateContainerStatus(c.ID, "error", ip)
 				return
 			}
-			picoclaw.DeliverInitialTaskByID(ctx, d.runtime, d.db, c.ID)
+			picoclaw.DeliverInitialTaskByID(ctx, d.runtime, d.db, c.ID, d.picoclawLLMCfg)
 		}
 
 		_ = d.db.UpdateContainerStatus(c.ID, "running", ip)
@@ -214,6 +244,9 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := d.db.AttachAliases(containers...); err != nil {
 		log.Printf("create VM for %s: attach aliases: %v", user.ID, err)
+	}
+	if err := d.db.AttachNestingPolicy(containers...); err != nil {
+		log.Printf("create VM for %s: attach nesting policy: %v", user.ID, err)
 	}
 	data := d.newData(r)
 	data.Containers = containers
@@ -246,7 +279,19 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Nesting is read by the runtime at boot, so this is the only moment a
+	// pending change can become real. A failure here is not fatal to the start:
+	// the VM comes up on its previous setting and the card keeps asking for the
+	// restart that would fix it.
+	if err := vmconfig.PrepareStart(r.Context(), d.runtime, d.db, c); err != nil {
+		log.Printf("start %s: apply nesting: %v", c.IncusName, err)
+	}
+
 	if err := d.runtime.Start(r.Context(), c.IncusName); err != nil {
+		// A row left saying "running" after a start that did not happen makes the
+		// card speak for a VM that is down — including claiming that the nesting
+		// setting it was just given is live.
+		_ = d.db.UpdateContainerStatus(id, "stopped", "")
 		http.Error(w, "failed to start VM: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -261,7 +306,7 @@ func (d *Dashboard) postStartVM(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "PicoClaw setup failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(setupCtx, d.runtime, d.db, id)
+		picoclaw.DeliverInitialTaskByID(setupCtx, d.runtime, d.db, id, d.picoclawLLMCfg)
 	}
 
 	// Fetch fresh IP from runtime after start.
@@ -340,6 +385,12 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 		ctx := context.Background()
 
 		// The old VM must stay intact unless its data was successfully backed up.
+		// It is a real boot, running for as long as the backup takes, so it has
+		// to honour the current setting like any other: skipping this would let a
+		// VM come up with nesting an admin has since revoked.
+		if err := vmconfig.PrepareStart(ctx, d.runtime, d.db, c); err != nil {
+			log.Printf("recreate: apply nesting before backup for %s: %v", c.IncusName, err)
+		}
 		if err := d.runtime.Start(ctx, c.IncusName); err != nil {
 			_ = d.db.UpdateContainerStatus(id, "error", "")
 			return
@@ -362,7 +413,13 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create fresh container.
+		// Create fresh container. The rebuilt instance is the owner's chance to
+		// land on the current nesting setting, so it is resolved again here
+		// rather than copied from whatever the old one booted with.
+		effectiveNesting, err := vmconfig.EffectiveNesting(d.db, c)
+		if err != nil {
+			log.Printf("recreate: resolve nesting for %s: %v", c.IncusName, err)
+		}
 		if _, err := d.runtime.Create(ctx, runtime.CreateOpts{
 			Name:     c.Name,
 			OwnerID:  c.OwnerID,
@@ -370,10 +427,14 @@ func (d *Dashboard) postRecreateVM(w http.ResponseWriter, r *http.Request) {
 			CPULimit: c.CPULimit,
 			MemoryMB: c.MemoryMB,
 			DiskGB:   c.DiskGB,
+			Nesting:  effectiveNesting,
 		}); err != nil {
 			log.Printf("recreate: create failed for %s: %v", c.IncusName, err)
 			_ = d.db.UpdateContainerStatus(id, "error", "")
 			return
+		}
+		if err := vmconfig.MarkStarted(d.db, c, effectiveNesting); err != nil {
+			log.Printf("recreate: record nesting for %s: %v", c.IncusName, err)
 		}
 
 		// Start.

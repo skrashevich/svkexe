@@ -8,7 +8,7 @@
             <div class="form-group" style="flex:1;">
                 <label>Model</label>
                 <select name="model">
-                    <option value="" {{if .Auto}}selected{{end}}>Auto — first of your own models, else the platform default</option>
+                    <option value="" {{if .Auto}}selected{{end}}>Auto — keep what each VM is on while it is still yours, else your first model</option>
                     {{range .Models}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
                 </select>
             </div>

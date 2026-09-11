@@ -76,6 +76,26 @@ func TestProviderMigrationPreservesKeys(t *testing.T) {
 	if err != nil || len(keys) != 1 || keys[0].BaseURL != "" || keys[0].Protocol != "" {
 		t.Fatalf("keys=%+v err=%v", keys, err)
 	}
+
+	// An endpoint stored before the protocol column existed is backfilled, so
+	// the empty value keeps exactly one meaning: no endpoint at all.
+	if _, err := database.Exec(
+		`INSERT INTO api_keys (id, owner_id, provider, encrypted_key, base_url, models) VALUES ('legacy-endpoint', 'old', 'custom-old', x'00', 'https://host/v1', 'm')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := database.ListAPIKeysByOwner("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range after {
+		if (k.BaseURL == "") != (k.Protocol == "") {
+			t.Fatalf("protocol and endpoint disagree: %+v", k)
+		}
+	}
 	plain, err := database.GetAPIKeyPlaintext("old-key", testEncKey)
 	if err != nil || plain != "secret" {
 		t.Fatal("migration lost key")
@@ -98,13 +118,13 @@ func TestDefaultModelFollowsTheOwnersConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	chosen := UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := database.UserDefaultModel("owner"); err != nil || got != chosen {
 		t.Fatalf("default=%q err=%v", got, err)
 	}
-	if _, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-configured")); err == nil {
+	if err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-configured")); err == nil {
 		t.Fatal("accepted a model the owner cannot reach")
 	}
 
@@ -118,7 +138,7 @@ func TestDefaultModelFollowsTheOwnersConnections(t *testing.T) {
 	}
 
 	// Deleting the last connection does the same.
-	if _, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "deepseek-v4-flash")); err != nil {
+	if err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "deepseek-v4-flash")); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.DeleteAPIKeyForOwner("k2", "owner"); err != nil {
@@ -141,11 +161,11 @@ func TestRejectedDefaultModelIsRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	reachable := UserModelID("custom-openmodel", "deepseek-v4-flash")
-	if _, err := database.SetUserDefaultModel("owner", reachable); err != nil {
+	if err := database.SetUserDefaultModel("owner", reachable); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-mine"))
+	err := database.SetUserDefaultModel("owner", UserModelID("custom-openmodel", "not-mine"))
 	if !errors.Is(err, ErrUnknownModel) {
 		t.Fatalf("err=%v, want ErrUnknownModel so handlers can answer 400", err)
 	}
@@ -154,44 +174,53 @@ func TestRejectedDefaultModelIsRolledBack(t *testing.T) {
 	}
 
 	// An account that no longer exists is reported as such, not as a bad model.
-	if _, err := database.SetUserDefaultModel("ghost", ""); !errors.Is(err, sql.ErrNoRows) {
+	if err := database.SetUserDefaultModel("ghost", ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("err=%v, want sql.ErrNoRows", err)
 	}
 }
 
-// Applying a choice restarts the agent on every running VM, killing whatever it
-// is in the middle of. Re-submitting the model already stored must therefore be
-// reported as a no-op rather than as a change.
-func TestSetDefaultModelReportsWhetherItMoved(t *testing.T) {
+// Saving replaces the whole row, and the stored key is the one field the
+// dashboard can never show back. So a blank key on a connection that has one
+// keeps it — otherwise editing an endpoint's models or protocol would wipe the
+// credential by leaving a field the owner was never shown empty, and the agent
+// would answer 401 with nothing on screen to explain it.
+func TestSavingWithoutAKeyKeepsTheStoredOne(t *testing.T) {
 	database := openTestDB(t)
 	if _, err := database.EnsureUser("owner", "owner@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SaveProviderKey("k1", "owner", "custom-openmodel", "key", "https://api.openmodel.ai/v1", "deepseek-v4-flash", "openai-responses", testEncKey); err != nil {
+	if err := database.SaveProviderKey("k1", "owner", "custom-openmodel", "om-secret", "https://api.openmodel.ai/v1", "deepseek-v4-flash", "openai-responses", testEncKey); err != nil {
 		t.Fatal(err)
 	}
-	model := UserModelID("custom-openmodel", "deepseek-v4-flash")
-	for _, tc := range []struct {
-		name, model string
-		want        bool
-	}{
-		{"picking a model moves it", model, true},
-		{"picking it again does not", model, false},
-		{"going back to Auto moves it", "", true},
-		{"and staying on Auto does not", "", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			changed, err := database.SetUserDefaultModel("owner", tc.model)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if changed != tc.want {
-				t.Fatalf("changed = %v, want %v", changed, tc.want)
-			}
-			if got, err := database.UserDefaultModel("owner"); err != nil || got != tc.model {
-				t.Fatalf("default=%q err=%v", got, err)
-			}
-		})
+	// Re-saved with a changed model list and no key, exactly as the Edit button
+	// submits it.
+	if err := database.SaveProviderKey("k2", "owner", "custom-openmodel", "", "https://api.openmodel.ai/v1", "deepseek-v4-pro", "openai-responses", testEncKey); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := database.ListAPIKeysByOwner("owner")
+	if err != nil || len(keys) != 1 || keys[0].Models != "deepseek-v4-pro" {
+		t.Fatalf("keys=%+v err=%v", keys, err)
+	}
+	plain, err := database.GetAPIKeyPlaintext(keys[0].ID, testEncKey)
+	if err != nil || plain != "om-secret" {
+		t.Fatalf("key=%q err=%v, want the stored credential carried over", plain, err)
+	}
+
+	// A connection that never had one still ends up with none.
+	if err := database.SaveProviderKey("k3", "owner", "custom-local", "", "http://localhost:8000/v1", "local/model", "", testEncKey); err != nil {
+		t.Fatal(err)
+	}
+	local, err := database.ListAPIKeysByOwner("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range local {
+		if k.Provider != "custom-local" {
+			continue
+		}
+		if plain, err := database.GetAPIKeyPlaintext(k.ID, testEncKey); err != nil || plain != "" {
+			t.Fatalf("key=%q err=%v, want empty", plain, err)
+		}
 	}
 }
 
@@ -209,7 +238,7 @@ func TestDeleteConnectionIsScopedToItsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	chosen := UserModelID("custom-openmodel", "deepseek-v4-flash")
-	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +254,7 @@ func TestDeleteConnectionIsScopedToItsOwner(t *testing.T) {
 	}
 
 	// The stranger cannot pick it either.
-	if _, err := database.SetUserDefaultModel("stranger", chosen); err == nil {
+	if err := database.SetUserDefaultModel("stranger", chosen); err == nil {
 		t.Fatal("stranger adopted another account's model")
 	}
 	if got, err := database.OwnerModelIDs("stranger"); err != nil || len(got) != 0 {

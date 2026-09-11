@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
+	"github.com/skrashevich/svkexe/internal/vmconfig"
 )
 
 const banner = "\r\n              _\r\n  _____   _| | __\r\n / __\\ \\ / / |/ /\r\n \\__ \\\\ V /|   <\r\n |___/ \\_/ |_|\\_\\\r\n\r\n"
@@ -148,6 +150,14 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 
 	fmt.Fprintf(sess, "Creating VM %q...\r\n", name)
 
+	// The SSH menu offers no switch for it, so a VM born here takes the platform
+	// default and the owner retunes it from the dashboard.
+	nestingAllowed, err := s.db.NestingAllowed()
+	if err != nil {
+		fmt.Fprintf(sess, "Error reading the nesting policy: %v\r\n", err)
+		return
+	}
+
 	rtContainer, err := s.runtime.Create(ctx, runtime.CreateOpts{
 		Name:     name,
 		OwnerID:  user.ID,
@@ -155,6 +165,7 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 		CPULimit: 2,
 		MemoryMB: 2048,
 		DiskGB:   10,
+		Nesting:  nestingAllowed,
 	})
 	if err != nil {
 		fmt.Fprintf(sess, "Error creating VM: %v\r\n", err)
@@ -171,10 +182,14 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 		CPULimit:  2,
 		MemoryMB:  2048,
 		DiskGB:    10,
+		Nesting:   db.DefaultNesting,
 	}
 	if err := s.db.CreateContainer(dbContainer); err != nil {
 		fmt.Fprintf(sess, "Error saving VM: %v\r\n", err)
 		return
+	}
+	if err := vmconfig.MarkStarted(s.db, dbContainer, nestingAllowed); err != nil {
+		fmt.Fprintf(sess, "Warning: could not record the nesting setting: %v\r\n", err)
 	}
 
 	// Incus hands back a stopped instance, so bring it up as part of creation —
@@ -197,7 +212,7 @@ func (s *Server) cmdNew(ctx context.Context, sess gssh.Session, user *db.User, p
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, dbContainer.ID)
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, dbContainer.ID, s.picoclawLLMCfg)
 	}
 
 	_ = s.db.UpdateContainerStatus(dbContainer.ID, "running", dbContainer.IPAddress)
@@ -250,6 +265,11 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 	}
 
 	fmt.Fprintf(sess, "Starting VM %q...\r\n", c.Name)
+	// The runtime reads the nesting setting at boot, so a start is the only
+	// place a change made elsewhere can take effect.
+	if err := vmconfig.PrepareStart(ctx, s.runtime, s.db, c); err != nil {
+		log.Printf("ssh start %s: apply nesting: %v", c.IncusName, err)
+	}
 	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
 		fmt.Fprintf(sess, "Error: %v\r\n", err)
 		return
@@ -262,7 +282,7 @@ func (s *Server) cmdStart(ctx context.Context, sess gssh.Session, user *db.User,
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID)
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID, s.picoclawLLMCfg)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -311,6 +331,9 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 	}
 
 	fmt.Fprintf(sess, "Starting VM %q...\r\n", c.Name)
+	if err := vmconfig.PrepareStart(ctx, s.runtime, s.db, c); err != nil {
+		log.Printf("ssh restart %s: apply nesting: %v", c.IncusName, err)
+	}
 	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
 		fmt.Fprintf(sess, "Error starting: %v\r\n", err)
 		return
@@ -323,7 +346,7 @@ func (s *Server) cmdRestart(ctx context.Context, sess gssh.Session, user *db.Use
 			fmt.Fprintf(sess, "PicoClaw setup failed: %v\r\n", err)
 			return
 		}
-		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID)
+		picoclaw.DeliverInitialTaskByID(ctx, s.runtime, s.db, c.ID, s.picoclawLLMCfg)
 	}
 
 	_ = s.db.UpdateContainerStatus(c.ID, "running", c.IPAddress)
@@ -479,6 +502,11 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 
 	_ = s.db.UpdateContainerStatus(c.ID, "recreating", c.IPAddress)
 
+	// Booting the old instance for the backup is a real start, running for as
+	// long as the tar takes, so it honours the current setting like any other.
+	if err := vmconfig.PrepareStart(ctx, s.runtime, s.db, c); err != nil {
+		log.Printf("ssh recreate: apply nesting before backup for %s: %v", c.IncusName, err)
+	}
 	if err := s.runtime.Start(ctx, c.IncusName); err != nil {
 		fmt.Fprintf(sess, "Error starting VM for backup: %v\r\n", err)
 		_ = s.db.UpdateContainerStatus(c.ID, "error", c.IPAddress)
@@ -504,8 +532,13 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 		return
 	}
 
-	// Create new container from fresh image.
+	// Create new container from fresh image. The rebuild resolves nesting afresh
+	// so the new instance lands on the setting that is current now.
 	fmt.Fprintf(sess, "Creating new container from %s image...\r\n", picoclaw.DefaultImage)
+	effectiveNesting, err := vmconfig.EffectiveNesting(s.db, c)
+	if err != nil {
+		log.Printf("ssh recreate %s: resolve nesting: %v", c.IncusName, err)
+	}
 	_, err = s.runtime.Create(ctx, runtime.CreateOpts{
 		Name:     c.Name,
 		OwnerID:  user.ID,
@@ -513,11 +546,15 @@ func (s *Server) cmdRecreate(ctx context.Context, sess gssh.Session, user *db.Us
 		CPULimit: c.CPULimit,
 		MemoryMB: c.MemoryMB,
 		DiskGB:   c.DiskGB,
+		Nesting:  effectiveNesting,
 	})
 	if err != nil {
 		fmt.Fprintf(sess, "Error creating VM: %v\r\n", err)
 		_ = s.db.UpdateContainerStatus(c.ID, "error", "")
 		return
+	}
+	if err := vmconfig.MarkStarted(s.db, c, effectiveNesting); err != nil {
+		log.Printf("ssh recreate %s: record nesting: %v", c.IncusName, err)
 	}
 
 	// Start the new container.

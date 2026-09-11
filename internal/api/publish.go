@@ -61,7 +61,7 @@ func (s *Server) retryInitialTask(w http.ResponseWriter, r *http.Request) {
 	}
 	// Delivery records its own outcome, so the VM is re-read afterwards to
 	// report whether this attempt actually reached the agent.
-	picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, id)
+	picoclaw.DeliverInitialTaskByID(r.Context(), s.runtime, s.db, id, s.picoclawLLMCfg)
 	c, err := s.db.GetContainerByID(id)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

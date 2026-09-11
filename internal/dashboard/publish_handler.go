@@ -72,7 +72,7 @@ func (d *Dashboard) postRetryTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	picoclaw.DeliverInitialTaskByID(r.Context(), d.runtime, d.db, id)
+	picoclaw.DeliverInitialTaskByID(r.Context(), d.runtime, d.db, id, d.picoclawLLMCfg)
 
 	updated, err := d.db.GetContainerByID(id)
 	if err != nil {

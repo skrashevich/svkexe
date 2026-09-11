@@ -14,7 +14,7 @@ import (
 func deliveredFixture(t *testing.T) (*db.DB, *guestRuntime, *db.Container) {
 	t.Helper()
 	database, guest, c := newTaskFixture(t, "install nginx")
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 	delivered, err := database.GetContainerByID("vm")
@@ -586,7 +586,7 @@ func TestDeliverInitialTaskFailsWithoutConversationID(t *testing.T) {
 	database, guest, c := newTaskFixture(t, "do the thing")
 	guest.newConversation = `{"status":"accepted"}`
 
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err == nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err == nil {
 		t.Fatal("delivery without a conversation reported as success")
 	}
 	updated, err := database.GetContainerByID("vm")

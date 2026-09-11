@@ -33,7 +33,7 @@ func TestRefreshProviderKeysAdoptsOwnerDefaultModel(t *testing.T) {
 		ConfigFilePath: []byte(`{"default_model":"svkexe-cohere/north-mini-code:free"}`),
 	}}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "svkexe_user:openrouter:openrouter/free" {
@@ -42,7 +42,7 @@ func TestRefreshProviderKeysAdoptsOwnerDefaultModel(t *testing.T) {
 
 	// A model of theirs that still exists is their own choice and stays put.
 	guest.files[ConfigFilePath] = []byte(`{"default_model":"svkexe_user:openrouter:openrouter/other"}`)
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "svkexe_user:openrouter:openrouter/other" {
@@ -81,7 +81,7 @@ func TestProviderModelsSync(t *testing.T) {
 	}
 	m := secrets.NewMaterializer(database, enc, t.TempDir())
 	guest := &guestRuntime{files: map[string][]byte{}}
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(strings.Join(guest.commands, "\n"), key) {
@@ -113,7 +113,7 @@ func TestProviderModelsSync(t *testing.T) {
 	if err := database.DeleteAPIKey("key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	apply()
@@ -125,7 +125,7 @@ func TestProviderModelsSync(t *testing.T) {
 		t.Fatal("stale credentials")
 	}
 	guest.fail = "sqlite3 -bail"
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, ""); err == nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", owner.ID, "", nil); err == nil {
 		t.Fatal("sync failure hidden")
 	}
 }

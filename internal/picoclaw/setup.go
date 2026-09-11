@@ -96,11 +96,20 @@ rm -rf %[3]s
 	// VM is nothing. The point here is only that the file exists, so the
 	// permissions applied below have something to apply to; which model this VM
 	// opens on is decided after seeding, once there is a model list to decide
-	// against.
+	// against. Round-tripping it through guestDefaultModelOf also scrubs a
+	// default that is not a usable string.
+	//
+	// Between here and that decision the VM can still be left naming a model it
+	// no longer has, if setup dies in the service start or the seeding. It is
+	// the same model the VM already named, so nothing is made worse, and the
+	// next setup or key change repairs it.
 	//
 	// llm_gateway in the preserved frontend means exe.dev's provider-specific
 	// API, not an OpenAI endpoint. Configure only explicit DB-backed models.
-	cfg := readGuestConfig(ctx, rt, incusName)
+	cfg, err := readGuestConfig(ctx, rt, incusName)
+	if err != nil {
+		return err
+	}
 	if err := writeGuestConfig(ctx, rt, incusName, cfg, guestDefaultModelOf(cfg)); err != nil {
 		return err
 	}
@@ -146,7 +155,7 @@ systemctl daemon-reload
 	// Now that the VM's model list is what it will be, decide which of those
 	// models it opens on — the same decision, and the same code, a running VM
 	// gets when its owner changes their LLM settings.
-	if _, err := applyDefaultModel(ctx, rt, incusName, providerModels, chosen); err != nil {
+	if err := applyDefaultModel(ctx, rt, incusName, providerModels, chosen, llmCfg); err != nil {
 		return err
 	}
 	// Custom models and the default model must be loaded with the current token.

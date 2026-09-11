@@ -16,14 +16,21 @@ import (
 type mockRuntime struct {
 	containers map[string]*runtime.Container
 	lastImage  string
+	// nesting records what each container was last configured with, which is
+	// what a start would put in effect.
+	nesting map[string]bool
 }
 
 func newMockRuntime() *mockRuntime {
-	return &mockRuntime{containers: map[string]*runtime.Container{}}
+	return &mockRuntime{
+		containers: map[string]*runtime.Container{},
+		nesting:    map[string]bool{},
+	}
 }
 
 func (m *mockRuntime) Create(_ context.Context, opts runtime.CreateOpts) (*runtime.Container, error) {
 	m.lastImage = opts.Image
+	m.nesting["incus-"+opts.Name] = opts.Nesting
 	c := &runtime.Container{
 		ID:      "incus-" + opts.Name,
 		Name:    "incus-" + opts.Name,
@@ -75,6 +82,11 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) ([]byte, 
 }
 
 func (m *mockRuntime) Snapshot(_ context.Context, id, name string) error {
+	return nil
+}
+
+func (m *mockRuntime) SetNesting(_ context.Context, id string, enabled bool) error {
+	m.nesting[id] = enabled
 	return nil
 }
 

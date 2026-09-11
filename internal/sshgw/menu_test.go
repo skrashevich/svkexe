@@ -46,6 +46,14 @@ func (r *recreateRuntime) Create(context.Context, runtime.CreateOpts) (*runtime.
 func (r *recreateRuntime) Get(context.Context, string) (*runtime.Container, error) {
 	return &runtime.Container{IP: "10.0.0.2"}, nil
 }
+
+// Recreate boots the old instance to back it up and then builds a new one, so
+// both of those have to carry the current nesting setting; the step is recorded
+// to keep it in the ordering this test asserts on.
+func (r *recreateRuntime) SetNesting(context.Context, string, bool) error {
+	r.steps = append(r.steps, "nesting")
+	return nil
+}
 func (r *recreateRuntime) PullFile(context.Context, string, string) ([]byte, error) {
 	return []byte("backup"), nil
 }
@@ -107,5 +115,71 @@ func TestSSHRecreatePreservesDataBeforeStartingAgent(t *testing.T) {
 				t.Fatalf("bad restore/start order or status %s: %s\n%s", c.Status, steps, sess.output.String())
 			}
 		})
+	}
+}
+
+// Recreate boots the old instance to take the backup. That is a real start,
+// running for as long as the tar takes, so it has to carry the current nesting
+// setting: leaving it out would let a VM come up with a capability an operator
+// has since revoked, and the window is a whole backup long.
+func TestSSHRecreateAppliesNestingBeforeTheBackupBoot(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	user := &db.User{ID: "u", Email: "u@example.test", Role: "user"}
+	if err := database.CreateUser(user); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateContainer(&db.Container{
+		ID: "vm", Name: "dev", IncusName: "incus-dev", OwnerID: user.ID, Status: "stopped", Nesting: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The operator revoked nesting while this VM was down; the backup boot must
+	// not hand it back.
+	if err := database.SetNestingAllowed(false); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "picoclaw")
+	if err := os.WriteFile(binary, []byte("agent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SVKEXE_AGENT_BINARY", binary)
+
+	rt := &recreateRuntime{}
+	s := &Server{db: database, runtime: rt}
+	s.cmdRecreate(t.Context(), &testSession{}, user, []string{"dev"})
+
+	first := -1
+	for i, step := range rt.steps {
+		if step == "start" {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		t.Fatalf("recreate never started the VM: %v", rt.steps)
+	}
+	var configured bool
+	for _, step := range rt.steps[:first] {
+		if step == "nesting" {
+			configured = true
+		}
+	}
+	if !configured {
+		t.Errorf("the backup boot ran without applying the nesting setting: %v", rt.steps)
+	}
+
+	c, err := database.GetContainerByID("vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.NestingApplied {
+		t.Error("the rebuilt VM was recorded as booting with nesting the deployment forbids")
+	}
+	if !c.Nesting {
+		t.Error("the ban overwrote the owner's stored wish")
 	}
 }

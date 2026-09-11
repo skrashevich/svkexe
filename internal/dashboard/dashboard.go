@@ -95,7 +95,9 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms/{id}/start", d.postStartVM)
 	r.Post("/vms/{id}/stop", d.postStopVM)
 	r.Post("/vms/{id}/recreate", d.postRecreateVM)
+	r.Post("/vms/{id}/restart", d.postRestartVM)
 	r.Post("/vms/{id}/publish", d.postPublish)
+	r.Post("/vms/{id}/nesting", d.postNesting)
 	r.Post("/vms/{id}/task/retry", d.postRetryTask)
 	r.Post("/vms/{id}/aliases", d.postAddAlias)
 	r.Post("/vms/{id}/aliases/{aliasID}/verify", d.postVerifyAlias)
@@ -119,6 +121,7 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Get("/system/check", d.getUpdateCheck)
 	r.Post("/system/update", d.postUpdate)
 	r.Get("/system/status", d.getUpdateStatus)
+	r.Post("/system/nesting", d.postNestingPolicy)
 }
 
 // redirectToVMs handles GET /dashboard/
@@ -136,14 +139,28 @@ type templateData struct {
 	// cannot derive it from User alone without hardcoding the role string in
 	// the template.
 	IsAdmin bool
+	// NestingAllowed is the deployment-wide ceiling on nested containers, which
+	// the create form needs so it does not offer a capability this deployment
+	// forbids.
+	NestingAllowed bool
 }
 
 func (d *Dashboard) newData(r *http.Request) templateData {
 	user, _ := r.Context().Value(ctxkeys.User).(*db.User)
+	// An unreadable ceiling is treated as allowing, matching AttachNestingPolicy
+	// so the create form and the VM cards cannot disagree. This decides only what
+	// the page offers; postCreateVM resolves the policy again for real and fails
+	// the request rather than acting on a value invented here.
+	allowed, err := d.db.NestingAllowed()
+	if err != nil {
+		log.Printf("read the nesting policy: %v", err)
+		allowed = true
+	}
 	return templateData{
-		User:    user,
-		Domain:  d.domain,
-		IsAdmin: user != nil && user.Role == "admin",
+		User:           user,
+		Domain:         d.domain,
+		IsAdmin:        user != nil && user.Role == "admin",
+		NestingAllowed: allowed,
 	}
 }
 
@@ -160,6 +177,12 @@ func (d *Dashboard) render(w http.ResponseWriter, tmplName string, data interfac
 func (d *Dashboard) renderCard(w http.ResponseWriter, c *db.Container) {
 	if err := d.db.AttachAliases(c); err != nil {
 		log.Printf("render card for %s: attach aliases: %v", c.IncusName, err)
+	}
+	// Without the ceiling a card cannot answer whether nesting is on here.
+	// AttachNestingPolicy still fills the field on failure — see the reasoning
+	// there — so the card renders a usable answer either way.
+	if err := d.db.AttachNestingPolicy(c); err != nil {
+		log.Printf("render card for %s: attach nesting policy: %v", c.IncusName, err)
 	}
 	d.render(w, "vm_card", c)
 }

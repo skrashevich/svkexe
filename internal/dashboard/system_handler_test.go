@@ -137,6 +137,31 @@ func TestSystemPageShowsComponentVersions(t *testing.T) {
 	}
 }
 
+// The whole page has to render the nesting fragment: system.html is deliberately
+// kept out of partialPatterns, so a page-level render resolves it differently
+// from the htmx path and could silently break on its own.
+func TestSystemPageRendersTheNestingCeiling(t *testing.T) {
+	dir := t.TempDir()
+	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "admin")
+
+	rec := get(t, router, "/system")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Nested containers",
+		`name="nesting_allowed"`,
+		"/dashboard/system/nesting",
+		// A fresh deployment allows nesting, so the box arrives ticked.
+		"checked",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the system page does not render %q", want)
+		}
+	}
+}
+
 func TestSystemRoutesAreAdminOnly(t *testing.T) {
 	dir := t.TempDir()
 	router := newSystemRouter(t, newTestUpdater(t, stubGitHub(t, remoteCommit, http.StatusOK).URL, dir), "user")
@@ -149,6 +174,7 @@ func TestSystemRoutesAreAdminOnly(t *testing.T) {
 		{http.MethodGet, "/system/check"},
 		{http.MethodPost, "/system/update"},
 		{http.MethodGet, "/system/status"},
+		{http.MethodPost, "/system/nesting"},
 	}
 	for _, tc := range cases {
 		rec := httptest.NewRecorder()

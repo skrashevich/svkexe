@@ -24,6 +24,11 @@ type CreateOpts struct {
 	CPULimit int
 	MemoryMB int
 	DiskGB   int
+	// Nesting allows containers of the container's own — Docker, buildah, a
+	// nested Incus. It is written explicitly rather than left to the profile so
+	// that the answer travels with the VM and does not change under it when the
+	// host profile is edited.
+	Nesting bool
 }
 
 // ContainerRuntime defines the interface for managing containers.
@@ -36,6 +41,10 @@ type ContainerRuntime interface {
 	List(ctx context.Context, ownerID string) ([]*Container, error)
 	Exec(ctx context.Context, id string, cmd []string) ([]byte, error)
 	Snapshot(ctx context.Context, id string, name string) error
+	// SetNesting writes security.nesting onto an existing instance. The runtime
+	// reads it when the container boots, so this call decides what the next
+	// start puts in effect rather than changing a running container.
+	SetNesting(ctx context.Context, id string, enabled bool) error
 }
 
 // ExecInteractiveOpts holds parameters for an interactive PTY exec session.

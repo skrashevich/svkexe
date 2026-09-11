@@ -30,7 +30,7 @@ func (s *Server) refreshKeysForUser(r *http.Request, userID string) error {
 	var syncErr error
 	for _, c := range containers {
 		if c.Status == "running" {
-			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), s.runtime, s.materializer, c.ID, c.IncusName, userID, chosen))
+			syncErr = errors.Join(syncErr, picoclaw.RefreshProviderKeys(r.Context(), s.runtime, s.materializer, c.ID, c.IncusName, userID, chosen, s.picoclawLLMCfg))
 		}
 	}
 	return syncErr
@@ -149,8 +149,7 @@ func (s *Server) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Only an unreachable model is the caller's mistake; anything else is ours.
-	changed, err := s.db.SetUserDefaultModel(userID, req.Model)
-	switch {
+	switch err := s.db.SetUserDefaultModel(userID, req.Model); {
 	case errors.Is(err, db.ErrUnknownModel):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -161,13 +160,10 @@ func (s *Server) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save the default model", http.StatusInternalServerError)
 		return
 	}
-	// Syncing restarts the agent on every running VM, so a re-submitted choice
-	// that changes nothing must not trigger it.
-	if changed {
-		if err := s.refreshKeysForUser(r, userID); err != nil {
-			http.Error(w, "Default model saved, but VM sync failed; restart the VM to retry", http.StatusInternalServerError)
-			return
-		}
+	// Repeated unchanged: a resubmission after a failed sync has to retry it.
+	if err := s.refreshKeysForUser(r, userID); err != nil {
+		http.Error(w, "Default model saved, but VM sync failed; repeat the request or restart the VM", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, http.StatusOK, setDefaultModelRequest{Model: req.Model})
 }

@@ -21,8 +21,14 @@ type guestRuntime struct {
 	commands []string
 	files    map[string][]byte
 	fail     string
-	// models overrides what a model-listing query returns.
+	// models is what the VM's agent database already held before this test, one
+	// model ID per line. The SQL the gateway applies then mutates it.
 	models string
+	// dbModels is that table as it stands now; dbLoaded guards its one-time
+	// initialisation and seeded records that the gateway has applied model SQL.
+	dbModels []string
+	dbLoaded bool
+	seeded   bool
 	// newConversation overrides the agent's reply to a posted task.
 	newConversation string
 	// progress is what the agent's database reports for a task conversation,
@@ -50,6 +56,11 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	if g.fail != "" && strings.Contains(text, g.fail) {
 		return nil, errors.New("guest command failed")
 	}
+	if strings.Contains(text, "sqlite3 -bail") && strings.Contains(text, " < ") {
+		_, rest, _ := strings.Cut(text, " < ")
+		path, _, _ := strings.Cut(rest, ";")
+		g.applyModelSQL(string(g.files[strings.TrimSpace(path)]))
+	}
 	if len(cmd) == 3 && cmd[0] == "sh" && strings.Contains(cmd[2], " | base64 -d > ") {
 		encoded := strings.Split(cmd[2], "'")[3]
 		data, err := base64.StdEncoding.DecodeString(encoded)
@@ -62,6 +73,11 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	switch {
 	case len(cmd) == 2 && cmd[0] == "cat":
 		return g.files[cmd[1]], nil
+	case strings.HasPrefix(text, "sh -c cat "):
+		// The real command redirects stderr and forces a zero exit, so a
+		// missing file is empty output rather than an error.
+		path, _, _ := strings.Cut(strings.TrimPrefix(text, "sh -c cat "), " ")
+		return g.files[path], nil
 	case len(cmd) == 2 && cmd[1] == "version":
 		return []byte(`{"version":"picoclaw-v0.3.1-svkexe","customized":true}`), nil
 	case strings.Contains(text, "is-active"):
@@ -69,10 +85,7 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	case strings.Contains(text, "SELECT 1 FROM sqlite_master"):
 		return []byte("1\n"), nil
 	case strings.Contains(text, "SELECT model_id"):
-		if g.models != "" {
-			return []byte(g.models), nil
-		}
-		return g.seededModels(text), nil
+		return g.listModels(text), nil
 	case strings.Contains(text, "/api/conversations/new"):
 		if g.newConversation != "" {
 			return []byte(g.newConversation), nil
@@ -105,32 +118,64 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	return nil, nil
 }
 
-// seededModels answers a model-listing query from the SQL the gateway actually
-// applied, rather than from a list the test hands it. The code under test now
-// picks the VM's model from what the VM has, so a fake that invented that list
-// could report a VM opening on a model the seeding never created.
-func (g *guestRuntime) seededModels(query string) []byte {
-	var ids []string
-	applied := false
-	for _, path := range []string{ConfigDir + "/models.sql", ConfigDir + "/provider-models.sql"} {
-		if _, ok := g.files[path]; ok {
-			applied = true
-		}
-		for _, stmt := range strings.Split(string(g.files[path]), "\n") {
-			_, values, found := strings.Cut(stmt, "VALUES ('")
-			if !strings.HasPrefix(stmt, "INSERT") || !found {
-				continue
-			}
-			id, _, _ := strings.Cut(values, "'")
-			if !strings.Contains(query, "LIKE 'svkexe-%'") || strings.HasPrefix(id, gatewayModelPrefix) {
-				ids = append(ids, id)
+// modelsInVM is the agent database's models table as the fake keeps it.
+func (g *guestRuntime) modelsInVM() []string {
+	if !g.dbLoaded {
+		g.dbLoaded = true
+		for _, line := range strings.Split(g.models, "\n") {
+			if id := strings.TrimSpace(line); id != "" {
+				g.dbModels = append(g.dbModels, id)
 			}
 		}
 	}
-	if !applied {
-		// Nothing has been seeded in this test, so the VM is one that was set up
-		// on some earlier run and already holds the deployment's models.
-		return []byte("svkexe-test/model\n")
+	return g.dbModels
+}
+
+// applyModelSQL mirrors what sqlite3 does to the models table, DELETEs
+// included. Those deletes are what keep a retired model from lingering, and a
+// fake that only replayed the INSERTs could not show a mis-scoped one — nor
+// could it show a VM ending up on a model the seeding never created, which is
+// the whole reason the model choice is now made from this list.
+func (g *guestRuntime) applyModelSQL(sql string) {
+	g.modelsInVM()
+	g.seeded = true
+	for _, stmt := range strings.Split(sql, "\n") {
+		switch {
+		case strings.HasPrefix(stmt, "DELETE FROM models WHERE model_id GLOB '"),
+			strings.HasPrefix(stmt, "DELETE FROM models WHERE model_id LIKE '"):
+			_, rest, _ := strings.Cut(stmt, "model_id ")
+			_, pattern, _ := strings.Cut(rest, "'")
+			pattern, _, _ = strings.Cut(pattern, "'")
+			prefix := strings.TrimRight(pattern, "*%")
+			g.dbModels = slices.DeleteFunc(g.dbModels, func(id string) bool {
+				return strings.HasPrefix(id, prefix)
+			})
+		case strings.HasPrefix(stmt, "INSERT"):
+			_, values, found := strings.Cut(stmt, "VALUES ('")
+			if !found {
+				continue
+			}
+			id, _, _ := strings.Cut(values, "'")
+			if id != "" && !slices.Contains(g.dbModels, id) {
+				g.dbModels = append(g.dbModels, id)
+			}
+		}
+	}
+}
+
+// listModels answers a model-listing query from that table.
+func (g *guestRuntime) listModels(query string) []byte {
+	ids := slices.Clone(g.modelsInVM())
+	if !g.seeded && g.models == "" {
+		// A VM set up on an earlier run, whose inventory this test does not
+		// bother to describe. Setting models to whitespace is how a test says
+		// the VM genuinely holds nothing, as against saying nothing about it.
+		ids = []string{"svkexe-test/model"}
+	}
+	if strings.Contains(query, "LIKE 'svkexe-%'") {
+		ids = slices.DeleteFunc(ids, func(id string) bool {
+			return !strings.HasPrefix(id, gatewayModelPrefix)
+		})
 	}
 	slices.Sort(ids)
 	if len(ids) == 0 {

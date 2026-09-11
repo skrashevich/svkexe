@@ -81,6 +81,45 @@
         </span>
     </form>
 
+    {{/* A change here only reaches the container when it boots, so the form
+         says so rather than letting the owner believe Docker works the moment
+         the box is ticked. */}}
+    <form class="vm-publish vm-nesting"
+        hx-post="/dashboard/vms/{{.ID}}/nesting"
+        hx-trigger="change"
+        hx-target="#vm-{{.ID}}"
+        hx-swap="outerHTML">
+        <label class="vm-publish-field vm-publish-toggle">
+            <input name="nesting" type="checkbox" value="1"
+                   {{if .Nesting}}checked{{end}}
+                   {{if not .NestingAllowed}}disabled{{end}}>
+            <span>Nested containers</span>
+        </label>
+        <span class="vm-publish-hint">
+            {{if not .NestingAllowed}}
+            Turned off for this whole deployment by an administrator, so Docker cannot start here.
+            {{else if .Nesting}}
+            Docker, buildah and nested Incus can create containers inside this VM.
+            {{else}}
+            Docker cannot create containers in this VM. Builds have to run from source.
+            {{end}}
+        </span>
+        {{if .NestingPending}}
+        <span class="vm-nesting-pending">
+            Restart this VM to apply.
+            <button type="button" class="btn btn-secondary btn-sm"
+                hx-post="/dashboard/vms/{{.ID}}/restart"
+                hx-target="#vm-{{.ID}}"
+                hx-swap="outerHTML"
+                hx-disabled-elt="this"
+                hx-confirm="Restart VM '{{.Name}}'? Anything running inside it, including the agent's current task, stops."
+                hx-on::before-request="omcBusy(this, 'Restarting…')">
+                Restart now
+            </button>
+        </span>
+        {{end}}
+    </form>
+
     <div class="vm-aliases">
         <div class="vm-aliases-head">
             <span class="vm-aliases-label">Custom domains</span>

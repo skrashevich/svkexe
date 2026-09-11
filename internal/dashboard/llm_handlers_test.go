@@ -50,7 +50,7 @@ func TestLLMSectionChoosesTheDefaultModel(t *testing.T) {
 	// api.openmodel.ai serves /responses, not /chat/completions, so the
 	// protocol travels with the connection rather than being assumed.
 	rec := call("PUT", "/keys/new", url.Values{
-		"provider": {"custom"}, "name": {"openmodel"}, "key": {"om-secret"},
+		"provider": {"custom"}, "name": {"openmodel"}, "key": {"om-XXSECRETXX-1234"},
 		"base_url": {"https://api.openmodel.ai/v1"}, "protocol": {"openai-responses"},
 		"models": {"deepseek-v4-flash,deepseek-v4-pro"},
 	})
@@ -71,8 +71,11 @@ func TestLLMSectionChoosesTheDefaultModel(t *testing.T) {
 			t.Fatalf("section does not offer %q: %s", want, body)
 		}
 	}
-	if strings.Contains(body, "om-secret") {
-		t.Fatal("secret rendered into the page")
+	// The mask keeps the first and last four characters, so asserting the whole
+	// key is absent would pass with almost all of it on the page. Assert the
+	// interior instead — that is the part masking is supposed to hide.
+	if strings.Contains(body, "SECRET") {
+		t.Fatalf("key interior rendered into the page: %s", body)
 	}
 
 	if rec := call("POST", "/keys/default", url.Values{"model": {pro}}); rec.Code != 200 {
@@ -97,6 +100,21 @@ func TestLLMSectionChoosesTheDefaultModel(t *testing.T) {
 	}
 	if got, err := database.UserDefaultModel(owner.ID); err != nil || got != "" {
 		t.Fatalf("default=%q err=%v", got, err)
+	}
+
+	// The row carries the stored settings so Edit can load them back. Without
+	// that, rotating a key means retyping the connection, and a protocol left
+	// on its default silently downgrades an endpoint that does not serve
+	// chat completions.
+	for _, want := range []string{
+		`data-provider="custom-openmodel"`,
+		`data-base-url="https://api.openmodel.ai/v1"`,
+		`data-models="deepseek-v4-flash,deepseek-v4-pro"`,
+		`data-protocol="openai-responses"`,
+	} {
+		if page := call("GET", "/keys", nil).Body.String(); !strings.Contains(page, want) {
+			t.Fatalf("connection row does not carry %s", want)
+		}
 	}
 
 	// Deleting the connection retires its models, so the section must stop

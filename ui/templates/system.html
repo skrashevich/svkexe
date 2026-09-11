@@ -60,6 +60,11 @@
     </div>
 </div>
 
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-title">Nested containers</div>
+    <div id="nesting-policy">{{template "nesting_policy" .}}</div>
+</div>
+
 <div class="card">
     <div class="card-title">Updates</div>
 
@@ -97,6 +102,38 @@
 
     <div class="system-note">Installing an update rebuilds the gateway and restarts it, so this page may be unreachable for a few seconds. Progress below resumes on its own once the gateway is back.</div>
 </div>
+{{end}}
+
+{{/* nesting_policy is the deployment-wide ceiling. It is a ceiling and not a
+     default: turning it off takes the capability away from every VM, whatever
+     each owner has chosen, which is what makes it usable as an emergency lever.
+     Running VMs keep what they booted with until they restart, and each VM card
+     says so, so this fragment does not pretend the change is instant. */}}
+{{define "nesting_policy"}}
+<form hx-post="/dashboard/system/nesting"
+      hx-trigger="change"
+      hx-target="#nesting-policy"
+      hx-swap="innerHTML">
+    <label class="vm-publish-toggle">
+        <input type="checkbox" name="nesting_allowed" value="1" {{if .NestingAllowed}}checked{{end}}>
+        <span>Allow VMs to run nested containers</span>
+    </label>
+    <div class="system-state">
+        {{if .NestingAllowed}}
+        Owners may enable Docker, buildah and nested Incus on their own VMs. Each VM still has its own switch.
+        {{else}}
+        No VM can run containers of its own, whatever its owner has chosen. Their switches are shown disabled.
+        {{end}}
+    </div>
+    {{if .NestingError}}
+    <div class="system-state system-bad">Could not save this setting: {{.NestingError}}</div>
+    {{end}}
+    <div class="system-note">
+        Nesting relaxes the isolation between a VM and this host: a tenant that can create containers
+        reaches more of the kernel's surface than one that cannot. Turn it off if you host tenants you
+        do not trust. A change here applies to each VM the next time it starts.
+    </div>
+</form>
 {{end}}
 
 {{/* update_button is shared by the check result and by a refused start, so a

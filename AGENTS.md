@@ -52,6 +52,7 @@ Caddy (TLS, header strip) → Go Gateway (:8080) → Incus containers (LXC)
 | `internal/aliases` | Custom-domain lifecycle: claim, DNS verification, agent guide refresh |
 | `internal/dnscheck` | Verifies that a custom domain resolves to this gateway before it is routed |
 | `internal/ratelimit` | Per-user token bucket rate limiter |
+| `internal/vmconfig` | Resolves per-VM runtime settings (nested containers) against the deployment-wide ceiling and writes them to Incus |
 | `internal/auth` | Session management, bcrypt (cost 12) |
 | `internal/version` | Build metadata stamped in via `-ldflags -X` from the Makefile |
 | `internal/updater` | GitHub update check + trigger-file handoff to the root-owned `svkexe-update` systemd units |
@@ -77,6 +78,7 @@ All configuration is via environment variables (no config files). Key vars:
 - **Ownership enforcement:** Every container operation checks `user_id → container_id` mapping before proceeding (`OwnershipMiddleware`)
 - **Container naming:** `svkexe-{owner_id}-{name}` — encodes ownership at Incus level
 - **DB migrations:** Embedded SQL schema + idempotent `ALTER TABLE` in `db.migrate()`; check `columnExists()` before adding columns
+- **Nested containers:** `security.nesting` is written onto every instance the gateway creates or starts, never left to the Incus profile. `containers.nesting` is the owner's wish, the `nesting_allowed` row in `settings` is the operator's ceiling, and `containers.nesting_applied` is what the running instance booted with — their difference is what makes a card ask for a restart. Every path that starts a VM must call `vmconfig.PrepareStart`; every path that builds one passes `CreateOpts.Nesting` and calls `vmconfig.MarkStarted`.
 - **Dependency injection:** Constructors accept all deps (`NewServer(db, rt, encKey, domain, ...)`)
 - **Error wrapping:** `fmt.Errorf("context: %w", err)` throughout
 - **Tests:** Table-driven, real SQLite (in-memory), `httptest.Server` for integration; no mocking framework

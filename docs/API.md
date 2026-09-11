@@ -61,9 +61,22 @@ come up — there is no separate start step.
 **Request body:**
 ```json
 {
-  "name": "my-vm"
+  "name": "my-vm",
+  "nesting": true
 }
 ```
+
+`nesting` decides whether the VM may run containers of its own — Docker, buildah,
+a nested Incus. Omitting it enables them, which is the platform default; send
+`false` to opt out. The deployment-wide setting under **System → Nested
+containers** is a ceiling: while an admin has it off, `true` here is stored as
+the owner's wish but no VM gets the capability.
+
+This is the only REST surface for the setting: changing it on an existing VM is
+done from the dashboard, which also offers the restart the change needs. Reads
+(`GET /api/containers`, `GET /api/containers/{id}`) report `Nesting` — what the
+owner asked for — alongside `NestingApplied`, what the running instance actually
+booted with. The two differing on a running VM means a restart is still owed.
 
 **Response `201 Created`:**
 ```json

@@ -58,6 +58,18 @@
                     <option value="50">50 GB</option>
                 </select>
             </div>
+            {{if .NestingAllowed}}
+            <div class="form-group">
+                <label class="vm-publish-toggle" for="vm-nesting">
+                    <input type="checkbox" id="vm-nesting" name="nesting" value="1" checked>
+                    <span>Nested containers</span>
+                </label>
+                <div class="form-hint">
+                    Lets Docker, buildah and nested Incus create containers inside the VM.
+                    Without it the agent has to build everything from source.
+                </div>
+            </div>
+            {{end}}
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary"
                         onclick="document.getElementById('create-modal').innerHTML=''">Cancel</button>

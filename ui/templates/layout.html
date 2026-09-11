@@ -380,10 +380,27 @@
             border-radius: 6px;
         }
         .vm-publish-toggle { cursor: pointer; }
+        /* A switch the deployment forbids stays visible but is plainly out of
+           reach, so the answer "no Docker here" is not mistaken for a choice
+           the owner made. */
+        .vm-publish-toggle:has(input:disabled) {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
         .vm-publish-hint {
             flex: 1 1 100%;
             font-size: 0.7rem;
             color: var(--fg-mute);
+        }
+        /* The setting is stored but not live until the VM boots again; this is
+           the only thing on the card that says so. */
+        .vm-nesting-pending {
+            flex: 1 1 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.7rem;
+            color: var(--warn);
         }
 
         .vm-aliases {

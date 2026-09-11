@@ -95,6 +95,14 @@ func (db *DB) DeleteAPIKey(id string) error {
 // request for someone else's key is answered — indistinguishably from one for a
 // key that does not exist.
 func (db *DB) DeleteAPIKeyForOwner(id, ownerID string) error {
+	if ownerID == "" {
+		// deleteAPIKey reads an empty owner as "unscoped", so letting one
+		// through here would turn this into a delete of anybody's connection —
+		// and a prune of that owner's chosen model. Callers get their owner from
+		// a context lookup that yields "" on a miss, so this is a guard against
+		// a future middleware reshuffle rather than against today's code.
+		return fmt.Errorf("delete api key for owner: no owner given")
+	}
 	return db.deleteAPIKey(id, ownerID)
 }
 

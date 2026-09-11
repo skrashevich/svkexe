@@ -25,7 +25,7 @@ const taskDeliveryTimeout = 60 * time.Second
 // are recorded on the VM and surfaced in the dashboard, so callers treat the
 // VM as usable either way rather than failing the create or start they were
 // asked for.
-func DeliverInitialTaskByID(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, id string) {
+func DeliverInitialTaskByID(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, id string, llmCfg *LLMProxyConfig) {
 	if database == nil {
 		return
 	}
@@ -34,7 +34,7 @@ func DeliverInitialTaskByID(ctx context.Context, rt runtime.ContainerRuntime, da
 		log.Printf("picoclaw: load VM %s for task delivery: %v", id, err)
 		return
 	}
-	if err := DeliverInitialTask(ctx, rt, database, c); err != nil {
+	if err := DeliverInitialTask(ctx, rt, database, c, llmCfg); err != nil {
 		log.Printf("picoclaw: %v", err)
 	}
 }
@@ -43,7 +43,7 @@ func DeliverInitialTaskByID(ctx context.Context, rt runtime.ContainerRuntime, da
 // It is a no-op unless the task is still pending, so restarts and gateway
 // upgrades never re-run a task the agent already accepted, and a failed task
 // waits for an explicit retry rather than firing on an unrelated restart.
-func DeliverInitialTask(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container) error {
+func DeliverInitialTask(ctx context.Context, rt runtime.ContainerRuntime, database *db.DB, c *db.Container, llmCfg *LLMProxyConfig) error {
 	if c.InitialTask == "" || c.InitialTaskState != db.TaskPending {
 		return nil
 	}
@@ -63,7 +63,40 @@ func DeliverInitialTask(ctx context.Context, rt runtime.ContainerRuntime, databa
 		return fmt.Errorf("deliver initial task to %s: %s: %w", c.IncusName, reason, err)
 	}
 
-	model, err := resolveTaskModel(ctx, rt, c.IncusName)
+	// Delivery takes the same lock as setup and key refresh. Without it, saving
+	// an LLM key mid-delivery lets seedProviderModels delete and reseed the
+	// owner's models between the moment this reads the VM's model list and the
+	// moment it posts one — so the agent is handed a model_id its database no
+	// longer has — and the restart that follows can drop the POST outright.
+	//
+	// Giving up on the wait is recorded as a failure rather than left pending,
+	// even though nothing was attempted. Delivery only ever fires on create,
+	// start and an explicit retry, and every one of those routes checks for
+	// TaskPending — so a task left pending here is never picked up again and the
+	// dashboard shows no Retry button, because that button is rendered for
+	// failed tasks. Failed is the state the owner can actually act on.
+	lock, _ := setupLocks.LoadOrStore(c.IncusName, make(chan struct{}, 1))
+	gate := lock.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return fail("the VM was busy being set up; retry the task", ctx.Err())
+	}
+
+	// The owner's choice and the operator's ordering reach the task the same
+	// way they reach the VM's own default. Reading them here is what keeps the
+	// two answers identical: a task that quietly ran on a different model would
+	// spend a different key than the one the dashboard names.
+	chosen, err := database.UserDefaultModel(c.OwnerID)
+	if err != nil {
+		return fail("could not read the account's default model", err)
+	}
+	own, err := database.OwnerModelIDs(c.OwnerID)
+	if err != nil {
+		return fail("could not list the account's own models", err)
+	}
+	model, err := resolveTaskModel(ctx, rt, c.IncusName, own, gatewayModelIDs(llmCfg), chosen)
 	if err != nil {
 		return fail("could not list the models available to the agent", err)
 	}
@@ -122,22 +155,17 @@ func parseConversationID(out []byte) (string, error) {
 	return reply.ConversationID, nil
 }
 
-// resolveTaskModel picks the model the task will run on.
-func resolveTaskModel(ctx context.Context, rt runtime.ContainerRuntime, incusName string) (string, error) {
-	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, "SELECT model_id FROM models ORDER BY model_id;"})
+// resolveTaskModel picks the model the task will run on, using the same rule and
+// the same inputs that decide what the VM itself opens on. Two rules here is how
+// a VM ends up showing one model in its UI while spending a different key in the
+// background — so own and platform are passed in rather than guessed from the
+// VM's list, which is alphabetical and carries neither ordering.
+func resolveTaskModel(ctx context.Context, rt runtime.ContainerRuntime, incusName string, own, platform []string, chosen string) (string, error) {
+	available, err := listGuestModels(ctx, rt, incusName)
 	if err != nil {
 		return "", err
 	}
-	var available []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if id := strings.TrimSpace(line); id != "" {
-			available = append(available, id)
-		}
-	}
-	// The same rule that decides what the VM opens on decides what its first
-	// task runs on. Two rules here is how a VM ends up showing one model in its
-	// UI while spending another owner's quota in the background.
-	return desiredModel(available, ownModels(available), "", readConfiguredModel(ctx, rt, incusName)), nil
+	return desiredModel(available, own, platform, chosen, readConfiguredModel(ctx, rt, incusName)), nil
 }
 
 // readConfiguredModel returns the VM's default model, or "" when it cannot be

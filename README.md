@@ -25,6 +25,7 @@ See [agent architecture, build and migration](docs/PICOCLAW.md) for the preserve
 - **Per-user rate limiting** (token bucket)
 - **Prometheus metrics** + Grafana dashboards
 - **Automated backups** — SQLite + Incus snapshots with 7-day retention
+- **Nested containers** — Docker, buildah and nested Incus work inside a VM; on by default, switchable per VM by its owner and platform-wide by an admin
 
 ## Prerequisites
 
@@ -483,7 +484,7 @@ Common user-facing endpoints (see [docs/API.md](docs/API.md) for the full refere
 
 ```
 GET    /api/containers              List user's containers
-POST   /api/containers              Create container
+POST   /api/containers              Create container (body: nesting=false opts out of nested containers)
 GET    /api/containers/{id}         Get container details
 POST   /api/containers/{id}/start   Start container
 POST   /api/containers/{id}/stop    Stop container
@@ -516,6 +517,10 @@ GET    /metrics                     Prometheus metrics (unauthenticated)
 - All incoming `X-ExeDev-*` headers stripped by Caddy before auth
 - User-to-container ownership verified before every proxy request
 - The agent is not a multi-tenancy boundary — isolation is at the LXC container level
+- Nested containers (`security.nesting`) are enabled by default so Docker works inside a VM. This
+  relaxes the VM-to-host boundary: a tenant that can create containers reaches more kernel surface
+  than one that cannot. Untrusted tenants? Turn it off under **System → Nested containers**, which
+  overrides every per-VM switch. VMs pick the change up on their next start.
 - LLM keys encrypted with AES-GCM, materialized as read-only tmpfs mounts
 - Shared links scoped to specific containers with optional expiration
 

@@ -73,6 +73,9 @@ func (r *IncusRuntime) Create(ctx context.Context, opts CreateOpts) (*Container,
 
 	config := map[string]string{
 		"user.owner_id": opts.OwnerID,
+		// Set on every instance, in both directions, so the VM's answer does not
+		// silently follow later edits to the shared profile.
+		nestingKey: boolConfig(opts.Nesting),
 	}
 	if opts.CPULimit > 0 {
 		config["limits.cpu"] = fmt.Sprintf("%d", opts.CPULimit)
@@ -103,6 +106,48 @@ func (r *IncusRuntime) Create(ctx context.Context, opts CreateOpts) (*Container,
 	}
 
 	return r.Get(ctx, name)
+}
+
+// nestingKey is the Incus config key that lets a container run containers of
+// its own — without it Docker cannot create a single one.
+const nestingKey = "security.nesting"
+
+// boolConfig renders a Go bool the way Incus config expects it.
+func boolConfig(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+// SetNesting writes security.nesting onto an existing instance. Incus accepts
+// the change against a running container but LXC only reads the key at boot, so
+// what this call really decides is what the next start puts in effect.
+func (r *IncusRuntime) SetNesting(ctx context.Context, id string, enabled bool) error {
+	inst, etag, err := r.client.GetInstance(id)
+	if err != nil {
+		return fmt.Errorf("get container %s: %w", id, err)
+	}
+	want := boolConfig(enabled)
+	if inst.Config[nestingKey] == want {
+		return nil
+	}
+	if inst.Config == nil {
+		inst.Config = map[string]string{}
+	}
+	inst.Config[nestingKey] = want
+
+	// The ETag is what makes this safe against a concurrent edit of the same
+	// instance: a stale read is rejected rather than silently reverting whatever
+	// the other writer changed.
+	op, err := r.client.UpdateInstance(id, inst.InstancePut, etag)
+	if err != nil {
+		return fmt.Errorf("set %s on %s: %w", nestingKey, id, err)
+	}
+	if err := waitOp(ctx, op); err != nil {
+		return fmt.Errorf("wait for %s update on %s: %w", nestingKey, id, err)
+	}
+	return nil
 }
 
 // Start starts an existing container.

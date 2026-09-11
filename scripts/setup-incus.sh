@@ -124,7 +124,12 @@ config:
   limits.cpu: "2"
   limits.memory: 2GB
   limits.memory.swap: "false"
-  security.nesting: "false"
+  # Nested containers are on by default so that Docker, buildah and nested
+  # Incus work inside a VM out of the box. The gateway writes this key onto
+  # every instance it creates or starts, so this line only decides what an
+  # instance created outside the gateway inherits — the dashboard's per-VM
+  # switch and the deployment-wide one under System are what actually govern it.
+  security.nesting: "true"
   security.privileged: "false"
 devices:
   eth0:

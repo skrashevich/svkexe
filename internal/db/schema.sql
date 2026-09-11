@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS containers (
     initial_task_error TEXT NOT NULL DEFAULT '',
     initial_task_conversation TEXT NOT NULL DEFAULT '',
     initial_task_resumes INTEGER NOT NULL DEFAULT 0,
+    -- Whether the owner wants nested containers (Docker, buildah, another
+    -- Incus) to work in this VM. It is only a wish: the deployment-wide
+    -- setting is a ceiling, so an admin who turns nesting off platform-wide
+    -- overrides every row here.
+    nesting INTEGER NOT NULL DEFAULT 1,
+    -- What a start would actually have put in effect. security.nesting is read
+    -- by LXC when the container boots, so a change made while the VM runs is
+    -- not live yet; comparing the two columns is what tells the owner a restart
+    -- is still owed.
+    nesting_applied INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -93,6 +103,14 @@ CREATE TABLE IF NOT EXISTS shared_links (
     token TEXT UNIQUE NOT NULL,
     expires_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Deployment-wide operator settings. One row per switch, so a new one costs a
+-- key rather than a migration.
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS ssh_keys (

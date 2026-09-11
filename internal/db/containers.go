@@ -21,6 +21,11 @@ const (
 	// MaxInitialTaskLen bounds the free-text task handed to the agent.
 	MaxInitialTaskLen = 4000
 
+	// DefaultNesting is the answer a VM gets when nobody chose one. It exists so
+	// the schema default, the migration backfill and every creation path say the
+	// same thing; nothing would catch them drifting apart.
+	DefaultNesting = true
+
 	// TaskPending means the task still has to reach the agent.
 	TaskPending = "pending"
 	// TaskSent means the agent accepted the task and opened a conversation.
@@ -73,24 +78,53 @@ type Container struct {
 	// budget, and the gateway owns it: a resume the agent declines leaves the
 	// agent's own message log unchanged, so nothing there could bound it.
 	InitialTaskResumes int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// Nesting is the owner's answer to "may this VM run containers of its own".
+	// It is only half of the story: NestingAllowed is the ceiling.
+	Nesting bool
+	// NestingApplied is what the running instance actually booted with. LXC
+	// reads security.nesting at container start, so a change made against a
+	// running VM is only a promise until it restarts.
+	NestingApplied bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 
 	// Aliases holds the VM's custom hostnames. It is not a column: reads leave
 	// it nil and callers that need it ask for it explicitly via AttachAliases,
 	// so request routing does not pay for a join it never looks at.
 	Aliases []*ContainerAlias
+
+	// NestingAllowed mirrors the deployment-wide ceiling. Like Aliases it is not
+	// a column: a caller that renders the VM asks for it through
+	// AttachNestingPolicy. A caller that never asked leaves it false, so a VM
+	// cannot be rendered as nesting-capable by omission — which is why nothing
+	// may treat this field as authoritative. NestingEffective, and everything
+	// built on it, answers only for a Container the caller has filled in.
+	NestingAllowed bool
+}
+
+// NestingEffective reports whether nested containers are meant to work in this
+// VM: the owner has to want it and the deployment has to allow it.
+func (c *Container) NestingEffective() bool {
+	return c.NestingAllowed && c.Nesting
+}
+
+// NestingPending reports that the VM is running with a nesting setting other
+// than the one now in force, i.e. that the owner still owes it a restart.
+// A VM that is not running has nothing pending: whatever is stored takes effect
+// the moment it next boots.
+func (c *Container) NestingPending() bool {
+	return strings.EqualFold(c.Status, "running") && c.NestingApplied != c.NestingEffective()
 }
 
 // containerColumns keeps every read of a container in sync.
-const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, initial_task_conversation, initial_task_resumes, created_at, updated_at`
+const containerColumns = `id, name, owner_id, incus_name, status, COALESCE(ip_address,''), cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, initial_task_error, initial_task_conversation, initial_task_resumes, nesting, nesting_applied, created_at, updated_at`
 
 func scanContainer(row interface{ Scan(...any) error }) (*Container, error) {
 	c := &Container{}
 	err := row.Scan(&c.ID, &c.Name, &c.OwnerID, &c.IncusName, &c.Status, &c.IPAddress,
 		&c.CPULimit, &c.MemoryMB, &c.DiskGB, &c.AppPort, &c.AppPublic,
 		&c.InitialTask, &c.InitialTaskState, &c.InitialTaskError, &c.InitialTaskConversation,
-		&c.InitialTaskResumes, &c.CreatedAt, &c.UpdatedAt)
+		&c.InitialTaskResumes, &c.Nesting, &c.NestingApplied, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +175,60 @@ func (db *DB) UpdateContainerPublish(id string, port int, public bool) error {
 	return nil
 }
 
+// UpdateContainerNesting stores whether the owner wants nested containers here.
+// It leaves nesting_applied alone on purpose: the change is not in effect until
+// the VM boots again, and pretending otherwise would hide the restart the owner
+// still owes from the dashboard.
+func (db *DB) UpdateContainerNesting(id string, nesting bool) error {
+	_, err := db.Exec(
+		`UPDATE containers SET nesting = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		nesting, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update container nesting: %w", err)
+	}
+	return nil
+}
+
+// SetNestingApplied records what the instance will actually boot with. It is
+// called on the paths that start or build a container, once the setting has
+// reached Incus, because that is the moment the wish becomes the truth.
+func (db *DB) SetNestingApplied(id string, applied bool) error {
+	_, err := db.Exec(
+		`UPDATE containers SET nesting_applied = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		applied, id,
+	)
+	if err != nil {
+		return fmt.Errorf("record applied nesting: %w", err)
+	}
+	return nil
+}
+
+// AttachNestingPolicy fills in the deployment-wide ceiling on the given VMs, so
+// that a card can answer "is nesting on here" without every caller having to
+// know the setting exists. One read serves the whole list.
+//
+// A ceiling that cannot be read is attached as allowed, and the error is
+// returned alongside it — the opposite of how vmconfig.EffectiveNesting resolves
+// the same failure, deliberately. This value only decides what a page displays
+// and offers, and displaying grants nothing: every path that acts on the answer
+// resolves it again, fail-closed, before anything reaches Incus. Rendering
+// "off" here would instead tell the owner an administrator forbade nesting when
+// none did, and — worse — would compute NestingPending as false for a VM that
+// genuinely still owes a restart, hiding the one prompt that would fix it.
+func (db *DB) AttachNestingPolicy(containers ...*Container) error {
+	allowed, err := db.NestingAllowed()
+	if err != nil {
+		allowed = true
+	}
+	for _, c := range containers {
+		if c != nil {
+			c.NestingAllowed = allowed
+		}
+	}
+	return err
+}
+
 // CreateContainer inserts a new container record.
 func (db *DB) CreateContainer(c *Container) error {
 	if c.AppPort == 0 {
@@ -160,11 +248,11 @@ func (db *DB) CreateContainer(c *Container) error {
 		c.InitialTaskState = ""
 	}
 	_, err := db.Exec(
-		`INSERT INTO containers (id, name, owner_id, incus_name, status, ip_address, cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO containers (id, name, owner_id, incus_name, status, ip_address, cpu_limit, memory_mb, disk_gb, app_port, app_public, initial_task, initial_task_state, nesting)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.Name, c.OwnerID, c.IncusName, c.Status, c.IPAddress,
 		c.CPULimit, c.MemoryMB, c.DiskGB, c.AppPort, c.AppPublic,
-		c.InitialTask, c.InitialTaskState,
+		c.InitialTask, c.InitialTaskState, c.Nesting,
 	)
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)

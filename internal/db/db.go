@@ -99,6 +99,14 @@ func (db *DB) migrate() error {
 		// Counts the times the gateway has picked this task back up after a
 		// transient agent failure, which is what bounds it.
 		"initial_task_resumes": "INTEGER NOT NULL DEFAULT 0",
+		// Nested containers are on by default, so an upgraded VM inherits the
+		// same answer a new one gets rather than staying silently unable to run
+		// Docker. The applied column deliberately backfills to 0: those VMs were
+		// built under a profile that disabled nesting, so until they restart the
+		// setting is a wish, and saying otherwise would have the dashboard claim
+		// Docker works when it still does not.
+		"nesting":         "INTEGER NOT NULL DEFAULT 1",
+		"nesting_applied": "INTEGER NOT NULL DEFAULT 0",
 	} {
 		exists, err := columnExists(db, "containers", column)
 		if err != nil {
@@ -110,8 +118,6 @@ func (db *DB) migrate() error {
 			}
 		}
 	}
-	// An upgraded connection was seeded as chat/completions, which is what the
-	// empty value still means, so existing endpoints keep working untouched.
 	for _, column := range []string{"base_url", "models", "protocol"} {
 		exists, err := columnExists(db, "api_keys", column)
 		if err != nil {
@@ -122,6 +128,16 @@ func (db *DB) migrate() error {
 				return err
 			}
 		}
+	}
+	// A connection stored before the protocol was configurable was seeded as
+	// chat/completions. Naming that explicitly leaves the empty value meaning
+	// exactly one thing — a provider-native key, which has no endpoint to speak
+	// a protocol to — rather than two, so nothing downstream has to re-derive
+	// which of the two it is looking at.
+	if _, err := db.Exec(
+		`UPDATE api_keys SET protocol = ? WHERE protocol = '' AND base_url != ''`, DefaultProtocol,
+	); err != nil {
+		return fmt.Errorf("backfill api_keys.protocol: %w", err)
 	}
 	return nil
 }

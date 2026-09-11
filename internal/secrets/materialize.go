@@ -40,13 +40,16 @@ func (m *Materializer) MaterializeKeys(containerID, ownerID string) error {
 
 	var sb strings.Builder
 	for _, k := range keys {
+		if k.BaseURL != "" {
+			// An endpoint-backed connection reaches the agent as a protected DB
+			// credential, not an environment variable. Skipping before the
+			// decrypt keeps the plaintext from being materialised at all.
+			continue
+		}
 		plaintext, err := m.db.GetAPIKeyPlaintext(k.ID, m.encKey)
 		if err != nil {
 			return fmt.Errorf("decrypt key %s: %w", k.ID, err)
 		}
-		if k.BaseURL != "" {
-			continue
-		} // Custom models use protected DB credentials.
 		// Use provider name uppercased as env var name, e.g. OPENAI_API_KEY.
 		envName := strings.ToUpper(k.Provider) + "_API_KEY"
 		sb.WriteString(envName)
@@ -116,15 +119,11 @@ func (m *Materializer) ProviderModels(owner string) ([]ProviderModel, error) {
 		if err != nil {
 			return nil, err
 		}
-		protocol := k.Protocol
-		if protocol == "" {
-			// Stored before the protocol was configurable, when every endpoint
-			// was seeded as chat/completions.
-			protocol = db.DefaultProtocol
-		}
+		// An endpoint always names its protocol: NormalizeProvider fills one in
+		// on every write, and the migration backfilled the rows that predate it.
 		for _, model := range strings.Split(k.Models, ",") {
 			if model != "" {
-				result = append(result, ProviderModel{Provider: k.Provider, Model: model, BaseURL: k.BaseURL, Key: key, Protocol: protocol})
+				result = append(result, ProviderModel{Provider: k.Provider, Model: model, BaseURL: k.BaseURL, Key: key, Protocol: k.Protocol})
 			}
 		}
 	}

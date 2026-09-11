@@ -125,7 +125,7 @@ func waitForPicoClawDB(ctx context.Context, rt runtime.ContainerRuntime, incusNa
 func buildSeedSQL(models []string, baseURL, token string) string {
 	stmts := make([]string, 0, len(models)+3)
 	stmts = append(stmts, "PRAGMA busy_timeout=10000;", "BEGIN IMMEDIATE;")
-	stmts = append(stmts, "DELETE FROM models WHERE model_id LIKE 'svkexe-%';")
+	stmts = append(stmts, "DELETE FROM models WHERE model_id LIKE '"+gatewayModelPrefix+"%';")
 	for _, model := range models {
 		stmts = append(stmts, modelSeedStmt(model, baseURL, token))
 	}
@@ -136,7 +136,7 @@ func buildSeedSQL(models []string, baseURL, token string) string {
 func expectedSeedModelIDs(models []string) []string {
 	ids := make([]string, 0, len(models))
 	for _, model := range models {
-		ids = append(ids, "svkexe-"+model)
+		ids = append(ids, gatewayModelPrefix+model)
 	}
 	slices.Sort(ids)
 	return ids
@@ -150,7 +150,7 @@ func expectedSeedModelIDs(models []string) []string {
 // but not the gateway's, and naming a model the agent database lacks leaves the
 // VM unable to answer at all.
 func listGuestModels(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
-	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, "SELECT model_id FROM models ORDER BY model_id;"})
+	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, "PRAGMA busy_timeout=10000; SELECT model_id FROM models ORDER BY model_id;"})
 	if err != nil {
 		return nil, fmt.Errorf("list models in %s: %w", incusName, err)
 	}
@@ -164,7 +164,7 @@ func listGuestModels(ctx context.Context, rt runtime.ContainerRuntime, incusName
 }
 
 func readSeededModelIDs(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
-	verifyCmd := []string{"sqlite3", DBPath, "SELECT model_id FROM models WHERE model_id LIKE 'svkexe-%' ORDER BY model_id;"}
+	verifyCmd := []string{"sqlite3", DBPath, "PRAGMA busy_timeout=10000; SELECT model_id FROM models WHERE model_id LIKE '" + gatewayModelPrefix + "%' ORDER BY model_id;"}
 	out, err := rt.Exec(ctx, incusName, verifyCmd)
 	if err != nil {
 		return nil, fmt.Errorf("query model IDs: %w; diagnostics: %s", err, collectSeedDiagnostics(ctx, rt, incusName))
@@ -230,7 +230,7 @@ func modelSeedStmt(model, baseURL, token string) string {
 	if idx := strings.LastIndex(model, "/"); idx >= 0 {
 		displayName = model[idx+1:]
 	}
-	modelID := "svkexe-" + model
+	modelID := gatewayModelPrefix + model
 	return fmt.Sprintf(
 		"INSERT OR REPLACE INTO models (model_id, display_name, provider_type, endpoint, api_key, model_name, max_tokens) VALUES (%s, %s, 'openai', %s, %s, %s, 200000);",
 		sqlQuote(modelID), sqlQuote(displayName), sqlQuote(baseURL), sqlQuote(token), sqlQuote(model),

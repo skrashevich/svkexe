@@ -39,7 +39,7 @@ func TestDeliverInitialTaskKeepsTextOutOfShell(t *testing.T) {
 	task := "install nginx; run $(touch /tmp/pwned) and 'quote\" it\nsecond line"
 	database, guest, c := newTaskFixture(t, task)
 
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,7 +96,7 @@ func TestDeliverInitialTaskWithoutModel(t *testing.T) {
 	database, guest, c := newTaskFixture(t, "do the thing")
 	guest.models = " \n"
 
-	err := DeliverInitialTask(context.Background(), guest, database, c)
+	err := DeliverInitialTask(context.Background(), guest, database, c, nil)
 	if err == nil {
 		t.Fatal("missing model reported as success")
 	}
@@ -121,7 +121,7 @@ func TestDeliverInitialTaskRecordsAgentFailure(t *testing.T) {
 	database, guest, c := newTaskFixture(t, "do the thing")
 	guest.fail = "/api/conversations/new"
 
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err == nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err == nil {
 		t.Fatal("agent failure reported as success")
 	}
 	updated, err := database.GetContainerByID("vm")
@@ -136,7 +136,7 @@ func TestDeliverInitialTaskRecordsAgentFailure(t *testing.T) {
 // Restarting a VM must not re-run a task the agent already accepted.
 func TestDeliverInitialTaskOnlyOnce(t *testing.T) {
 	database, guest, c := newTaskFixture(t, "do the thing")
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 	before := len(guest.commands)
@@ -145,7 +145,7 @@ func TestDeliverInitialTaskOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := DeliverInitialTask(context.Background(), guest, database, sent); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, sent, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(guest.commands) != before {
@@ -162,7 +162,7 @@ func TestDeliverInitialTaskSkipsFailedUntilRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := DeliverInitialTask(context.Background(), guest, database, failed); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, failed, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(guest.commands) != 0 {
@@ -177,7 +177,7 @@ func TestDeliverInitialTaskSkipsFailedUntilRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := DeliverInitialTask(context.Background(), guest, database, pending); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, pending, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := guest.files[taskFilePath]; !ok {
@@ -192,7 +192,7 @@ func TestDeliverInitialTaskNoopWithoutTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(guest.commands) != 0 {
@@ -204,10 +204,18 @@ func TestDeliverInitialTaskNoopWithoutTask(t *testing.T) {
 // model the account cannot reach fails the task the owner just queued.
 func TestDeliverInitialTaskUsesOwnerModel(t *testing.T) {
 	database, guest, c := newTaskFixture(t, "do the thing")
+	// The owner's connection is what makes the VM's svkexe_user: model theirs.
+	// Delivery reads that list from the gateway database rather than inferring
+	// it from the VM, so that it carries the order their settings list and so
+	// that a model left behind by a deleted connection is not mistaken for one
+	// they still have.
+	if err := database.SaveProviderKey("key", "owner", "openrouter", "secret", "", "openrouter/free", "", []byte(testEncKey)); err != nil {
+		t.Fatal(err)
+	}
 	guest.models = "svkexe-cohere/north-mini-code:free\nsvkexe_user:openrouter:openrouter/free\n"
 	guest.files[ConfigFilePath] = []byte(`{"default_model":"svkexe-cohere/north-mini-code:free"}`)
 
-	if err := DeliverInitialTask(context.Background(), guest, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), guest, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 	var payload struct {
@@ -221,39 +229,11 @@ func TestDeliverInitialTaskUsesOwnerModel(t *testing.T) {
 	}
 }
 
-// The task path derives the owner's models from the VM's own list, so this
-// pins desiredModel through exactly the arguments resolveTaskModel gives it.
-func TestTaskModelSelection(t *testing.T) {
-	cases := []struct {
-		name       string
-		available  []string
-		configured string
-		want       string
-	}{
-		{"configured user model wins", []string{"svkexe-a", "svkexe_user:p:b", "svkexe_user:p:c"}, "svkexe_user:p:c", "svkexe_user:p:c"},
-		{"user model before gateway model", []string{"svkexe_user:p:b", "svkexe-a"}, "", "svkexe_user:p:b"},
-		{"gateway default gives way to the owner's key", []string{"svkexe-a", "svkexe_user:p:b"}, "svkexe-a", "svkexe_user:p:b"},
-		{"configured user model gone falls back to another", []string{"svkexe-a", "svkexe_user:p:b"}, "svkexe_user:p:gone", "svkexe_user:p:b"},
-		{"user model when no gateway model", []string{"svkexe_user:p:b"}, "", "svkexe_user:p:b"},
-		{"gateway model when the owner has no keys", []string{"other", "svkexe-a"}, "", "svkexe-a"},
-		{"configured gateway model honoured without user keys", []string{"svkexe-a", "svkexe-b"}, "svkexe-b", "svkexe-b"},
-		{"configured but absent falls back", []string{"svkexe-a"}, "svkexe-gone", "svkexe-a"},
-		{"nothing available", nil, "svkexe-gone", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := desiredModel(tc.available, ownModels(tc.available), "", tc.configured); got != tc.want {
-				t.Errorf("desiredModel(%v, %q) = %q, want %q", tc.available, tc.configured, got, tc.want)
-			}
-		})
-	}
-}
-
 // A caller without a runtime must leave the task queued instead of panicking
 // or burning its single delivery attempt.
 func TestDeliverInitialTaskWithoutRuntime(t *testing.T) {
 	database, _, c := newTaskFixture(t, "do the thing")
-	if err := DeliverInitialTask(context.Background(), nil, database, c); err != nil {
+	if err := DeliverInitialTask(context.Background(), nil, database, c, nil); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := database.GetContainerByID("vm")

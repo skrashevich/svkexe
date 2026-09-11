@@ -61,6 +61,23 @@ func environmentGuide(c *db.Container, domain string) []byte {
 		}
 	}
 
+	// Left unsaid, an agent discovers this by trying: it installs Docker, watches
+	// the daemon fail to create a container, concludes the platform forbids it
+	// and rebuilds everything from source. Stating the answer up front is the
+	// difference between minutes and a wasted afternoon — in both directions.
+	// What matters to the agent is what the running container actually booted
+	// with, not what the owner has since asked for: a setting that is still
+	// waiting on a restart would have the agent try Docker and fail.
+	b.WriteString("\n## Containers inside this VM\n\n")
+	if c.NestingApplied {
+		b.WriteString("- Nested containers are **enabled** here. Docker, buildah and nested Incus can create containers, so prefer an image-based workflow over building from source when the project ships one.\n")
+		b.WriteString("- Docker is not installed by default. `sudo apt-get install -y docker.io` works, and the daemon comes up normally.\n")
+		fmt.Fprintf(&b, "- A container of yours is only reachable from outside if its published port is the VM's own port **%d** — publish it with `-p %d:<container-port>`.\n", c.AppPort, c.AppPort)
+	} else {
+		b.WriteString("- Nested containers are **disabled** here, so Docker cannot create a single one however it is installed. This is a platform setting, not a broken install: do not spend time diagnosing the daemon.\n")
+		b.WriteString("- Build and run from source instead, and say so when you report what you did. The owner can turn nesting on from their dashboard and restart this VM if a container is genuinely needed.\n")
+	}
+
 	b.WriteString("\n## Making a service reachable\n\n")
 	b.WriteString("- Bind to `0.0.0.0`, not `127.0.0.1`. The platform proxies to this container's own address, so a service listening only on loopback is unreachable from the outside even though `curl localhost` works here.\n")
 	fmt.Fprintf(&b, "- Configure the port explicitly. If the software cannot use %d, tell the owner which port it needs so they can repoint the VM, rather than leaving it on a port nobody can reach.\n", c.AppPort)

@@ -42,7 +42,7 @@ func TestSetupOpensNewVMOnTheOwnersChosenModel(t *testing.T) {
 	t.Setenv("SVKEXE_AGENT_BINARY", binary)
 	database, m := ownerWithModels(t, "deepseek-v4-flash,deepseek-v4-pro")
 	chosen := db.UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	guest := &guestRuntime{files: map[string][]byte{}}
@@ -104,14 +104,14 @@ func TestSetupKeepsTheOwnersInAgentChoiceAndOtherSettings(t *testing.T) {
 func TestRefreshAppliesTheOwnersChosenModelOverAnotherOfTheirs(t *testing.T) {
 	database, m := ownerWithModels(t, "deepseek-v4-flash,deepseek-v4-pro")
 	chosen := db.UserModelID("custom-openmodel", "deepseek-v4-pro")
-	if _, err := database.SetUserDefaultModel("owner", chosen); err != nil {
+	if err := database.SetUserDefaultModel("owner", chosen); err != nil {
 		t.Fatal(err)
 	}
 	guest := &guestRuntime{files: map[string][]byte{
 		ConfigFilePath: []byte(`{"default_model":"` + db.UserModelID("custom-openmodel", "deepseek-v4-flash") + `"}`),
 	}}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", chosen); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", chosen, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != chosen {
@@ -142,7 +142,7 @@ func TestRefreshClearsDefaultLeftByARemovedConnection(t *testing.T) {
 				models: tc.inTheVM,
 			}
 
-			if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
+			if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
 				t.Fatal(err)
 			}
 			if got := guestDefaultModel(t, guest); got != tc.want {
@@ -164,7 +164,7 @@ func TestRefreshLeavesAModelTheGatewayDoesNotOwn(t *testing.T) {
 		models: "hand-made-local\n",
 	}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "hand-made-local" {
@@ -186,7 +186,7 @@ func TestRefreshPreservesNonStringConfigSettings(t *testing.T) {
 		ConfigFilePath: []byte(`{"default_model":"svkexe_user:removed:model","max_tokens":8192,"debug":true,"tools":{"a":1}}`),
 	}}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	var cfg map[string]any
@@ -229,11 +229,117 @@ func TestRefreshLeavesAStillReachableGatewayModel(t *testing.T) {
 		models: "svkexe-first/model\nsvkexe-second/model\n",
 	}
 
-	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", ""); err != nil {
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := guestDefaultModel(t, guest); got != "svkexe-second/model" {
 		t.Fatalf("default model = %q, want the owner's gateway choice preserved", got)
+	}
+}
+
+// A model the owner defined inside the agent — an Ollama entry, say — is not
+// the gateway's to move them off. Adding a connection in the dashboard gives
+// them models of their own, but that is not a reason to overrule a choice the
+// gateway never made.
+func TestRefreshLeavesTheOwnersOwnAgentModelEvenWithConnections(t *testing.T) {
+	_, m := ownerWithModels(t, "deepseek-v4-flash")
+	guest := &guestRuntime{
+		files:  map[string][]byte{ConfigFilePath: []byte(`{"default_model":"ollama-local"}`)},
+		models: "ollama-local\nsvkexe-platform/model\n",
+	}
+
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := guestDefaultModel(t, guest); got != "ollama-local" {
+		t.Fatalf("default model = %q, want the owner's own agent model untouched", got)
+	}
+}
+
+// The operator lists their models in preference order — the LLM proxy tries them
+// in it. A VM's list comes back alphabetical, so picking the first of that would
+// quietly put the VM's default out of step with the proxy's primary.
+func TestSetupFollowsTheOperatorsPlatformOrder(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "picoclaw")
+	if err := os.WriteFile(binary, []byte("agent-binary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SVKEXE_AGENT_BINARY", binary)
+	guest := &guestRuntime{files: map[string][]byte{}}
+	// Deliberately not alphabetical: z-ai sorts last but is listed first.
+	cfg := &LLMProxyConfig{
+		BaseURL: "http://gateway/api/llm/v1", Token: "token",
+		Models: []string{"z-ai/glm-4.6", "openai/gpt-oss-120b:free"},
+	}
+
+	if err := SetupContainer(t.Context(), guest, nil, nil, testContainer("owner"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]string
+	if err := json.Unmarshal(guest.files[ConfigFilePath], &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["default_model"] != "svkexe-z-ai/glm-4.6" {
+		t.Fatalf("default model = %q, want the operator's first model", config["default_model"])
+	}
+}
+
+// A default_model set to "", to null, or to a number all decode to the same
+// empty string, so a refresh that decided by decoded value alone would leave
+// any of them sitting in the file — a value the agent cannot use, in exactly
+// the case the clearing exists for.
+func TestRefreshClearsAnUnusableDefaultModel(t *testing.T) {
+	for _, tc := range []struct{ name, config string }{
+		{"empty string", `{"default_model":"","other":1}`},
+		{"null", `{"default_model":null,"other":1}`},
+		{"a number", `{"default_model":42,"other":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, m := ownerWithModels(t, "deepseek-v4-flash")
+			if err := database.DeleteAPIKey("key"); err != nil {
+				t.Fatal(err)
+			}
+			// A deployment with no platform models either, so nothing is wanted.
+			guest := &guestRuntime{
+				files:  map[string][]byte{ConfigFilePath: []byte(tc.config)},
+				models: " \n",
+			}
+
+			if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			var cfg map[string]any
+			if err := json.Unmarshal(guest.files[ConfigFilePath], &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if _, present := cfg["default_model"]; present {
+				t.Fatalf("unusable default left in place: %s", guest.files[ConfigFilePath])
+			}
+			if cfg["other"] != float64(1) {
+				t.Fatalf("neighbouring setting lost: %s", guest.files[ConfigFilePath])
+			}
+		})
+	}
+}
+
+// A config the gateway cannot read is not a config it may replace. A missing
+// file is empty output and legitimately empty; an exec failure says nothing
+// about the file, and rewriting on an empty map would wipe every setting the
+// agent keeps there.
+func TestRefreshDoesNotReplaceAConfigItCouldNotRead(t *testing.T) {
+	_, m := ownerWithModels(t, "deepseek-v4-flash")
+	original := []byte(`{"default_model":"ollama-local","theme":"dark","max_tokens":8192}`)
+	guest := &guestRuntime{
+		files:  map[string][]byte{ConfigFilePath: original},
+		models: "ollama-local\n",
+		fail:   "cat " + ConfigFilePath,
+	}
+
+	if err := RefreshProviderKeys(t.Context(), guest, m, "id", "vm", "owner", "", nil); err == nil {
+		t.Fatal("an unreadable config was reported as a successful refresh")
+	}
+	if got := string(guest.files[ConfigFilePath]); got != string(original) {
+		t.Fatalf("config rewritten from an unreadable read: %s", got)
 	}
 }
 
@@ -245,8 +351,14 @@ func TestProviderModelsSQLCarriesTheEndpointProtocol(t *testing.T) {
 		Provider: "custom-openmodel", Model: "deepseek-v4-flash",
 		BaseURL: "https://api.openmodel.ai/v1", Key: "secret", Protocol: "openai-responses",
 	}})
-	if !strings.Contains(sql, "'openai-responses'") {
-		t.Fatalf("protocol not seeded: %s", sql)
+	// The whole tuple, in column order: asserting only that the protocol string
+	// appears somewhere would pass if it landed in display_name or endpoint,
+	// which is the mistake the column order exists to prevent.
+	want := "VALUES ('svkexe_user:custom-openmodel:deepseek-v4-flash', " +
+		"'custom-openmodel / deepseek-v4-flash', 'openai-responses', " +
+		"'https://api.openmodel.ai/v1', 'secret', 'deepseek-v4-flash', 200000)"
+	if !strings.Contains(sql, want) {
+		t.Fatalf("seeded row is not\n%s\ngot\n%s", want, sql)
 	}
 }
 
@@ -278,7 +390,7 @@ func TestDesiredModel(t *testing.T) {
 		{"and an empty VM names nothing", nil, nil, pro, flash, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := desiredModel(tc.available, tc.own, tc.chosen, tc.current); got != tc.want {
+			if got := desiredModel(tc.available, tc.own, nil, tc.chosen, tc.current); got != tc.want {
 				t.Fatalf("desired model = %q, want %q", got, tc.want)
 			}
 		})

@@ -180,6 +180,7 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 	return nil, nil
 }
 func (g *guestRuntime) Snapshot(context.Context, string, string) error { return nil }
+func (g *guestRuntime) SetNesting(context.Context, string, bool) error { return nil }
 
 // The agent was told this domain serves its work. Leaving it in the guide after
 // the sweep stops routing it would have the agent keep reporting a URL that now

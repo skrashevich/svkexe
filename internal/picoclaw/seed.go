@@ -150,7 +150,8 @@ func expectedSeedModelIDs(models []string) []string {
 // but not the gateway's, and naming a model the agent database lacks leaves the
 // VM unable to answer at all.
 func listGuestModels(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
-	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", DBPath, "PRAGMA busy_timeout=10000; SELECT model_id FROM models ORDER BY model_id;"})
+	// PRAGMA busy_timeout prints its value, contaminating the model ID list.
+	out, err := rt.Exec(ctx, incusName, []string{"sqlite3", "-cmd", ".timeout 10000", DBPath, "SELECT model_id FROM models ORDER BY model_id;"})
 	if err != nil {
 		return nil, fmt.Errorf("list models in %s: %w", incusName, err)
 	}
@@ -164,7 +165,7 @@ func listGuestModels(ctx context.Context, rt runtime.ContainerRuntime, incusName
 }
 
 func readSeededModelIDs(ctx context.Context, rt runtime.ContainerRuntime, incusName string) ([]string, error) {
-	verifyCmd := []string{"sqlite3", DBPath, "PRAGMA busy_timeout=10000; SELECT model_id FROM models WHERE model_id LIKE '" + gatewayModelPrefix + "%' ORDER BY model_id;"}
+	verifyCmd := []string{"sqlite3", "-cmd", ".timeout 10000", DBPath, "SELECT model_id FROM models WHERE model_id LIKE '" + gatewayModelPrefix + "%' ORDER BY model_id;"}
 	out, err := rt.Exec(ctx, incusName, verifyCmd)
 	if err != nil {
 		return nil, fmt.Errorf("query model IDs: %w; diagnostics: %s", err, collectSeedDiagnostics(ctx, rt, incusName))

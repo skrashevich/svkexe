@@ -29,6 +29,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/dnscheck"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
+	"github.com/skrashevich/svkexe/internal/metadata"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/proxy"
 	"github.com/skrashevich/svkexe/internal/ratelimit"
@@ -72,6 +73,14 @@ func main() {
 	// deployment whose DOMAIN does not resolve to the gateway itself (behind a
 	// load balancer, or NAT) names its public addresses explicitly instead.
 	gatewayPublicIPs := getenv("GATEWAY_PUBLIC_IPS", "")
+	// Where the gateway listens for instance metadata requests. VMs reach the
+	// service at http://169.254.169.254/, which the host redirects here; this is
+	// the bridge's own address and an unprivileged port. "off" is for a
+	// deployment where the gateway has its own network namespace and could never
+	// receive a VM's request, such as Docker Compose.
+	metadataAddr := getenv("METADATA_ADDR", metadata.DefaultAddr)
+	// The agent is only promised the endpoint where it actually answers.
+	picoclaw.MetadataAvailable = !strings.EqualFold(metadataAddr, "off") && metadataAddr != ""
 	openRouterKey := getenv("OPENROUTER_API_KEY", "")
 	openRouterModels := getenv("OPENROUTER_MODELS", "anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash")
 	llmInternalToken := getenv("LLM_INTERNAL_TOKEN", "")
@@ -232,6 +241,12 @@ func main() {
 		}
 	}()
 
+	// The instance metadata service answers on its own listener, never through
+	// the handler above: identity there comes from the source address alone, so
+	// exposing it on the public port would let anyone who can set a Host header
+	// read a VM's metadata.
+	metadataServer := startMetadata(metadataAddr, database, rt, domain, gatewayPublicIPs)
+
 	// Upgrade agents in running VMs; stopped VMs are handled on their next start.
 	agentCtx, stopAgents := context.WithCancel(context.Background())
 	defer stopAgents()
@@ -256,8 +271,43 @@ func main() {
 	log.Println("shutting down...")
 	stopAgents()
 
+	if metadataServer != nil {
+		stopServer(metadataServer, shutdownGrace)
+	}
 	stopServer(httpServer, shutdownGrace)
 	log.Println("stopped")
+}
+
+// startMetadata brings the instance metadata service up, or explains why it is
+// not running and returns nil.
+//
+// Nothing here is fatal. A deployment whose gateway cannot hold the link-local
+// address still serves every other part of the platform, and turning that into a
+// crash loop would take the dashboard down over a feature a VM merely queries.
+func startMetadata(addr string, database *db.DB, rt runtime.ContainerRuntime, domain, publicIPs string) *http.Server {
+	if addr == "" || strings.EqualFold(addr, "off") {
+		log.Printf("instance metadata service disabled (METADATA_ADDR=%q)", addr)
+		return nil
+	}
+	svc := metadata.New(
+		metadata.NewRuntimeResolver(rt, database, 0, nil),
+		metadata.Config{
+			Domain:    domain,
+			PublicIPs: strings.Split(publicIPs, ","),
+			ImageID:   picoclaw.DefaultImage,
+			// Its own limiter, not the API's: the key here is a VM's address
+			// rather than a user, and a VM reading its own metadata must not eat
+			// its owner's dashboard budget.
+			Limiter: ratelimit.New(metadata.DefaultRateLimitRPS, metadata.DefaultRateLimitBurst),
+		},
+	)
+	srv, err := svc.Start(context.Background(), addr)
+	if err != nil {
+		log.Printf("instance metadata service unavailable: %v", err)
+		return nil
+	}
+	log.Printf("instance metadata service listening on %s", addr)
+	return srv
 }
 
 // stopServer takes the HTTP server down, giving requests already in flight

@@ -118,6 +118,12 @@ rm -rf %[3]s
 	if err := writeEnvironmentGuide(ctx, rt, database, c); err != nil {
 		return err
 	}
+	// The metadata address is reachable through the VM's default route whether
+	// or not this succeeds, so a VM is not left unusable over a convenience its
+	// agent may never query.
+	if err := installMetadataRoute(ctx, rt, incusName); err != nil {
+		log.Printf("picoclaw: instance metadata route for %s: %v", incusName, err)
+	}
 	var env []byte
 	if m != nil {
 		if err := m.MaterializeKeys(containerID, ownerID); err != nil {

@@ -48,6 +48,9 @@ type guestRuntime struct {
 	// taskLookup is the conversation the agent's database reports for a task
 	// whose conversation the gateway never recorded.
 	taskLookup string
+	// metadataRouteStamp is the route version this VM already carries. Empty
+	// means it carries none, which is a VM the gateway has not configured yet.
+	metadataRouteStamp string
 }
 
 func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, error) {
@@ -114,6 +117,14 @@ func (g *guestRuntime) Exec(_ context.Context, _ string, cmd []string) ([]byte, 
 		return []byte(g.taskLookup + "\n"), nil
 	case strings.Contains(text, "json_extract(llm_data"):
 		return []byte(g.agentError + "\n"), nil
+	case strings.Contains(text, metadataRouteStamp) && strings.Contains(text, "is-enabled"):
+		// The metadata route probe. A guest that already carries this exact
+		// version answers successfully; anything else is a miss, which is what
+		// makes the gateway reinstall.
+		if g.metadataRouteStamp != "" && strings.Contains(text, g.metadataRouteStamp) {
+			return nil, nil
+		}
+		return nil, errors.New("route not installed")
 	}
 	return nil, nil
 }

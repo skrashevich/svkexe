@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/metadata"
 	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
@@ -76,6 +77,20 @@ func environmentGuide(c *db.Container, domain string) []byte {
 	} else {
 		b.WriteString("- Nested containers are **disabled** here, so Docker cannot create a single one however it is installed. This is a platform setting, not a broken install: do not spend time diagnosing the daemon.\n")
 		b.WriteString("- Build and run from source instead, and say so when you report what you did. The owner can turn nesting on from their dashboard and restart this VM if a container is genuinely needed.\n")
+	}
+
+	// An agent that does not know this endpoint exists asks the owner for facts
+	// the VM can already answer — its own name, its published port, whether
+	// Docker will work — or guesses them. Naming it once turns the VM into
+	// something the agent can interrogate rather than something it has to be
+	// told about. It is only promised where the deployment actually serves it:
+	// an agent told to curl a dead address spends turns finding that out.
+	if MetadataAvailable {
+		b.WriteString("\n## What this VM knows about itself\n\n")
+		fmt.Fprintf(&b, "- An EC2-compatible metadata service answers at **http://%s/latest/meta-data/** from inside this VM. `curl -s http://%s/latest/meta-data/` lists the keys.\n",
+			metadata.Address, metadata.Address)
+		b.WriteString("- Useful ones: `instance-id`, `local-ipv4`, `public-hostname`, `public-keys/0/openssh-key`, and the platform's own tree under `svkexe/` — `svkexe/app-port`, `svkexe/app-public`, `svkexe/nesting`, `svkexe/aliases`.\n")
+		b.WriteString("- Read it instead of asking the owner for something it already answers. A value is plain text with no trailing newline; a path ending in `/` lists what is under it.\n")
 	}
 
 	b.WriteString("\n## Making a service reachable\n\n")

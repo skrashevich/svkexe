@@ -214,6 +214,7 @@ All configuration is via environment variables. For bare-metal installs, edit `/
 | `DOMAIN` | | Base domain for subdomain routing |
 | `GATEWAY_PUBLIC_IPS` | *(resolved from DOMAIN)* | Comma-separated public addresses of the gateway, used to verify custom domains. Set it when `DOMAIN` does not resolve to the address visitors reach (load balancer, NAT) |
 | `INCUS_SOCKET` | `/var/lib/incus/unix.socket` | Incus API socket |
+| `METADATA_ADDR` | `10.100.0.1:8081` | Where the gateway listens for [instance metadata](#instance-metadata-service) requests; VMs reach the service at `169.254.169.254:80`, which the host redirects here. `off` disables it |
 | `SSH_ADDR` | `:2222` | SSH gateway listen address |
 | `SSH_HOST_KEY_PATH` | `/var/lib/svkexe/ssh_host_key` | ED25519 host key (auto-generated if missing) |
 | `SECRETS_BASE_PATH` | `/var/lib/svkexe/secrets` | Key materialization directory |
@@ -420,6 +421,121 @@ If the gateway sits behind a load balancer or NAT, `DOMAIN` may not resolve to
 the address visitors actually reach, and verification would reject every alias.
 Set `GATEWAY_PUBLIC_IPS` to the real public addresses instead.
 
+### Instance metadata service
+
+Every VM can ask the platform about itself at `http://169.254.169.254/latest/meta-data/`,
+the address EC2 uses — so cloud-aware tooling, provisioning scripts and the VM's
+own agent find it without being configured.
+
+```bash
+# Inside a VM
+curl -s http://169.254.169.254/latest/meta-data/
+curl -s http://169.254.169.254/latest/meta-data/instance-id
+curl -s http://169.254.169.254/latest/meta-data/svkexe/app-port
+
+# IMDSv2, if your tooling prefers a session token
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/local-ipv4
+```
+
+A path ending in `/` lists what is under it, one entry per line with directories
+suffixed by `/`. A value is plain text with **no trailing newline**.
+
+| Key under `/latest/meta-data/` | Value |
+|---|---|
+| `ami-id` | The image VMs are built from (`svkexe-base`) |
+| `ami-launch-index`, `instance-action`, `instance-life-cycle` | `0`, `none`, `on-demand` — present so EC2 tooling finds what it expects |
+| `hostname`, `local-hostname` | The Incus instance name, `svkexe-{owner}-{name}` |
+| `instance-id` | The VM's platform id, the same one `/api/containers` uses |
+| `instance-type` | The VM's shape, e.g. `svkexe.c2-m2048` |
+| `local-ipv4` | The VM's address on the bridge |
+| `mac` | The hardware address of that interface |
+| `network/interfaces/macs/<mac>/…` | EC2's per-interface tree, keyed on the MAC |
+| `placement/region`, `placement/availability-zone` | `svkexe`, `svkexe-a` |
+| `public-hostname` | `<name>.$DOMAIN` |
+| `public-ipv4` | The first of `GATEWAY_PUBLIC_IPS` |
+| `public-keys/<index>/openssh-key` | The owner's SSH public keys |
+| `reservation-id`, `security-groups` | `r-<instance-id>`, `default` |
+| `services/domain`, `services/partition` | `$DOMAIN`, `svkexe` |
+| `svkexe/app-port`, `svkexe/app-public` | The published port and whether it is public |
+| `svkexe/nesting`, `svkexe/nesting-applied` | Whether nested containers are allowed here, and whether the running VM booted with them |
+| `svkexe/aliases` | The owner's verified custom domains, one per line |
+| `svkexe/agent-host`, `svkexe/gateway-domain` | The agent's own host and the platform domain |
+| `svkexe/owner-id`, `svkexe/container-name`, `svkexe/created-at`, `svkexe/disk-gb` | The rest of the VM's own record |
+| `svkexe/initial-task`, `svkexe/initial-task-state` | The task the VM was created with, if any |
+
+`/latest/dynamic/instance-identity/document` returns the same facts as JSON.
+`/latest/user-data` answers **404**: the platform publishes no user-data, so a
+guest cloud-init cannot be handed a script nobody wrote.
+
+#### How it is wired
+
+Two host-side pieces, both installed by `scripts/install.sh` and refreshed by
+`scripts/update.sh` — see `scripts/install-metadata-units.sh`:
+
+- **`svkexe-metadata.service`** redirects traffic to `169.254.169.254:80`
+  *arriving on `svkexe-br0`* to the port the gateway listens on
+  (`METADATA_ADDR`, by default the bridge's own `10.100.0.1:8081` — change the
+  bridge subnet and you must change `METADATA_ADDR` and the script's
+  `SVKEXE_METADATA_PORT` with it). A VM's
+  ordinary default route already carries the address to the host, so nothing in
+  the guest has to be configured; the gateway additionally pins a `/32` route
+  inside each VM, which only matters for a guest carrying a zeroconf
+  `169.254.0.0/16` route that would otherwise swallow it.
+
+  **The host never takes `169.254.169.254` as an address of its own**, and that
+  is deliberate. Doing so would route the *host's* traffic to that address
+  locally — and AWS, GCP, Azure, Oracle, Hetzner and DigitalOcean all serve their
+  own instance metadata there, so installing svkexe on a cloud VPS would cut the
+  host off from its IAM credential refresh, guest agent and OS Login key
+  propagation. A redirect scoped to the bridge keeps the host's own access
+  intact, needs no privileged port, and cannot be reached from the host's LAN.
+  It also closes a hole that predates this feature: on such a VPS a tenant VM's
+  request to `169.254.169.254` used to be forwarded to the *provider's* metadata
+  service.
+
+- **Anti-spoof filtering on the VM NIC.** `security.ipv4_filtering` and
+  `security.mac_filtering` are set on the `svkexe-default` profile, so Incus pins
+  each VM to the address and MAC it was allocated. This is a prerequisite, not a
+  hardening extra: identity here is the source address and a tenant is root
+  inside their own VM. The gateway refuses to answer any VM whose NIC is
+  unfiltered, and says so in the log. Incus applies the setting when an instance
+  starts, so **a VM created before this is installed picks it up on its next
+  restart and is refused until then.** A VM that needs a second address of its
+  own — bridged nested networking rather than Docker's default NAT — cannot have
+  one while this is on.
+
+Set `METADATA_ADDR=off` where the gateway has its own network namespace and could
+never receive a VM's request — the Docker Compose variant does this. A gateway
+that cannot bind the address logs the reason and keeps serving everything else.
+
+#### Security
+
+The service has no credentials: a request is attributed entirely to the address
+it arrives from.
+
+- That address is resolved against **Incus's live view** of which instance holds
+  it, not against the `containers.ip_address` column, which is only refreshed
+  when something happens to a VM and would hand a reassigned address to the wrong
+  holder. An address two instances both claim resolves to neither.
+- It is only trusted because **Incus pins it** (see above). A VM whose NIC is not
+  filtered is refused outright rather than taken at its word.
+- If Incus cannot be reached, the last known view is served for a short while and
+  then **refused** rather than trusted indefinitely — a stale map is how an
+  address that has changed hands gets misattributed.
+- A caller the platform cannot attribute to a VM gets `403` and learns nothing
+  about what exists. One VM presenting another's IMDSv2 token gets `401`; tokens
+  are signed, carry the VM they were issued to, and are stored nowhere.
+- Any request carrying `X-Forwarded-For` is refused with `421` — stricter than
+  EC2, which only refuses it on the token endpoint — because a proxy inside a VM
+  being talked into fetching this address is the classic way instance data leaks.
+- One VM's requests are rate limited on their own budget, so a runaway loop
+  cannot spend the database pool the dashboard and the API share.
+- Nothing secret is published: no LLM keys, no session tokens, no password
+  hashes, and a test walks the entire tree to prove it.
+
 ## Architecture
 
 ```
@@ -468,6 +584,7 @@ internal/
   proxy/               Dynamic reverse proxy (WebSocket/SSE)
   runtime/             ContainerRuntime + ShellRuntime interfaces
   secrets/             LLM key materialization (encrypted DB -> env file)
+  metadata/            EC2-compatible instance metadata service for the VMs
   picoclaw/            Agent setup, migration, gateway models and backups
   sshgw/               SSH gateway with interactive menu
   metrics/             Prometheus metrics + middleware

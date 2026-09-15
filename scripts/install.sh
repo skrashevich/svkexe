@@ -391,6 +391,27 @@ EOF
     log "svkexe-firewall.service enabled and active."
 fi
 
+# ── Step 5c: Instance metadata plumbing ──────────────────────────────────────
+#
+# The gateway answers http://169.254.169.254/latest/meta-data/ for the VMs, the
+# address every cloud-aware tool reaches for. The host does NOT take that address
+# as its own — doing so would cut the host off from its cloud provider's metadata
+# service at the very same address — so a oneshot redirects the traffic on the VM
+# bridge to the unprivileged port the gateway listens on instead.
+#
+# A VM reaches it through its ordinary default route, so nothing in the guest
+# needs configuring for this to work. The same unit pins each VM's NIC to the
+# address it was allocated, which is what lets the gateway treat a source address
+# as an identity at all.
+
+# Delegated to scripts/install-metadata-units.sh so install.sh and update.sh
+# cannot drift apart on what the metadata plumbing looks like.
+if [[ "${SKIP_INCUS:-0}" != "1" && -f "${SCRIPT_DIR}/install-metadata-units.sh" ]]; then
+    log "Installing instance metadata units…"
+    bash "${SCRIPT_DIR}/install-metadata-units.sh" \
+        || warn "Could not install the instance metadata units — the gateway will answer every VM's metadata request with 403."
+fi
+
 # ── Step 6: Build svkexe-base Incus image ────────────────────────────────────
 
 if [[ "${SKIP_INCUS:-0}" != "1" && "${SKIP_IMAGE_BUILD:-0}" != "1" && -x "${SCRIPT_DIR}/build-image.sh" ]]; then
@@ -534,6 +555,12 @@ LimitNOFILE=65536
 # when ReadWritePaths references a non-existent directory.
 RuntimeDirectory=shelley
 RuntimeDirectoryMode=0750
+
+# The gateway holds no capabilities. The instance metadata service is reached on
+# 169.254.169.254:80, but the gateway itself listens on an unprivileged port and
+# the host redirects the bridge traffic to it — see
+# scripts/install-metadata-units.sh — precisely so that no privileged bind, and
+# so no CAP_NET_BIND_SERVICE, is needed anywhere.
 
 # Hardening
 NoNewPrivileges=true

@@ -42,6 +42,11 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       INCUS_ENDPOINT: ${INCUS_ENDPOINT}
       ENC_KEY: ${ENC_KEY}
+      # The gateway has its own network namespace here, so a listener it opens
+      # can never receive a VM's metadata request — and IP_FREEBIND means the
+      # bind succeeds anyway, which would leave a healthy-looking log line in
+      # front of a service nothing can reach.
+      METADATA_ADDR: "off"
     depends_on:
       - caddy
       - authelia

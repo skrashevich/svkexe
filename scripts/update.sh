@@ -443,6 +443,23 @@ else
     warn "${UNITS_SCRIPT} not found — self-update units left as they are."
 fi
 
+# ── Step 1c: Refresh the instance metadata units ────────────────────────────
+#
+# These carry the redirect that puts a VM's request to 169.254.169.254 in front
+# of the gateway, and the NIC filtering that makes a VM's source address
+# trustworthy enough to answer at all. Refreshing them here is what lets the
+# feature reach a host that only ever runs update.sh — without it the gateway
+# comes back up refusing every VM's metadata request.
+
+METADATA_UNITS_SCRIPT="${REPO_ROOT}/scripts/install-metadata-units.sh"
+if [[ -f "${METADATA_UNITS_SCRIPT}" ]]; then
+    log "Refreshing instance metadata units…"
+    bash "${METADATA_UNITS_SCRIPT}" \
+        || warn "Could not refresh the instance metadata units — continuing with the update."
+else
+    warn "${METADATA_UNITS_SCRIPT} not found — instance metadata units left as they are."
+fi
+
 if ! command -v node >/dev/null || ! command -v npm >/dev/null || ! command -v python3 >/dev/null; then
     apt-get update -q
     apt-get install -y nodejs npm python3

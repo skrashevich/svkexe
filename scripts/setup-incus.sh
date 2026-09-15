@@ -136,6 +136,21 @@ devices:
     name: eth0
     network: ${BRIDGE_NAME}
     type: nic
+    # A VM must not be able to send as another VM's address. The instance
+    # metadata service identifies its caller by source address and nothing
+    # else, and a tenant is root inside their own VM: without these, they can
+    # add a neighbour's address, answer ARP for it, and be served the
+    # neighbour's identity, SSH keys and task. Incus installs per-instance
+    # packet filter rules from them, pinning each VM to the address and MAC it
+    # was allocated. The gateway refuses to answer metadata for a VM whose NIC
+    # is unfiltered, so this is a prerequisite rather than a hardening extra.
+    #
+    # Applied when the instance starts, so an existing VM picks it up on its
+    # next restart. A VM that legitimately needs a second address of its own —
+    # bridged nested networking rather than Docker's default NAT — cannot have
+    # one while this is on.
+    security.ipv4_filtering: "true"
+    security.mac_filtering: "true"
   root:
     path: /
     pool: ${POOL_NAME}

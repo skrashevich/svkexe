@@ -8,12 +8,23 @@ import (
 
 // Container represents a running or stopped container instance.
 type Container struct {
-	ID        string
-	Name      string
-	Status    string
-	OwnerID   string
-	IP        string
-	CreatedAt time.Time
+	ID      string
+	Name    string
+	Status  string
+	OwnerID string
+	IP      string
+	// MAC is the hardware address of the interface IP was found on. The
+	// metadata service reports it, since EC2's tooling keys its network tree on
+	// it. A runtime that cannot say leaves it empty, and the key is then simply
+	// not published rather than invented.
+	MAC string
+	// AddressFiltered reports whether the runtime is stopping this instance from
+	// sending as any address but its own. Anything that treats a source address
+	// as an identity has to know: a tenant is root inside their own VM and can
+	// otherwise claim a neighbour's address. A runtime that cannot say leaves it
+	// false, which is what makes the answer safe to act on by default.
+	AddressFiltered bool
+	CreatedAt       time.Time
 }
 
 // CreateOpts holds parameters for creating a new container.

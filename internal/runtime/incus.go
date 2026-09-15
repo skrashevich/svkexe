@@ -213,16 +213,18 @@ func (r *IncusRuntime) Get(ctx context.Context, id string) (*Container, error) {
 		return nil, fmt.Errorf("get container state %s: %w", id, err)
 	}
 
-	ip := extractIP(state)
+	ip, mac := extractAddress(state)
 	ownerID := inst.Config["user.owner_id"]
 
 	return &Container{
-		ID:        inst.Name,
-		Name:      inst.Name,
-		Status:    strings.ToLower(inst.Status),
-		OwnerID:   ownerID,
-		IP:        ip,
-		CreatedAt: inst.CreatedAt,
+		ID:              inst.Name,
+		Name:            inst.Name,
+		Status:          strings.ToLower(inst.Status),
+		OwnerID:         ownerID,
+		IP:              ip,
+		MAC:             mac,
+		AddressFiltered: addressFiltered(inst.ExpandedDevices),
+		CreatedAt:       inst.CreatedAt,
 	}, nil
 }
 
@@ -246,14 +248,16 @@ func (r *IncusRuntime) List(ctx context.Context, ownerID string) ([]*Container, 
 		if err != nil {
 			continue
 		}
-		ip := extractIP(state)
+		ip, mac := extractAddress(state)
 		result = append(result, &Container{
-			ID:        inst.Name,
-			Name:      inst.Name,
-			Status:    strings.ToLower(inst.Status),
-			OwnerID:   inst.Config["user.owner_id"],
-			IP:        ip,
-			CreatedAt: inst.CreatedAt,
+			ID:              inst.Name,
+			Name:            inst.Name,
+			Status:          strings.ToLower(inst.Status),
+			OwnerID:         inst.Config["user.owner_id"],
+			IP:              ip,
+			MAC:             mac,
+			AddressFiltered: addressFiltered(inst.ExpandedDevices),
+			CreatedAt:       inst.CreatedAt,
 		})
 	}
 	return result, nil
@@ -348,8 +352,52 @@ func (r *IncusRuntime) PushFile(ctx context.Context, id, path string, data []byt
 
 // extractIP returns the first IPv4 address from instance state network info.
 func extractIP(state *api.InstanceState) string {
+	ip, _ := extractAddress(state)
+	return ip
+}
+
+// ipv4FilteringKey is the Incus NIC option that pins an instance to the address
+// it was allocated. Incus installs per-instance packet filter rules from it, so
+// it is the only thing that makes a source address on the bridge trustworthy.
+const ipv4FilteringKey = "security.ipv4_filtering"
+
+// addressFiltered reports whether EVERY NIC of the instance has ipv4 filtering
+// on, and that it has at least one.
+//
+// All of them, not any of them: an instance with one filtered NIC and one
+// unfiltered one can still send as whatever address it likes out of the second,
+// so an answer of "some NIC is pinned" would say nothing useful. This boolean is
+// the linchpin of the metadata service's trust model, which is reason enough for
+// it to read in the restrictive direction.
+//
+// The expanded devices are read rather than the instance's own, because the NIC
+// comes from the svkexe-default profile and an instance that inherits it has no
+// device of its own to inspect.
+func addressFiltered(devices map[string]map[string]string) bool {
+	found := false
+	for _, device := range devices {
+		if device["type"] != "nic" {
+			continue
+		}
+		// Incus spells booleans as strings and accepts several of them.
+		switch strings.ToLower(device[ipv4FilteringKey]) {
+		case "true", "yes", "1", "on":
+			found = true
+		default:
+			return false
+		}
+	}
+	return found
+}
+
+// extractAddress returns the first global IPv4 address from instance state
+// network info together with the hardware address of the interface it was found
+// on. The two are read together on purpose: the metadata service publishes the
+// MAC as the key of the interface that owns the address, so a MAC taken from a
+// different interface would describe a network the caller does not have.
+func extractAddress(state *api.InstanceState) (ip, mac string) {
 	if state == nil || state.Network == nil {
-		return ""
+		return "", ""
 	}
 	for iface, net := range state.Network {
 		if iface == "lo" {
@@ -357,11 +405,11 @@ func extractIP(state *api.InstanceState) string {
 		}
 		for _, addr := range net.Addresses {
 			if addr.Family == "inet" && addr.Scope == "global" {
-				return addr.Address
+				return addr.Address, net.Hwaddr
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // ExecInteractive starts an interactive PTY session inside a container.

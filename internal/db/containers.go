@@ -316,6 +316,24 @@ func (db *DB) GetContainerByNameOnly(name string) (*Container, error) {
 	return c, nil
 }
 
+// GetContainerByIncusName returns a container by the Incus instance name.
+//
+// The metadata service needs it: the container runtime is the authority on which
+// instance currently holds a given address, and the name is all it can say. A
+// lookup by the platform's own ip_address column would instead trust a value
+// that is only refreshed when something happens to the VM, and a stale one would
+// hand a caller somebody else's identity.
+func (db *DB) GetContainerByIncusName(incusName string) (*Container, error) {
+	c, err := scanContainer(db.QueryRow(`SELECT `+containerColumns+` FROM containers WHERE incus_name = ?`, incusName))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get container by incus name: %w", err)
+	}
+	return c, nil
+}
+
 // UpdateContainerStatus updates status and ip_address, refreshing updated_at.
 func (db *DB) UpdateContainerStatus(id, status, ipAddress string) error {
 	_, err := db.Exec(

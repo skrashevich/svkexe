@@ -255,3 +255,73 @@ func TestMockRuntime_NotFound(t *testing.T) {
 		t.Error("expected error for nonexistent container")
 	}
 }
+
+// This boolean is the linchpin of the metadata service's trust model: it decides
+// whether a source address may be treated as an identity. One filtered NIC
+// alongside an unfiltered one pins nothing, because the instance can still send
+// what it likes out of the second.
+func TestAddressFilteredNeedsEveryNICNotAnyNIC(t *testing.T) {
+	cases := []struct {
+		name    string
+		devices map[string]map[string]string
+		want    bool
+	}{
+		{
+			name:    "no devices at all",
+			devices: map[string]map[string]string{},
+			want:    false,
+		},
+		{
+			name: "no NIC among the devices",
+			devices: map[string]map[string]string{
+				"root": {"type": "disk", "path": "/"},
+			},
+			want: false,
+		},
+		{
+			name: "the profile NIC, filtered",
+			devices: map[string]map[string]string{
+				"root": {"type": "disk", "path": "/"},
+				"eth0": {"type": "nic", "security.ipv4_filtering": "true"},
+			},
+			want: true,
+		},
+		{
+			name: "the profile NIC, unfiltered",
+			devices: map[string]map[string]string{
+				"eth0": {"type": "nic"},
+			},
+			want: false,
+		},
+		{
+			name: "filtering spelled the other ways Incus accepts",
+			devices: map[string]map[string]string{
+				"eth0": {"type": "nic", "security.ipv4_filtering": "True"},
+				"eth1": {"type": "nic", "security.ipv4_filtering": "yes"},
+			},
+			want: true,
+		},
+		{
+			name: "a second, unfiltered NIC attached alongside the pinned one",
+			devices: map[string]map[string]string{
+				"eth0": {"type": "nic", "security.ipv4_filtering": "true"},
+				"eth1": {"type": "nic"},
+			},
+			want: false,
+		},
+		{
+			name: "explicitly turned off",
+			devices: map[string]map[string]string{
+				"eth0": {"type": "nic", "security.ipv4_filtering": "false"},
+			},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := addressFiltered(tc.devices); got != tc.want {
+				t.Errorf("addressFiltered = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

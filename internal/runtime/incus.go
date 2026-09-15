@@ -350,7 +350,7 @@ func (r *IncusRuntime) PushFile(ctx context.Context, id, path string, data []byt
 	return nil
 }
 
-// extractIP returns the first IPv4 address from instance state network info.
+// extractIP returns the platform NIC's IPv4 address.
 func extractIP(state *api.InstanceState) string {
 	ip, _ := extractAddress(state)
 	return ip
@@ -390,23 +390,18 @@ func addressFiltered(devices map[string]map[string]string) bool {
 	return found
 }
 
-// extractAddress returns the first global IPv4 address from instance state
-// network info together with the hardware address of the interface it was found
-// on. The two are read together on purpose: the metadata service publishes the
-// MAC as the key of the interface that owns the address, so a MAC taken from a
-// different interface would describe a network the caller does not have.
+// extractAddress returns the global IPv4 address and MAC of eth0, the NIC
+// installed by svkexe-default. Guest-created Docker bridges must never supply
+// the address used for routing or metadata identity. If eth0 is not ready,
+// return no address rather than a guest-internal one.
 func extractAddress(state *api.InstanceState) (ip, mac string) {
 	if state == nil || state.Network == nil {
 		return "", ""
 	}
-	for iface, net := range state.Network {
-		if iface == "lo" {
-			continue
-		}
-		for _, addr := range net.Addresses {
-			if addr.Family == "inet" && addr.Scope == "global" {
-				return addr.Address, net.Hwaddr
-			}
+	nic := state.Network["eth0"]
+	for _, addr := range nic.Addresses {
+		if addr.Family == "inet" && addr.Scope == "global" {
+			return addr.Address, nic.Hwaddr
 		}
 	}
 	return "", ""

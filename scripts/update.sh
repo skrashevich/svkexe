@@ -525,7 +525,12 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
         elif git_repo diff --name-only "${OLD_COMMIT}" "${NEW_COMMIT}" \
              | grep -qE '^(scripts/build-(image|agent)\.sh|agent/)'; then
             log "Base image inputs changed (build-image.sh, build-agent.sh or agent/) — rebuilding svkexe-base…"
-            "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
+            # The agent was just built above; hand it over instead of building it
+            # again. HOME is set for the same reason as the gateway build: under
+            # systemd-run the image build has no home and go cannot locate its
+            # module cache.
+            env HOME="/root" SVKEXE_AGENT_BINARY="${REPO_ROOT}/bin/picoclaw" \
+                "${BASH}" "${REPO_ROOT}/scripts/build-image.sh"
         else
             log "Base image inputs unchanged — skipping base image rebuild."
         fi

@@ -28,8 +28,10 @@ import sys
 PACKAGE = Path(__file__).resolve().parent
 SOURCE = PACKAGE / "shelley"
 
-# Marks a directory as one this script may overwrite and prune.
+# Marks a directory as one this script may overwrite and prune. Hosts that
+# built before the source was vendored carry the older marker name.
 MARKER = ".picoclaw-fingerprint"
+LEGACY_MARKERS = (".svkexe-fingerprint",)
 
 # Written by builds and tests inside a Shelley tree; never source, never synced,
 # never pruned from a destination. CI checks that this list agrees with the
@@ -112,7 +114,8 @@ def prepared_tree(profile, name):
 
 def sync(dest, tree):
     """Make dest contain exactly tree, touching only what differs."""
-    if dest.exists() and any(dest.iterdir()) and not (dest / MARKER).is_file():
+    markers = (MARKER,) + LEGACY_MARKERS
+    if dest.exists() and any(dest.iterdir()) and not any((dest / m).is_file() for m in markers):
         sys.exit(f"Refusing to overwrite {dest}: it was not prepared by this script; delete it to build there")
     # The marker goes first so an interrupted sync leaves a directory the next
     # run may still finish.

@@ -350,12 +350,6 @@ func (r *IncusRuntime) PushFile(ctx context.Context, id, path string, data []byt
 	return nil
 }
 
-// extractIP returns the platform NIC's IPv4 address.
-func extractIP(state *api.InstanceState) string {
-	ip, _ := extractAddress(state)
-	return ip
-}
-
 // ipv4FilteringKey is the Incus NIC option that pins an instance to the address
 // it was allocated. Incus installs per-instance packet filter rules from it, so
 // it is the only thing that makes a source address on the bridge trustworthy.

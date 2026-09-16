@@ -1,0 +1,65 @@
+{
+  "_README": "This file is managed by LazyCue (see shelley/lazycue). Do NOT edit by hand — it is the cached, machine-generated DSL for a self-healing browser test. To change behavior, edit the test description and re-run LazyCue.",
+  "description": "Navigate to /new. Into the message input (data-testid \"message-input\") type the text: bash: printf '\\033[1G\\033[1G\\033[1GDev code has changes not yet deployed' and click the send button (data-testid \"send-button\"). Wait for a completed tool call (data-testid \"tool-call-completed\") to appear, then click the bash tool header (\".bash-tool-header\") to expand the details panel (\".bash-tool-details\" should become visible). The output area (the last \".bash-tool-code\" element) should contain the readable text \"Dev code has changes not yet deployed\" and must NOT contain the stray fragment \"GGG\" or the raw escape fragment \"[1G\".",
+  "version": 1,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "/new"
+    },
+    {
+      "action": "wait_visible",
+      "selector": "[data-testid='message-input']",
+      "timeout": "10s"
+    },
+    {
+      "action": "fill",
+      "selector": "[data-testid='message-input']",
+      "value": "bash: printf '\\033[1G\\033[1G\\033[1GDev code has changes not yet deployed'"
+    },
+    {
+      "action": "click",
+      "selector": "[data-testid='send-button']"
+    },
+    {
+      "action": "wait_visible",
+      "selector": "[data-testid='tool-call-completed']",
+      "timeout": "60s"
+    },
+    {
+      "action": "click",
+      "selector": ".bash-tool-header"
+    },
+    {
+      "action": "wait_visible",
+      "selector": ".bash-tool-details",
+      "timeout": "10s"
+    },
+    {
+      "action": "eval",
+      "expression": "(() =\u003e { const els = document.querySelectorAll('.bash-tool-code'); const last = els[els.length - 1]; return last ? last.textContent : 'NOT FOUND'; })()",
+      "expect": "Dev code has changes not yet deployed"
+    },
+    {
+      "action": "eval",
+      "expression": "(() =\u003e { const els = document.querySelectorAll('.bash-tool-code'); const last = els[els.length - 1]; return last ? last.textContent.includes('GGG') : false; })()",
+      "expect": "false"
+    },
+    {
+      "action": "eval",
+      "expression": "(() =\u003e { const els = document.querySelectorAll('.bash-tool-code'); const last = els[els.length - 1]; return last ? last.textContent.includes('[1G') : false; })()",
+      "expect": "false"
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-07-17T00:01:07.182440452Z",
+    "hostname": "exe-ci-04",
+    "model": "claude-sonnet-4-6",
+    "input_tokens": 28273,
+    "output_tokens": 1559,
+    "estimated_cost_usd": 0.10820400000000001,
+    "ci_run": "https://buildkite.com/bold-software/exe-kite-queue/builds/7951",
+    "git_sha": "f85f51c1e80135249ec9e62c3c9a2639ecbd2e8a",
+    "mode": "generated"
+  }
+}

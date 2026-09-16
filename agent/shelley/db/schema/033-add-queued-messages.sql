@@ -1,0 +1,14 @@
+-- Queued user messages.
+--
+-- When the agent is busy (or distilling), user messages typed in the UI are
+-- held until the current turn finishes. The queue lives here as a JSON array
+-- on the conversation row — the SINGLE source of truth — rather than as real
+-- `messages` rows. This keeps `messages` immutable: queued items never become
+-- a row until they drain (at which point a normal, immutable user message is
+-- inserted with a fresh sequence_id).
+--
+-- Each element is a db.QueuedMessage: {id, llm, created_at, model}. The column
+-- flows through generated.Conversation into the stream2 conversation broadcasts
+-- and conversation-list JSON-Patch diffs, so appends/cancels/drains reach
+-- clients automatically as the conversation row changes.
+ALTER TABLE conversations ADD COLUMN queued_messages TEXT NOT NULL DEFAULT '[]';

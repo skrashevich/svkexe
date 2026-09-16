@@ -1,0 +1,12 @@
+-- Record which exe.dev user authored a user message.
+--
+-- The exe.dev HTTPS proxy stamps proxied user traffic with an X-ExeDev-Email
+-- header identifying the authenticated account (see exeweb/proxy.go). Shelley
+-- already threads that value through as userEmail for system-prompt and hook
+-- purposes; this column persists it on the message row so the author of each
+-- user turn is queryable and shown in the UI's message-details view.
+--
+-- It is nullable: only user messages carry it (agent/tool/system rows leave it
+-- NULL), older rows predate this column, and requests that arrive without the
+-- header (direct/local access, unauthenticated) store NULL.
+ALTER TABLE messages ADD COLUMN user_email TEXT;

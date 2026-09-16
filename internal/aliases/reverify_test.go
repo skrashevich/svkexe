@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,12 +20,23 @@ import (
 type scriptedVerifier struct {
 	// result maps a hostname to what Verify should return for it.
 	result map[string]error
-	asked  []string
+	// asked is appended from the sweep goroutine; read it through askedCount
+	// while a sweep may still be running.
+	mu    sync.Mutex
+	asked []string
 }
 
 func (s *scriptedVerifier) Verify(_ context.Context, hostname string) error {
+	s.mu.Lock()
 	s.asked = append(s.asked, hostname)
+	s.mu.Unlock()
 	return s.result[hostname]
+}
+
+func (s *scriptedVerifier) askedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.asked)
 }
 
 func reverifyFixture(t *testing.T) (*db.DB, *db.Container) {
@@ -242,7 +254,7 @@ func TestReverifySweepsOnStartup(t *testing.T) {
 	}()
 
 	deadline := time.After(5 * time.Second)
-	for len(verifier.asked) == 0 {
+	for verifier.askedCount() == 0 {
 		select {
 		case <-deadline:
 			cancel()

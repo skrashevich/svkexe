@@ -1,3 +1,8 @@
+---
+title: API reference
+description: REST endpoints of the svkexe gateway
+---
+
 # API Reference
 
 ## Authentication

@@ -1,6 +1,11 @@
+---
+title: PicoClaw agent
+description: How the coding agent is built into the VM image and configured per VM
+---
+
 # PicoClaw agent in svkexe
 
-The standalone agent is a self-contained source package in [`agent/`](../agent/README.md). It builds and runs independently with a web UI and HTTP API. This document describes the svkexe integration: `internal/picoclaw` handles VM lifecycle and configuration, while `scripts/build-agent.sh` selects the package's `svkexe` profile.
+The standalone agent is a self-contained source package in [`agent/`](https://github.com/skrashevich/svkexe/blob/main/agent/README.md). It builds and runs independently with a web UI and HTTP API. This document describes the svkexe integration: `internal/picoclaw` handles VM lifecycle and configuration, while `scripts/build-agent.sh` selects the package's `svkexe` profile.
 
 Each VM runs `/usr/local/bin/picoclaw` on port 9000. This is svkexe's integration build: **PicoClaw v0.3.1 owns the LLM/tool iteration loop and parallel dispatch**, while the pinned Shelley application provides the coding prompts, tool implementations, web interface, streaming, models, CLI client and SQLite storage. It is not the standalone PicoClaw `gateway` CLI. The runtime is shared by every conversation, including CLI and subagent conversations.
 
@@ -11,7 +16,7 @@ Each VM runs `/usr/local/bin/picoclaw` on port 9000. This is svkexe's integratio
 - The existing application API and database schema. Conversation history survives the upgrade; only the file names change (see below).
 - Guest state lives at `/data/picoclaw.db`, `/etc/picoclaw/picoclaw.json` and `/etc/picoclaw/env`. Pre-rename VMs carried `/data/shelley.db` and `/etc/shelley/`; setup moves them, including any `-wal`/`-shm` sidecars, and the move is conditional so repeated setups stay idempotent.
 - The agent is served at `https://agent-<vm>.<domain>/`, on its own single-label host so a normal `*.<domain>` TLS certificate covers it. Legacy `https://picoclaw.<vm>.<domain>/` and `https://shelley.<vm>.<domain>/` links still resolve, but nested hosts need extra certificate coverage at the external reverse proxy.
-- `https://<vm>.<domain>/` serves the user's own workload, not the agent. See [workload routing](../README.md#workload-routing).
+- `https://<vm>.<domain>/` serves the user's own workload, not the agent. See [workload routing](https://github.com/skrashevich/svkexe/blob/main/README.md#workload-routing).
 - The former `/usr/local/bin/shelley` symlink and `shelley.service` alias are removed during migration, so the guest exposes only the name that actually runs.
 - Provider keys configured by the user still use the retained model adapters. The gateway's custom models use the exact `/api/llm/v1` endpoint and internal bearer token. `llm_gateway` is deliberately not set: that Shelley setting expects exe.dev's provider-specific API.
 

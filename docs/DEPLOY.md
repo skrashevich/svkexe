@@ -1,3 +1,8 @@
+---
+title: Deployment guide
+description: Install, configure and update a svkexe host
+---
+
 # Deployment Guide
 
 ## Prerequisites
@@ -170,8 +175,8 @@ Client → Caddy (strip X-ExeDev-*) → Authelia (forward_auth)
        → Rate limiter → Container:PicoClaw
 ```
 
-See [PLAN.md](../PLAN.md) for full architecture decisions and phase roadmap.
+See [PLAN.md](https://github.com/skrashevich/svkexe/blob/main/PLAN.md) for full architecture decisions and phase roadmap.
 
 ## Agent updates
 
-The installer/update script builds both the gateway and the pinned PicoClaw agent. See [PicoClaw migration](PICOCLAW.md) for data compatibility, build prerequisites, and rollback.
+The installer/update script builds both the gateway and the pinned PicoClaw agent. See [PicoClaw migration](https://github.com/skrashevich/svkexe/blob/main/docs/PICOCLAW.md) for data compatibility, build prerequisites, and rollback.

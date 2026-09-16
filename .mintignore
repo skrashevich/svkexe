@@ -1,0 +1,17 @@
+# Only the pages listed in docs.json are documentation; everything else is code.
+agent/shelley/
+agent/licenses/
+agent/tests/
+bin/
+docs/superpowers/
+docs/DEPLOYMENT-2026-09-09.md
+.omc/
+.github/
+cmd/
+internal/
+ui/
+scripts/
+deploy/
+AGENTS.md
+CLAUDE.md
+PLAN.md

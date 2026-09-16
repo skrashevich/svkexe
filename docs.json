@@ -1,0 +1,26 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "svkexe",
+  "theme": "mint",
+  "colors": {
+    "primary": "#1f2937"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": [
+          "docs/index"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "docs/DEPLOY",
+          "docs/API",
+          "docs/PICOCLAW"
+        ]
+      }
+    ]
+  }
+}

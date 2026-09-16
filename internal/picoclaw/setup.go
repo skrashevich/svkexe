@@ -186,16 +186,7 @@ func writeGuestFile(ctx context.Context, rt runtime.ContainerRuntime, name, path
 }
 
 func installBinary(ctx context.Context, rt runtime.ContainerRuntime, name string) error {
-	path := os.Getenv("SVKEXE_AGENT_BINARY")
-	if path == "" {
-		path = "/usr/local/lib/svkexe/picoclaw"
-	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) && os.Getenv("SVKEXE_AGENT_BINARY") == "" {
-		if exe, e := os.Executable(); e == nil {
-			data, err = os.ReadFile(filepath.Join(filepath.Dir(exe), "picoclaw"))
-		}
-	}
+	data, err := platformBinary()
 	if os.IsNotExist(err) && os.Getenv("SVKEXE_AGENT_BINARY") == "" {
 		// Fresh images already contain the pinned agent. Older images must receive
 		// the host artifact; never silently fall back to the Shelley engine.
@@ -206,6 +197,10 @@ func installBinary(ctx context.Context, rt runtime.ContainerRuntime, name string
 	if err != nil {
 		return fmt.Errorf("load PicoClaw binary (build make agent and set SVKEXE_AGENT_BINARY): %w", err)
 	}
+	return installBinaryData(ctx, rt, name, data)
+}
+
+func installBinaryData(ctx context.Context, rt runtime.ContainerRuntime, name string, data []byte) error {
 	fr, ok := rt.(runtime.FileRuntime)
 	if !ok {
 		return fmt.Errorf("runtime cannot install PicoClaw binary")
@@ -219,7 +214,7 @@ func installBinary(ctx context.Context, rt runtime.ContainerRuntime, name string
 	if err := verifyBinary(ctx, rt, name, "/usr/local/bin/picoclaw.new"); err != nil {
 		return err
 	}
-	_, err = rt.Exec(ctx, name, []string{"mv", "-f", "/usr/local/bin/picoclaw.new", "/usr/local/bin/picoclaw"})
+	_, err := rt.Exec(ctx, name, []string{"mv", "-f", "/usr/local/bin/picoclaw.new", "/usr/local/bin/picoclaw"})
 	return err
 }
 
@@ -241,4 +236,19 @@ func verifyBinary(ctx context.Context, rt runtime.ContainerRuntime, name, path s
 		return fmt.Errorf("artifact is not the svkexe PicoClaw integration")
 	}
 	return nil
+}
+
+// platformBinary reads the artifact shipped with this gateway.
+func platformBinary() ([]byte, error) {
+	path := os.Getenv("SVKEXE_AGENT_BINARY")
+	if path == "" {
+		path = "/usr/local/lib/svkexe/picoclaw"
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) && os.Getenv("SVKEXE_AGENT_BINARY") == "" {
+		if exe, e := os.Executable(); e == nil {
+			data, err = os.ReadFile(filepath.Join(filepath.Dir(exe), "picoclaw"))
+		}
+	}
+	return data, err
 }

@@ -141,6 +141,11 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if info.Kind == routeAgent && (r.URL.Path == "/version-check" || r.URL.Path == "/upgrade") {
+		p.agentUpdate(w, r, container)
+		return
+	}
+
 	port := agentPort
 	if info.Kind == routeApp {
 		port = container.AppPort

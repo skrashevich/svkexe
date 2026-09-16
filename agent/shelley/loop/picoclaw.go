@@ -14,6 +14,12 @@ import (
 
 const picoMaxIterations = 1024
 
+// errTurnEnded is how a round reports that it already closed the turn itself:
+// a truncated or refused response has been recorded with its explanatory error
+// message, and there is nothing further to ask the model. Without it a round
+// that returns no response reads as an empty turn and is retried.
+var errTurnEnded = errors.New("turn ended by the loop")
+
 // picoEmptyTurnRetries bounds how often a turn that produced nothing is asked
 // again before the user is told why their task stopped.
 const picoEmptyTurnRetries = 2
@@ -104,6 +110,10 @@ func (p *picoDriver) Chat(ctx context.Context, _ []providers.Message, _ []provid
 		return nil, err
 	}
 	resp, err := p.round(ctx)
+	if errors.Is(err, errTurnEnded) {
+		p.done = true
+		return &providers.LLMResponse{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +131,11 @@ func (p *picoDriver) Chat(ctx context.Context, _ []providers.Message, _ []provid
 			return nil, err
 		}
 		resp, err = p.round(ctx)
+	}
+	if errors.Is(err, errTurnEnded) {
+		// The retried round ran into a truncation or refusal instead.
+		p.done = true
+		return &providers.LLMResponse{}, nil
 	}
 	if err != nil {
 		return nil, err

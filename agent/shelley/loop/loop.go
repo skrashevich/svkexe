@@ -503,7 +503,10 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// should not be added to history normally (they get special handling)
 		if resp.StopReason == llm.StopReasonMaxTokens {
 			l.logger.Warn("LLM response truncated due to max tokens")
-			return nil, l.handleMaxTokensTruncation(ctx, resp)
+			if err := l.handleMaxTokensTruncation(ctx, resp); err != nil {
+				return nil, err
+			}
+			return nil, errTurnEnded
 		}
 
 		// Handle refusals BEFORE adding to history. On stop_reason=refusal the
@@ -514,7 +517,10 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// endless string of blank turns. Surface it as a visible error instead.
 		if resp.StopReason == llm.StopReasonRefusal {
 			l.logger.Warn("LLM declined to continue (stop_reason=refusal)")
-			return nil, l.handleRefusal(ctx, resp)
+			if err := l.handleRefusal(ctx, resp); err != nil {
+				return nil, err
+			}
+			return nil, errTurnEnded
 		}
 
 		assistantMessage := resp.ToMessage()

@@ -25,6 +25,9 @@ OUTPUT="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "${AGE
 UI_DIGEST="$(python3 "$ROOT/prepare.py" "$BUILD_DIR" "$PROFILE" "$APP_NAME")"
 cd "$BUILD_DIR"
 [[ "$MODE" != prepare ]] || exit 0
+# The build directory is its own module; a go.work in a parent checkout would
+# otherwise claim it and refuse to build it.
+export GOWORK=off
 UI_KEY="$NODE_VERSION:$PNPM_VERSION:$UI_DIGEST"
 if [[ ! -f ui/dist/.picoclaw-build ]] || [[ "$(cat ui/dist/.picoclaw-build)" != "$UI_KEY" ]]; then
     (cd "$ROOT" && npx --yes --package "node@$NODE_VERSION" --package "pnpm@$PNPM_VERSION" -- pnpm --dir "$BUILD_DIR/ui" install --frozen-lockfile)

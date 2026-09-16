@@ -9,6 +9,10 @@ Self-hosted platform for persistent Linux VMs with integrated [PicoClaw](https:/
 
 See [agent architecture, build and migration](docs/PICOCLAW.md) for the preserved contracts and existing-VM upgrade procedure.
 
+## Reuse the LLM agent
+
+The PicoClaw runtime with Shelley web UI and HTTP API is available as a [standalone package in `agent/`](agent/README.md). Build it with `make -C agent build`, or export it with `make -C agent package` for use in another project. It does not require the svkexe gateway or Incus.
+
 ## Features
 
 - **Persistent Linux VMs** via Incus LXC containers with native systemd

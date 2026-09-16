@@ -1,0 +1,58 @@
+<!-- Agent updates install the platform artifact and restart only picoclaw.service. -->
+<template>
+  <Modal :is-open="isOpen" title="Agent version" class-name="version-modal" @close="emit('close')">
+    <div v-if="isLoading" class="version-loading">Checking platform agent...</div>
+    <template v-else-if="versionInfo">
+      <div class="version-info-row">
+        <span class="version-label">Running build:</span>
+        <span class="version-value" :title="versionInfo.current_version">{{ versionInfo.current_version?.slice(0, 12) }}</span>
+      </div>
+      <div class="version-info-row">
+        <span class="version-label">Platform build:</span>
+        <span class="version-value" :title="versionInfo.latest_version">{{ versionInfo.latest_version?.slice(0, 12) }}</span>
+      </div>
+      <div v-if="versionInfo.error" class="version-error">{{ versionInfo.error }}</div>
+      <p v-else-if="!versionInfo.has_update">The agent matches the current platform build.</p>
+    </template>
+    <p class="version-customized-note">
+      Update installs the agent shipped with the current svkexe platform and restarts only
+      the agent service. The VM stays running. Active agent conversations will be interrupted.
+    </p>
+    <div v-if="error" role="alert" class="version-error">{{ error }}</div>
+    <template #footer>
+      <button v-if="versionInfo?.has_update && !versionInfo.error" class="version-btn version-btn-primary"
+        :disabled="updating" @click="update">
+        {{ updating ? "Updating agent..." : "Update agent" }}
+      </button>
+    </template>
+  </Modal>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from "vue";
+import type { VersionInfo } from "../../types";
+import Modal from "./Modal.vue";
+
+const props = defineProps<{
+  isOpen: boolean;
+  versionInfo: VersionInfo | null;
+  isLoading: boolean;
+}>();
+const emit = defineEmits<{ (e: "close"): void }>();
+const updating = ref(false);
+const error = ref("");
+watch(() => props.isOpen, () => { error.value = ""; });
+async function update() {
+  updating.value = true;
+  error.value = "";
+  try {
+    const response = await fetch("/upgrade", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    window.location.reload();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    updating.value = false;
+  }
+}
+</script>

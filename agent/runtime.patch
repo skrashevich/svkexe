@@ -922,8 +922,8 @@ index 2d0fc8b..9a6af3f 100644
  {
 -  "name": "Shelley",
 -  "short_name": "Shelley",
-+  "name": "svkexe",
-+  "short_name": "svkexe",
++  "name": "PicoClaw",
++  "short_name": "PicoClaw",
    "description": "AI coding assistant",
    "start_url": "/",
    "display": "standalone",
@@ -936,11 +936,11 @@ index 9f3d678..64a49c5 100644
      <meta name="apple-mobile-web-app-capable" content="yes" />
      <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 -    <meta name="apple-mobile-web-app-title" content="Shelley" />
-+    <meta name="apple-mobile-web-app-title" content="svkexe" />
++    <meta name="apple-mobile-web-app-title" content="PicoClaw" />
      <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 -    <title>Shelley Agent</title>
-+    <title>svkexe</title>
++    <title>PicoClaw</title>
      <link rel="stylesheet" href="/styles.css" />
      <link rel="stylesheet" href="/main.css" />
      <script type="module" src="/main.js"></script>
@@ -953,7 +953,7 @@ index 4cbf9c0..1091732 100644
    if (conversation?.slug && !isGeneratedId(conversation.slug)) parts.push(conversation.slug);
    if (hostname) parts.push(hostname);
 -  parts.push("Shelley Agent");
-+  parts.push("svkexe");
++  parts.push("PicoClaw");
    document.title = parts.join(" - ");
  }
  
@@ -997,471 +997,11 @@ index 78cfb26..b9421c7 100644
  // DoUpgrade downloads and applies the update with checksum verification.
  func (vc *VersionChecker) DoUpgrade(ctx context.Context) error {
 +	if platformManagedUpdates {
-+		return fmt.Errorf("this customized agent is managed by svkexe; update the platform to update the agent")
++		return fmt.Errorf("this customized agent is managed externally; replace it with a build from the same agent package")
 +	}
  	if vc.skipCheck {
  		return fmt.Errorf("version checking is disabled")
  	}
-diff --git a/ui/src/vue/components/VersionChecker.vue b/ui/src/vue/components/VersionChecker.vue
-index 0f93fd6..d80cd10 100644
---- a/ui/src/vue/components/VersionChecker.vue
-+++ b/ui/src/vue/components/VersionChecker.vue
-@@ -1,215 +1,37 @@
--<!-- Vue port of the VersionModal from components/VersionChecker.tsx. The
--     useVersionChecker hook lives in composables/versionChecker.ts; this file
--     is the modal chrome. Uses the shared Modal (PrimeVue Dialog); the
--     version-* content classes are preserved. Loads changelog + auto-upgrade
--     setting on open, and drives the upgrade / headless-shell upgrade flows.
--     Customized builds (see the customizing-shelley skill) get a Customizations
--     list and a rebase-based upgrade flow instead of a binary self-update. -->
-+<!-- Agent updates install the platform artifact and restart only picoclaw.service. -->
- <template>
--  <Modal :is-open="isOpen" title="Version" class-name="version-modal" @close="emit('close')">
--    <div v-if="isLoading" class="version-loading">Checking for updates...</div>
-+  <Modal :is-open="isOpen" title="Agent version" class-name="version-modal" @close="emit('close')">
-+    <div v-if="isLoading" class="version-loading">Checking platform agent...</div>
-     <template v-else-if="versionInfo">
-       <div class="version-info-row">
--        <span class="version-label">Current:</span>
--        <span class="version-value">
--          {{
--            (versionInfo.customized && versionInfo.current_version !== "dev"
--              ? versionInfo.current_version
--              : "") ||
--            versionInfo.current_tag ||
--            versionInfo.current_version ||
--            "dev"
--          }}
--        </span>
--        <span v-if="versionInfo.customized" class="version-badge-custom">customized</span>
--        <span v-if="versionInfo.current_commit_time" class="version-date">
--          ({{ formatDateTime(versionInfo.current_commit_time) }})
--        </span>
-+        <span class="version-label">Running build:</span>
-+        <span class="version-value" :title="versionInfo.current_version">{{ versionInfo.current_version?.slice(0, 12) }}</span>
-       </div>
--
--      <div v-if="versionInfo.latest_tag" class="version-info-row">
--        <span class="version-label">Latest:</span>
--        <span class="version-value">{{ versionInfo.latest_tag }}</span>
--        <span v-if="versionInfo.published_at" class="version-date">
--          ({{ formatDateTime(versionInfo.published_at) }})
--        </span>
--      </div>
--
--      <div v-if="versionInfo.error" class="version-error">
--        <span>Error: {{ versionInfo.error }}</span>
--      </div>
--
--      <!-- Customizations carried on top of mainline -->
--      <div
--        v-if="versionInfo.customized && versionInfo.custom_commits?.length"
--        class="version-changelog"
--      >
--        <h3>Customizations</h3>
--        <ul class="commit-list">
--          <li v-for="commit in versionInfo.custom_commits" :key="commit.sha" class="commit-item">
--            <span class="commit-sha">{{ commit.sha }}</span>
--            <span class="commit-message">{{ commit.message }}</span>
--          </li>
--        </ul>
--      </div>
--
--      <!-- Changelog -->
--      <div v-if="versionInfo.has_update" class="version-changelog">
--        <h3>
--          <a
--            :href="`https://github.com/boldsoftware/shelley/compare/${versionInfo.current_tag}...${versionInfo.latest_tag}`"
--            target="_blank"
--            rel="noopener noreferrer"
--            class="changelog-link"
--          >
--            Changelog
--          </a>
--        </h3>
--        <div v-if="loadingCommits" class="version-loading">Loading...</div>
--        <ul v-else-if="commits.length > 0" class="commit-list">
--          <li v-for="commit in commits" :key="commit.sha" class="commit-item">
--            <a
--              :href="getCommitUrl(commit.sha)"
--              target="_blank"
--              rel="noopener noreferrer"
--              class="commit-sha"
--            >
--              {{ commit.sha }}
--            </a>
--            <span class="commit-message">{{ commit.message }}</span>
--          </li>
--        </ul>
--        <div v-else-if="commitsError" class="version-no-commits">Couldn't load changelog</div>
--        <div v-else class="version-no-commits">No commits found</div>
-+      <div class="version-info-row">
-+        <span class="version-label">Platform build:</span>
-+        <span class="version-value" :title="versionInfo.latest_version">{{ versionInfo.latest_version?.slice(0, 12) }}</span>
-       </div>
-+      <div v-if="versionInfo.error" class="version-error">{{ versionInfo.error }}</div>
-+      <p v-else-if="!versionInfo.has_update">The agent matches the current platform build.</p>
-     </template>
--    <div v-else class="version-loading">Loading...</div>
--
--    <!-- Footer: auto-upgrade + upgrade button -->
--    <template v-if="!isLoading && versionInfo" #footer>
--      <div class="version-modal-footer-content">
--        <!-- Customized builds: upgrading means rebasing, not a binary swap -->
--        <template v-if="versionInfo.customized">
--          <div class="version-customized-note">
--            This build has diverged from mainline: it carries your customizations on top of
--            {{ versionInfo.current_tag || "an unknown release" }}.
--            <template v-if="versionInfo.has_update">
--              Upgrading starts a Shelley conversation that uses the selected model and reasoning
--              effort to rebase your customizations onto {{ versionInfo.latest_tag }} and rebuilds.
--            </template>
--            <template v-else-if="!versionInfo.error">Mainline has no newer release.</template>
--          </div>
--          <div v-if="versionInfo.has_update" class="version-actions">
--            <div v-if="upgradeError" class="version-error">{{ upgradeError }}</div>
--            <div class="version-rebase-bar">
--              <button
--                :disabled="startingRebase || !rebaseModel"
--                class="version-rebase-action"
--                @click="handleRebaseUpgrade"
--              >
--                <template v-if="startingRebase">Starting conversation...</template>
--                <template v-else>
--                  Rebase onto {{ versionInfo.latest_tag }} using
--                  <span class="version-rebase-model-name">{{ rebaseModelLabel }}</span>
--                </template>
--              </button>
--              <span v-tooltip.top="noModelsReason" class="version-rebase-model">
--                <ModelPicker
--                  append-to-body
--                  aria-label-prefix="Rebase model"
--                  trigger-label="Model"
--                  scroll-height="16rem"
--                  :catalog-actions="false"
--                  :disabled-reason="noModelsReason"
--                  :models="rebaseModels"
--                  :selected-model="rebaseModel"
--                  :thinking-level="rebaseThinkingLevel"
--                  :disabled="startingRebase || !rebaseModel"
--                  @select-model="rebaseModel = $event"
--                  @thinking-change="rebaseThinkingLevel = $event"
--                />
--              </span>
--            </div>
--          </div>
--        </template>
--        <template v-else>
--          <div v-if="!loadingAutoUpgrade" class="version-auto-upgrade">
--            <label class="version-checkbox-label">
--              <input
--                type="checkbox"
--                :checked="autoUpgrade"
--                @change="handleAutoUpgradeChange(($event.target as HTMLInputElement).checked)"
--              />
--              <span>Auto-upgrade when idle (checks daily)</span>
--            </label>
--          </div>
--
--          <div v-if="versionInfo.has_update && versionInfo.download_url" class="version-actions">
--            <div v-if="upgradeError" class="version-error">{{ upgradeError }}</div>
--            <button
--              :disabled="upgrading"
--              class="version-btn version-btn-primary"
--              @click="handleUpgradeAndRestart"
--            >
--              {{
--                upgrading
--                  ? versionInfo.running_under_systemd
--                    ? "Upgrading Shelley & Restarting..."
--                    : "Upgrading Shelley & Killing..."
--                  : versionInfo.running_under_systemd
--                    ? "Upgrade Shelley & Restart"
--                    : "Upgrade & Kill Shelley Server"
--              }}
--            </button>
--          </div>
--        </template>
--
--        <!-- Headless Shell (Browser) section -->
--        <div v-if="versionInfo.headless_shell_current" class="version-headless-section">
--          <div class="version-info-row">
--            <span class="version-label">Browser:</span>
--            <span class="version-value">{{ versionInfo.headless_shell_current }}</span>
--          </div>
--          <div
--            v-if="versionInfo.headless_shell_update && versionInfo.headless_shell_latest"
--            class="version-info-row"
--          >
--            <span class="version-label">Latest:</span>
--            <span class="version-value">{{ versionInfo.headless_shell_latest }}</span>
--          </div>
--          <div v-if="versionInfo.headless_shell_update" class="version-actions">
--            <div v-if="headlessError" class="version-error">{{ headlessError }}</div>
--            <div v-if="headlessSuccess" class="version-success">{{ headlessSuccess }}</div>
--            <button
--              :disabled="upgradingHeadless"
--              class="version-btn version-btn-secondary"
--              @click="handleUpgradeHeadlessShell"
--            >
--              {{ upgradingHeadless ? "Upgrading Browser..." : "Upgrade Browser" }}
--            </button>
--          </div>
--          <div v-else class="version-up-to-date">Browser is up to date</div>
--        </div>
--      </div>
-+    <p class="version-customized-note">
-+      Update installs the agent shipped with the current svkexe platform and restarts only
-+      the agent service. The VM stays running. Active agent conversations will be interrupted.
-+    </p>
-+    <div v-if="error" role="alert" class="version-error">{{ error }}</div>
-+    <template #footer>
-+      <button v-if="versionInfo?.has_update && !versionInfo.error" class="version-btn version-btn-primary"
-+        :disabled="updating" @click="update">
-+        {{ updating ? "Updating agent..." : "Update agent" }}
-+      </button>
-     </template>
-   </Modal>
- </template>
- 
- <script setup lang="ts">
--import { ref, computed, watch } from "vue";
--import { api } from "../../services/api";
--import { prettyModelLabels } from "../../utils/modelNames";
--import type { VersionInfo, CommitInfo, Model } from "../../types";
-+import { ref, watch } from "vue";
-+import type { VersionInfo } from "../../types";
- import Modal from "./Modal.vue";
--import ModelPicker from "./ModelPicker.vue";
--import { pickReadyModel, storedSelectedModel } from "./selectedModel";
--import { createVersionChangelogLoader, versionChangelogTags } from "./versionChangelog";
--import {
--  DEFAULT_THINKING_LEVEL,
--  normalizeThinkingLevelForModel,
--  storedThinkingLevel,
--  type ThinkingLevel,
--} from "./thinkingLevel";
- 
- const props = defineProps<{
-   isOpen: boolean;
-@@ -217,207 +39,20 @@ const props = defineProps<{
-   isLoading: boolean;
- }>();
- const emit = defineEmits<{ (e: "close"): void }>();
--
--const commits = ref<CommitInfo[]>([]);
--const changelogLoader = createVersionChangelogLoader((currentTag, latestTag) =>
--  api.getChangelog(currentTag, latestTag),
--);
--const loadingCommits = ref(false);
--const commitsError = ref(false);
--const upgrading = ref(false);
--const upgradeError = ref<string | null>(null);
--const startingRebase = ref(false);
--const autoUpgrade = ref(false);
--const loadingAutoUpgrade = ref(true);
--const upgradingHeadless = ref(false);
--const headlessError = ref<string | null>(null);
--const headlessSuccess = ref<string | null>(null);
--const rebaseModels = ref<Model[]>([]);
--const rebaseModel = ref("");
--// Action-scoped: seeded from the composer's stored picks but never written
--// back, so configuring a rebase doesn't move the user's chat defaults.
--const rebaseThinkingLevel = ref<ThinkingLevel>(DEFAULT_THINKING_LEVEL);
--const noModelsReason = computed(() =>
--  rebaseModel.value ? undefined : "No models are ready; configure one in Manage models.",
--);
--const rebaseModelLabel = computed(() => {
--  const labels = prettyModelLabels(rebaseModels.value);
--  const name = labels.get(rebaseModel.value) || rebaseModel.value || "no model";
--  let effort = normalizedRebaseLevel.value;
--  if (effort === "default") {
--    const m = rebaseModels.value.find((x) => x.id === rebaseModel.value);
--    const d = m?.default_reasoning_level;
--    if (d && d !== "default") effort = d as ThinkingLevel;
--  }
--  return effort && effort !== "default" ? `${name} · ${effort}` : name;
--});
--
--// The stored level may not be valid for the chosen model (e.g. "max" on a
--// model that doesn't advertise it); normalize like the composer does so we
--// never send a level the server would reject.
--const normalizedRebaseLevel = computed(() =>
--  normalizeThinkingLevelForModel(
--    rebaseThinkingLevel.value,
--    rebaseModels.value.find((x) => x.id === rebaseModel.value),
--  ),
--);
--
--function initializeRebase() {
--  rebaseModels.value = window.__SHELLEY_INIT__?.models || [];
--  rebaseModel.value = pickReadyModel(rebaseModels.value, storedSelectedModel());
--  rebaseThinkingLevel.value = storedThinkingLevel();
--}
--
--async function loadAutoUpgradeSetting() {
--  loadingAutoUpgrade.value = true;
-+const updating = ref(false);
-+const error = ref("");
-+watch(() => props.isOpen, () => { error.value = ""; });
-+async function update() {
-+  updating.value = true;
-+  error.value = "";
-   try {
--    const settings = await api.getSettings();
--    autoUpgrade.value = settings.auto_upgrade === "true";
--  } catch (err) {
--    console.error("Failed to load auto-upgrade setting:", err);
--  } finally {
--    loadingAutoUpgrade.value = false;
--  }
--}
--
--async function handleAutoUpgradeChange(enabled: boolean) {
--  try {
--    await api.setSetting("auto_upgrade", enabled ? "true" : "false");
--    autoUpgrade.value = enabled;
--  } catch (err) {
--    console.error("Failed to set auto-upgrade:", err);
--    autoUpgrade.value = !enabled;
--  }
--}
--
--async function loadCommits(currentTag: string, latestTag: string) {
--  loadingCommits.value = true;
--  commitsError.value = false;
--  const result = await changelogLoader.load(currentTag, latestTag);
--  if (!result) return;
--
--  loadingCommits.value = false;
--  if (result.ok) {
--    commits.value = result.commits;
--    return;
--  }
--
--  console.error("Failed to load changelog:", result.error);
--  commits.value = [];
--  commitsError.value = true;
--}
--
--async function handleUpgradeAndRestart() {
--  upgrading.value = true;
--  upgradeError.value = null;
--  try {
--    await api.upgrade(true);
--  } catch (err) {
--    // Connection drop is expected when server restarts, treat as success.
--    console.log("Upgrade response failed (expected during restart):", err);
--  }
--  setTimeout(() => {
-+    const response = await fetch("/upgrade", { method: "POST" });
-+    if (!response.ok) throw new Error(await response.text());
-     window.location.reload();
--  }, 2000);
--}
--
--// For customized builds, "upgrade" means starting a Shelley conversation that
--// rebases the user's customization branch onto the latest mainline and
--// rebuilds. See the customizing-shelley skill. customization_dir is only set
--// when the checkout exists on disk; without it, start the conversation in the
--// default cwd and let the agent recreate the checkout per the skill.
--async function handleRebaseUpgrade() {
--  const info = props.versionInfo;
--  if (!info || !rebaseModel.value) return;
--  startingRebase.value = true;
--  upgradeError.value = null;
--  const dir = info.customization_dir;
--  const prompt =
--    `This Shelley server is a customized build based on ${info.current_tag || "an unknown release"}; ` +
--    `mainline is now at ${info.latest_tag}. Using the customizing-shelley skill, upgrade it: ` +
--    (dir
--      ? `in ${dir}, fetch origin and rebase the customization branch onto origin/main, `
--      : `the customization checkout is missing, so recreate it at the skill's canonical location, ` +
--        `then fetch origin and rebase the customization branch onto origin/main, `) +
--    `resolving conflicts carefully, then rebuild with 'make build-custom', run relevant tests, ` +
--    `and offer to install the new binary` +
--    (info.executable_path ? ` (the running server is ${info.executable_path})` : ``) +
--    ` or run it off to the side.`;
--  try {
--    const response = await api.sendMessageWithNewConversation({
--      message: prompt,
--      model: rebaseModel.value,
--      ...(normalizedRebaseLevel.value === "default"
--        ? {}
--        : { conversation_options: { thinking_level: normalizedRebaseLevel.value } }),
--      ...(dir ? { cwd: dir } : {}),
--    });
--    emit("close");
--    window.history.pushState({}, "", `/c/${response.conversation_id}`);
--    window.dispatchEvent(new PopStateEvent("popstate"));
-   } catch (err) {
--    upgradeError.value = err instanceof Error ? err.message : String(err);
-+    error.value = err instanceof Error ? err.message : String(err);
-   } finally {
--    startingRebase.value = false;
-+    updating.value = false;
-   }
- }
--
--async function handleUpgradeHeadlessShell() {
--  upgradingHeadless.value = true;
--  headlessError.value = null;
--  headlessSuccess.value = null;
--  try {
--    const result = await api.upgradeHeadlessShell();
--    headlessSuccess.value = result.message;
--  } catch (err) {
--    headlessError.value = err instanceof Error ? err.message : String(err);
--  } finally {
--    upgradingHeadless.value = false;
--  }
--}
--
--function formatDateTime(dateStr: string): string {
--  const date = new Date(dateStr);
--  return date.toLocaleString(undefined, {
--    year: "numeric",
--    month: "short",
--    day: "numeric",
--    hour: "2-digit",
--    minute: "2-digit",
--    timeZoneName: "short",
--  });
--}
--
--function getCommitUrl(sha: string): string {
--  return `https://github.com/boldsoftware/shelley/commit/${sha}`;
--}
--
--watch(
--  () => props.isOpen,
--  (open) => {
--    if (open) {
--      initializeRebase();
--      loadAutoUpgradeSetting();
--    }
--  },
--  { immediate: true },
--);
--
--watch(
--  [
--    () => props.isOpen,
--    () => props.versionInfo?.has_update,
--    () => props.versionInfo?.current_tag,
--    () => props.versionInfo?.latest_tag,
--  ],
--  ([isOpen, hasUpdate, currentTag, latestTag]) => {
--    changelogLoader.invalidate();
--    loadingCommits.value = false;
--    commits.value = [];
--    commitsError.value = false;
--    const tags = versionChangelogTags(isOpen, hasUpdate, currentTag, latestTag);
--    if (tags) loadCommits(tags[0], tags[1]);
--  },
--  { immediate: true },
--);
- </script>
 diff --git a/server/managed_update_test.go b/server/managed_update_test.go
 new file mode 100644
 index 0000000..0e0a7f2
@@ -1501,7 +1041,32 @@ index 0000000..0e0a7f2
 +			t.Fatalf("upstream update advertised: %+v", info)
 +		}
 +	}
-+	if err := vc.DoUpgrade(t.Context()); err == nil || !strings.Contains(err.Error(), "svkexe") {
++	if err := vc.DoUpgrade(t.Context()); err == nil || !strings.Contains(err.Error(), "managed externally") {
 +		t.Fatalf("expected platform-managed update error, got %v", err)
 +	}
 +}
+diff --git a/cmd/shelley/main.go b/cmd/shelley/main.go
+--- a/cmd/shelley/main.go
++++ b/cmd/shelley/main.go
+@@ -175,8 +175,12 @@
+ 	}
+ }
+ 
++// Platform builds override this through -ldflags; standalone binds loopback.
++var defaultListenHost = "127.0.0.1"
++
+ func runServe(global GlobalConfig, args []string) {
+ 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
++	host := fs.String("host", defaultListenHost, "Interface to listen on (empty for all interfaces)")
+ 	port := fs.String("port", "9000", "Port to listen on")
+ 	portFile := fs.String("port-file", "", "Write the actual listening port to this file (useful with --port 0)")
+ 	systemdActivation := fs.Bool("systemd-activation", false, "Use systemd socket activation (listen on fd from systemd)")
+@@ -232,7 +236,7 @@
+ 		logger.Info("Using systemd socket activation")
+ 		err = svr.StartWithListeners(listener, effectiveSocket)
+ 	} else {
+-		listener, listenerErr := net.Listen("tcp", ":"+*port)
++		listener, listenerErr := net.Listen("tcp", net.JoinHostPort(*host, *port))
+ 		if listenerErr != nil {
+ 			logger.Error("Failed to create listener", "error", listenerErr)
+ 			os.Exit(1)

@@ -1,0 +1,2 @@
+# Unified-diff context prefixes precede Go tabs and empty lines by definition.
+*.patch whitespace=-space-before-tab,-blank-at-eol

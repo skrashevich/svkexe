@@ -70,5 +70,14 @@ jobs:
       # PicoClaw overlay already breaks fails the job.
       - name: Test complete gateway and agent path
         run: SVKEXE_TEST_AGENT_BINARY="$PWD/bin/picoclaw" go test ./internal/llmproxy -run TestPicoClaw -v
+      - name: Build and test standalone source package outside repository
+        env:
+          AGENT_APP_NAME: Standalone CI
+        run: |
+          make -C agent package
+          package_dir="$(mktemp -d "$RUNNER_TEMP/picoclaw-package.XXXXXX")"
+          tar -xzf agent/bin/picoclaw-agent-source.tar.gz -C "$package_dir"
+          make -C "$package_dir/agent" build
+          make -C "$package_dir/agent" smoke
       - name: Test agent compatibility
         run: make test-agent

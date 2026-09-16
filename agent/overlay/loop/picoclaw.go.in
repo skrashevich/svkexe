@@ -50,7 +50,7 @@ func (l *Loop) runPicoClaw(ctx context.Context, round func(context.Context) (*ll
 	driver := &picoDriver{loop: l, round: round, registry: registry}
 	result, err := tools.RunToolLoop(ctx, tools.ToolLoopConfig{
 		Provider: driver, Tools: registry, MaxIterations: picoMaxIterations,
-	}, nil, "svkexe", "")
+	}, nil, "picoclaw", "")
 	// Also publish the final batch on cancellation or iteration exhaustion.
 	if publishErr := driver.publish(ctx); publishErr != nil {
 		return publishErr
@@ -86,7 +86,7 @@ type picoDriver struct {
 	done     bool
 }
 
-func (*picoDriver) GetDefaultModel() string { return "svkexe" }
+func (*picoDriver) GetDefaultModel() string { return "picoclaw" }
 func (p *picoDriver) publish(ctx context.Context) error {
 	if p.batch == nil {
 		return nil
@@ -176,7 +176,7 @@ type picoCall struct {
 	index int
 }
 
-func (t *picoCall) Name() string      { return fmt.Sprintf("svkexe_call_%d", t.index) }
+func (t *picoCall) Name() string      { return fmt.Sprintf("picoclaw_call_%d", t.index) }
 func (*picoCall) Description() string { return "Execute the original coding tool call" }
 func (*picoCall) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
@@ -206,7 +206,7 @@ func (l *Loop) picoExecuteBatch(ctx context.Context, calls []llm.Content) []llm.
 	r := tools.NewToolRegistry()
 	response := &providers.LLMResponse{ToolCalls: b.register(r)}
 	p := &picoBatchProvider{response: response}
-	_, _ = tools.RunToolLoop(ctx, tools.ToolLoopConfig{Provider: p, Tools: r, MaxIterations: 1}, nil, "svkexe", "")
+	_, _ = tools.RunToolLoop(ctx, tools.ToolLoopConfig{Provider: p, Tools: r, MaxIterations: 1}, nil, "picoclaw", "")
 	if collector := llm.UsageCollectorFromContext(ctx); collector != nil {
 		for _, u := range usage.Take() {
 			collector(u.Purpose, u.Usage)
@@ -217,7 +217,7 @@ func (l *Loop) picoExecuteBatch(ctx context.Context, calls []llm.Content) []llm.
 
 type picoBatchProvider struct{ response *providers.LLMResponse }
 
-func (*picoBatchProvider) GetDefaultModel() string { return "svkexe" }
+func (*picoBatchProvider) GetDefaultModel() string { return "picoclaw" }
 func (p *picoBatchProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
 	return p.response, nil
 }

@@ -1,0 +1,253 @@
+package claudetool
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os/exec"
+	"strings"
+	"time"
+
+	"shelley.exe.dev/llm"
+)
+
+// KeywordTool provides keyword search functionality
+type KeywordTool struct {
+	llmProvider LLMServiceProvider
+	modelID     string
+	workingDir  *MutableWorkingDir
+}
+
+// NewKeywordTool creates a new keyword tool with the given LLM provider.
+// modelID is the conversation's model, used to pick a workhorse model for
+// relevance filtering.
+func NewKeywordTool(provider LLMServiceProvider, modelID string) *KeywordTool {
+	return &KeywordTool{llmProvider: provider, modelID: modelID}
+}
+
+// NewKeywordToolWithWorkingDir creates a new keyword tool with the given LLM provider and shared working directory
+func NewKeywordToolWithWorkingDir(provider LLMServiceProvider, modelID string, wd *MutableWorkingDir) *KeywordTool {
+	return &KeywordTool{llmProvider: provider, modelID: modelID, workingDir: wd}
+}
+
+// Tool returns the LLM tool definition
+func (k *KeywordTool) Tool() *llm.Tool {
+	return &llm.Tool{
+		Name:        keywordName,
+		Description: keywordDescription,
+		InputSchema: llm.MustSchema(keywordInputSchema),
+		Run:         llm.RunJSON(k.keywordRun),
+	}
+}
+
+const (
+	keywordName        = "keyword_search"
+	keywordDescription = `
+keyword_search locates files with a search-and-filter approach.
+Use when navigating unfamiliar codebases with only conceptual understanding or vague user questions.
+
+Effective use:
+- Provide a detailed query for accurate relevance ranking
+- Prefer MANY SPECIFIC terms over FEW GENERAL ones (high precision beats high recall)
+- Order search terms by importance (most important first)
+- Supports regex search terms for flexible matching
+
+IMPORTANT: Do NOT use this tool if you have precise information like log lines, error messages, stack traces, filenames, or symbols. Use direct approaches (rg, cat, etc.) instead.
+`
+
+	// If you modify this, update the termui template for prettier rendering.
+	keywordInputSchema = `
+{
+  "type": "object",
+  "required": [
+    "query",
+    "search_terms"
+  ],
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "A detailed statement of what you're trying to find or learn."
+    },
+    "search_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of search terms in descending order of importance."
+    }
+  }
+}
+`
+)
+
+type keywordInput struct {
+	Query       string      `json:"query"`
+	SearchTerms stringSlice `json:"search_terms"`
+}
+
+// stringSlice is a []string that also accepts a single JSON string, since
+// models sometimes pass search_terms as a bare string instead of an array.
+type stringSlice []string
+
+func (s *stringSlice) UnmarshalJSON(data []byte) error {
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*s = arr
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	*s = stringSlice{str}
+	return nil
+}
+
+//go:embed keyword_system_prompt.txt
+var keywordSystemPrompt string
+
+// FindRepoRoot attempts to find the git repository root from the current directory
+func FindRepoRoot(wd string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = wd
+	out, err := cmd.Output()
+	// todo: cwd here and throughout
+	if err != nil {
+		return "", fmt.Errorf("failed to find git repository root: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// keywordRun is the main implementation using the LLM provider
+func (k *KeywordTool) keywordRun(ctx context.Context, input keywordInput) llm.ToolOut {
+	wd := k.workingDir.Get()
+	root, err := FindRepoRoot(wd)
+	if err == nil {
+		wd = root
+	}
+	slog.InfoContext(ctx, "keyword search input", "query", input.Query, "keywords", input.SearchTerms, "wd", wd)
+
+	// first remove stopwords
+	var keep []string
+	for _, term := range input.SearchTerms {
+		out, err := ripgrep(ctx, wd, []string{term})
+		if err != nil {
+			return llm.ErrorToolOut(err)
+		}
+		if len(out) > 64*1024 {
+			slog.InfoContext(ctx, "keyword search result too large", "term", term, "bytes", len(out))
+			continue
+		}
+		keep = append(keep, term)
+	}
+
+	if len(keep) == 0 {
+		return llm.ToolOut{LLMContent: llm.TextContent("each of those search terms yielded too many results")}
+	}
+
+	// peel off keywords until we get a result that fits in the query window
+	var out string
+	for {
+		var err error
+		out, err = ripgrep(ctx, wd, keep)
+		if err != nil {
+			return llm.ErrorToolOut(err)
+		}
+		if len(out) < 128*1024 {
+			break
+		}
+		keep = keep[:len(keep)-1]
+	}
+
+	// Create the filtering request
+	system := []llm.SystemContent{
+		{Type: "text", Text: strings.TrimSpace(keywordSystemPrompt)},
+	}
+
+	initialMessage := llm.Message{
+		Role: llm.MessageRoleUser,
+		Content: []llm.Content{
+			llm.StringContent("<pwd>\n" + wd + "\n</pwd>"),
+			llm.StringContent("<ripgrep_results>\n" + out + "\n</ripgrep_results>"),
+			llm.StringContent("<query>\n" + input.Query + "\n</query>"),
+		},
+	}
+
+	req := &llm.Request{
+		Messages: []llm.Message{initialMessage},
+		System:   system,
+	}
+
+	svc, err := k.llmProvider.GetWorkhorseService(k.modelID)
+	if err != nil {
+		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
+	}
+	resp, err := svc.Do(llm.WithPurpose(ctx, "keyword_search"), req)
+	if err != nil {
+		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
+	}
+	// Find the single text content block. Reasoning models may emit Thinking
+	// blocks alongside the answer; those are fine to discard. Anything else
+	// (or multiple text blocks) is unexpected.
+	var filtered string
+	var found bool
+	for _, c := range resp.Content {
+		switch c.Type {
+		case llm.ContentTypeThinking, llm.ContentTypeRedactedThinking:
+			continue
+		case llm.ContentTypeText:
+			if found {
+				return llm.ErrorfToolOut("multiple text content blocks in relevance filtering response: %v", resp.Content)
+			}
+			filtered = c.Text
+			found = true
+		default:
+			return llm.ErrorfToolOut("unexpected content type %v in relevance filtering response: %v", c.Type, resp.Content)
+		}
+	}
+	if !found {
+		return llm.ErrorfToolOut("no text content in relevance filtering response: %v", resp.Content)
+	}
+
+	slog.InfoContext(
+		ctx, "keyword search results processed",
+		"bytes", len(out),
+		"lines", strings.Count(out, "\n"),
+		"files", strings.Count(out, "\n\n"),
+		"query", input.Query,
+		"filtered", filtered,
+	)
+
+	return llm.ToolOut{LLMContent: llm.TextContent(filtered)}
+}
+
+func ripgrep(ctx context.Context, wd string, terms []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	args := []string{"-C", "10", "-i", "--line-number", "--with-filename"}
+	for _, term := range terms {
+		args = append(args, "-e", term)
+	}
+	cmd := exec.CommandContext(ctx, "rg", args...)
+	cmd.Dir = wd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("search timed out (directory too large to search)")
+		}
+		// ripgrep returns exit code 1 when no matches are found, which is not an error for us
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "no matches found", nil
+		}
+		// Truncate error output to avoid storing enormous data in the conversation.
+		errOut := string(out)
+		if len(errOut) > 50*1024 {
+			errOut = errOut[:50*1024] + "\n... [truncated]"
+		}
+		return "", fmt.Errorf("search failed: %v\n%s", err, errOut)
+	}
+	outStr := string(out)
+	return outStr, nil
+}

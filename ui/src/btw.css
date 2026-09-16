@@ -1,0 +1,227 @@
+/* Inline BTW — a flat side thread inside the primary transcript. */
+.btw-inline {
+  position: relative;
+  margin: 0.8rem 0 1rem clamp(1rem, 3vw, 1.75rem);
+  padding: 0.1rem 0 0.2rem 1.15rem;
+  min-width: 0;
+  outline: none;
+}
+
+.btw-inline:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 22%, transparent);
+  outline-offset: 0.2rem;
+}
+
+.btw-inline-connector {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.3rem;
+  border-left: 1px solid color-mix(in srgb, var(--text-tertiary) 38%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-tertiary) 38%, transparent);
+  border-bottom-left-radius: 0.4rem;
+  pointer-events: none;
+}
+
+.btw-inline-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.btw-inline-header {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.btw-inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin: -0.1rem 0 0.5rem -1.15rem;
+  padding: 0.18rem 0 0.18rem 0.55rem;
+  border: 0;
+  border-left: 2px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.btw-inline-label:hover {
+  text-decoration: underline;
+}
+
+.btw-inline-question {
+  max-width: 82%;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.btw-inline-answer {
+  min-width: 0;
+  max-width: 96%;
+  margin-top: 0.55rem;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.btw-inline-answer .markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.btw-inline-answer .markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.btw-inline-turn + .btw-inline-turn {
+  margin-top: 1rem;
+}
+
+.btw-inline-pending,
+.btw-inline-cancelled,
+.btw-inline-error,
+.btw-inline-tool-count {
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.btw-inline-tool-count {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  text-align: left;
+  cursor: help;
+}
+
+.btw-inline-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.btw-inline-pending + .btw-inline-tool-count {
+  display: inline-block;
+  margin-left: 0.35rem;
+}
+
+.btw-inline-pending + .btw-inline-tool-count::before {
+  content: "· ";
+  color: var(--text-tertiary);
+}
+
+.btw-inline-error {
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--error-text) 8%, var(--bg-tertiary));
+  color: var(--error-text);
+}
+
+.btw-inline-actions {
+  justify-content: flex-end;
+  gap: 0.1rem;
+  margin-top: 0.85rem;
+}
+
+.btw-inline-actions > * + *::before {
+  content: "·";
+  margin-right: 0.35rem;
+  color: var(--text-tertiary);
+}
+
+.btw-inline-follow-up {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.65rem;
+}
+
+.btw-inline-follow-up textarea {
+  min-width: 0;
+  flex: 1;
+  resize: vertical;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.btw-inline-follow-up textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btw-inline-action {
+  padding: 0.1rem 0.25rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.7rem;
+}
+
+.btw-inline-action:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.btw-inline-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.btw-inline-follow-up-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
+}
+
+.btw-inline-follow-up-submit:hover:not(:disabled) {
+  background: var(--primary);
+  color: white;
+  filter: brightness(0.94);
+}
+
+@media (max-width: 767px) {
+  .btw-inline {
+    padding-left: 0.9rem;
+  }
+
+  .btw-inline-label {
+    margin-left: -0.9rem;
+  }
+
+  .btw-inline-question {
+    max-width: 92%;
+  }
+
+  .btw-inline-actions {
+    flex-wrap: wrap;
+  }
+}

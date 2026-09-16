@@ -1,0 +1,1174 @@
+import {
+  Conversation,
+  ConversationWithParticipants,
+  ConversationWithState,
+  DiskSpaceStatus,
+  StreamResponse,
+  ChatRequest,
+  BtwReaderDescriptor,
+  GitDiffInfo,
+  GitFileInfo,
+  GitFileDiff,
+  VersionInfo,
+  CommitInfo,
+} from "../types";
+
+// Extract a useful error message from a failed fetch response. Prefers the
+// response body (which may contain a server-side detail like a hook error),
+// falls back to statusText, then to the numeric status.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function responseError(response: Response, prefix: string): Promise<ApiError> {
+  let detail = "";
+  try {
+    detail = (await response.text()).trim();
+  } catch {
+    // ignore
+  }
+  if (!detail) {
+    detail = response.statusText || `HTTP ${response.status}`;
+  }
+  return new ApiError(`${prefix}: ${detail}`, response.status);
+}
+
+export interface AvailableModel {
+  id: string;
+  display_name?: string;
+  source?: string;
+  base_url?: string;
+  api_type?: string;
+  ready: boolean;
+  max_context_tokens?: number;
+  is_default?: boolean;
+  supports_images?: boolean;
+}
+
+export interface GitTourHeaderEntry {
+  header: string;
+}
+
+export interface GitTourPatchEntry {
+  patch: string;
+  comment?: string;
+  trivial?: boolean;
+}
+
+export type GitTourEntry = GitTourHeaderEntry | GitTourPatchEntry;
+
+export interface GitTour {
+  version: 1;
+  title?: string;
+  intro?: string;
+  chunks: GitTourEntry[];
+}
+
+export interface GitTourResponse {
+  hash: string;
+  tour: GitTour;
+}
+
+export interface ChatAcceptedResponse {
+  status?: string;
+  btw?: BtwReaderDescriptor;
+}
+
+export interface BtwSummaryReceipt {
+  status?: string;
+  message_id: string;
+  btw: BtwReaderDescriptor;
+}
+
+class ApiService {
+  private baseUrl = "/api";
+
+  private postHeaders = {
+    "Content-Type": "application/json",
+  };
+
+  async getConversations(): Promise<ConversationWithState[]> {
+    const response = await fetch(`${this.baseUrl}/conversations`);
+    if (!response.ok) {
+      throw new Error(`Failed to get conversations: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getConversationsSnapshot(): Promise<{
+    conversations: ConversationWithState[];
+    hash: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/conversations/snapshot`);
+    if (!response.ok) {
+      throw new Error(`Failed to get conversations snapshot: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getModels(): Promise<AvailableModel[]> {
+    const response = await fetch(`${this.baseUrl}/models`);
+    if (!response.ok) {
+      throw new Error(`Failed to get models: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async refreshModels(): Promise<AvailableModel[]> {
+    const response = await fetch(`${this.baseUrl}/models/refresh`, {
+      method: "POST",
+      headers: this.postHeaders,
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to refresh models");
+    }
+    return response.json();
+  }
+
+  async getTools(): Promise<{
+    tools: Array<{ name: string; summary: string; default_on: boolean }>;
+  }> {
+    const response = await fetch(`${this.baseUrl}/tools`);
+    if (!response.ok) {
+      throw new Error(`Failed to get tools: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async searchConversations(query: string): Promise<ConversationWithState[]> {
+    const params = new URLSearchParams({
+      q: query,
+      search_content: "true",
+    });
+    const response = await fetch(`${this.baseUrl}/conversations?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to search conversations: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // searchConversationsFTS performs a full-text search across both active AND
+  // archived top-level conversations, using SQLite FTS5 over message bodies.
+  async searchConversationsFTS(query: string): Promise<ConversationWithState[]> {
+    const params = new URLSearchParams({ q: query });
+    const response = await fetch(`${this.baseUrl}/conversations/search?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to search conversations: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // createDraft creates a draft conversation server-side. Drafts hold the
+  // unsent message text in a `draft` column and have no messages until the
+  // user actually sends. They appear in the conversation list like any
+  // other conversation, can be deleted, and get promoted (is_draft=false)
+  // automatically when the first message is posted to them.
+  async createDraft(request: {
+    draft: string;
+    model?: string;
+    cwd?: string;
+    conversation_options?: ChatRequest["conversation_options"];
+  }): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversations/draft`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to create draft");
+    }
+    return response.json();
+  }
+
+  // updateDraft partially updates a draft conversation in place: the draft
+  // text (composer autosave), the model (composer picker), and/or the cwd
+  // (command palette). Omitted fields keep their current value, so the
+  // three update independently without clobbering each other. Returns 404
+  // once the draft has been promoted (the model then travels with the chat
+  // POST, and cwd is immutable thereafter); callers treat that as a no-op.
+  async updateDraft(
+    conversationId: string,
+    fields: { draft?: string; model?: string; cwd?: string },
+  ): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/draft`, {
+      method: "PUT",
+      headers: this.postHeaders,
+      body: JSON.stringify(fields),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to update draft");
+    }
+    return response.json();
+  }
+
+  async sendMessageWithNewConversation(request: ChatRequest): Promise<{ conversation_id: string }> {
+    const response = await fetch(`${this.baseUrl}/conversations/new`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to start conversation");
+    }
+    return response.json();
+  }
+
+  async distillNewGeneration(
+    sourceConversationId: string,
+    model?: string,
+    cwd?: string,
+    method?: "default" | "compact",
+    instructions?: string,
+  ): Promise<{ conversation_id: string; current_generation: number }> {
+    const response = await fetch(`${this.baseUrl}/conversations/distill-new-generation`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({
+        source_conversation_id: sourceConversationId,
+        model: model || "",
+        cwd: cwd || "",
+        method: method || "default",
+        instructions: instructions || "",
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to distill into new generation: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async startNewGeneration(conversationId: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/new-generation`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to start new generation: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getConversationWithProgress(
+    conversationId: string,
+    onProgress?: (progress: {
+      phase: "downloading" | "parsing";
+      bytesDownloaded: number;
+      bytesTotal?: number;
+    }) => void,
+  ): Promise<StreamResponse> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get messages");
+    }
+
+    const contentLengthHeader = response.headers.get("Content-Length");
+    const contentLength = contentLengthHeader ? Number(contentLengthHeader) : undefined;
+
+    if (!response.body) {
+      onProgress?.({
+        phase: "parsing",
+        bytesDownloaded: contentLength ?? 0,
+        bytesTotal: contentLength,
+      });
+      return response.json();
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks: string[] = [];
+    let bytesDownloaded = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytesDownloaded += value.byteLength;
+      onProgress?.({
+        phase: "downloading",
+        bytesDownloaded,
+        bytesTotal: contentLength,
+      });
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+
+    chunks.push(decoder.decode());
+    onProgress?.({
+      phase: "parsing",
+      bytesDownloaded,
+      bytesTotal: contentLength,
+    });
+
+    try {
+      return JSON.parse(chunks.join("")) as StreamResponse;
+    } catch {
+      throw new Error("Failed to parse conversation response");
+    }
+  }
+
+  /**
+   * Fetch only the messages after `sinceSequenceId`.
+   *
+   * Used when the local cache already holds a contiguous history and just
+   * needs to re-check the tail (e.g. after a stream reconnect). Costs a few
+   * hundred bytes instead of re-downloading a whole conversation, which for
+   * a long one is megabytes of JSON.
+   */
+  async getConversationSince(
+    conversationId: string,
+    sinceSequenceId: number,
+  ): Promise<StreamResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}?last_sequence_id=${sinceSequenceId}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to get messages since ${sinceSequenceId}: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async sendMessage(
+    conversationId: string,
+    request: ChatRequest,
+    signal?: AbortSignal,
+  ): Promise<ChatAcceptedResponse> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/chat`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+      signal,
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to send message");
+    }
+    const body = await response.text();
+    return body ? (JSON.parse(body) as ChatAcceptedResponse) : {};
+  }
+
+  async listBtwReaders(conversationId: string): Promise<BtwReaderDescriptor[]> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/btw`);
+    if (!response.ok) throw await responseError(response, "Failed to load BTW readers");
+    const data = (await response.json()) as { readers?: BtwReaderDescriptor[] };
+    return data.readers ?? [];
+  }
+
+  async summarizeBtwExchange(
+    conversationId: string,
+    exchangeId: string,
+  ): Promise<BtwSummaryReceipt> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/btw/${exchangeId}/summarize`,
+      { method: "POST", headers: this.postHeaders },
+    );
+    if (!response.ok) throw await responseError(response, "Failed to summarize BTW");
+    return response.json();
+  }
+
+  // createStream opens the unified SSE stream. It delivers per-conversation
+  // events (messages, conversation, conversation_state, tool_progress,
+  // stream_delta, context_window_size) for ALL active conversations on a
+  // single connection, plus server-wide events (conversation_list_patch,
+  // notification_event, heartbeat). Each per-conversation event carries a
+  // top-level conversation_id field for routing.
+  createStream(opts: { conversationListHash?: string } = {}): EventSource {
+    const params = new URLSearchParams();
+    if (opts.conversationListHash) {
+      params.set("conversation_list_hash", opts.conversationListHash);
+    }
+    const query = params.toString();
+    return new EventSource(`${this.baseUrl}/stream2${query ? `?${query}` : ""}`);
+  }
+
+  // forkConversation creates a new conversation that copies all messages from
+  // the source up to and including the given message (or sequence_id), and
+  // returns the new conversation so the caller can navigate to it. With no
+  // cutoff, the whole conversation is forked.
+  async forkConversation(
+    conversationId: string,
+    opts: { messageId?: string; sequenceId?: number } = {},
+  ): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/fork`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({
+        message_id: opts.messageId,
+        sequence_id: opts.sequenceId,
+      }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to fork conversation");
+    }
+    return response.json();
+  }
+
+  async retryConversation(conversationId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/retry`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        detail = (await response.text()).trim();
+      } catch {
+        // ignore
+      }
+      throw new Error(detail || `Failed to retry conversation: ${response.statusText}`);
+    }
+  }
+
+  // continueConversation powers the "switch to Opus and continue" affordance a
+  // refusal error offers: it switches the conversation to the given model
+  // (Opus by default when model is omitted) and re-fires the request the
+  // previous model declined.
+  async continueConversation(conversationId: string, model?: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/continue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: model || "" }),
+    });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        detail = (await response.text()).trim();
+      } catch {
+        // ignore
+      }
+      throw new Error(detail || `Failed to continue conversation: ${response.statusText}`);
+    }
+  }
+
+  async cancelConversation(conversationId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/cancel`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to cancel conversation: ${response.statusText}`);
+    }
+  }
+
+  async cancelQueuedMessages(conversationId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/cancel-queued`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to cancel queued messages: ${response.statusText}`);
+    }
+  }
+
+  // Cancel a single queued message by its QueuedMessage id.
+  async cancelQueuedMessage(conversationId: string, queuedId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/cancel-queued?queued_id=${encodeURIComponent(queuedId)}`,
+      { method: "POST" },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to cancel queued message: ${response.statusText}`);
+    }
+  }
+
+  async validateCwd(path: string): Promise<{ valid: boolean; error?: string }> {
+    const response = await fetch(`${this.baseUrl}/validate-cwd?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      throw new Error(`Failed to validate cwd: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async listDirectory(path?: string): Promise<{
+    path: string;
+    parent: string;
+    entries: Array<{ name: string; is_dir: boolean; git_head_subject?: string }>;
+    git_head_subject?: string;
+    /** Toplevel of the worktree containing `path` (if any). For a linked
+     *  worktree, this is the worktree's own root, not the main repo. */
+    git_repo_root?: string;
+    /** Main repository root, set only when `git_repo_root` is a linked
+     *  worktree (i.e. different from the main repo). */
+    git_worktree_root?: string;
+    error?: string;
+  }> {
+    const url = path
+      ? `${this.baseUrl}/list-directory?path=${encodeURIComponent(path)}`
+      : `${this.baseUrl}/list-directory`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to list directory: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async createDirectory(path: string): Promise<{ path?: string; error?: string }> {
+    const response = await fetch(`${this.baseUrl}/create-directory`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to create directory: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getArchivedConversations(): Promise<ConversationWithParticipants[]> {
+    const response = await fetch(`${this.baseUrl}/conversations/archived`);
+    if (!response.ok) {
+      throw new Error(`Failed to get archived conversations: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async archiveConversation(conversationId: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/archive`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to archive conversation: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async unarchiveConversation(conversationId: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/unarchive`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to unarchive conversation: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/delete`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete conversation: ${response.statusText}`);
+    }
+  }
+
+  async getConversationBySlug(slug: string): Promise<Conversation | null> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation-by-slug/${encodeURIComponent(slug)}`,
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to get conversation by slug: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // Git diff APIs
+  async getGitDiffs(cwd: string): Promise<{ diffs: GitDiffInfo[]; gitRoot: string }> {
+    const response = await fetch(`${this.baseUrl}/git/diffs?cwd=${encodeURIComponent(cwd)}`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async getGitTour(cwd: string, hash: string): Promise<GitTourResponse> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/tour?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get commit tour");
+    }
+    return response.json();
+  }
+
+  async getGitGraph(
+    cwd: string,
+    limit = 500,
+    scope: "all" | "current" = "all",
+  ): Promise<import("../types").GitGraphResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/git/graph?cwd=${encodeURIComponent(cwd)}&limit=${limit}&scope=${scope}`,
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async getGitCommitDetail(cwd: string, hash: string): Promise<import("../types").GitCommitDetail> {
+    const response = await fetch(
+      `${this.baseUrl}/git/commit-detail?cwd=${encodeURIComponent(cwd)}&hash=${encodeURIComponent(hash)}`,
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async getGitDiffFiles(diffId: string, cwd: string, to?: string): Promise<GitFileInfo[]> {
+    const toParam = to ? `&to=${encodeURIComponent(to)}` : "";
+    const response = await fetch(
+      `${this.baseUrl}/git/diffs/${diffId}/files?cwd=${encodeURIComponent(cwd)}${toParam}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to get diff files: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getGitFileDiff(
+    diffId: string,
+    filePath: string,
+    cwd: string,
+    to?: string,
+  ): Promise<GitFileDiff> {
+    const toParam = to ? `&to=${encodeURIComponent(to)}` : "";
+    const response = await fetch(
+      `${this.baseUrl}/git/file-diff/${diffId}/${filePath}?cwd=${encodeURIComponent(cwd)}${toParam}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to get file diff: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getGitCommitMessages(
+    cwd: string,
+    from: string,
+    to?: string,
+  ): Promise<{ hash: string; subject: string; body: string; author: string; isHead: boolean }[]> {
+    const toParam = to ? `&to=${encodeURIComponent(to)}` : "";
+    const response = await fetch(
+      `${this.baseUrl}/git/commit-messages?cwd=${encodeURIComponent(cwd)}&from=${encodeURIComponent(from)}${toParam}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to get commit messages: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async amendGitMessage(cwd: string, message: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/git/amend-message`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ cwd, message }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Failed to amend: ${response.statusText}`);
+    }
+  }
+
+  async createGitWorktree(cwd: string): Promise<{ path?: string; error?: string }> {
+    const response = await fetch(`${this.baseUrl}/git/create-worktree`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ cwd }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Failed to create worktree: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // findFiles fuzzy-searches files under `dir` server-side. `query` is the
+  // fuzzy pattern (empty returns the first files alphabetically); whitespace
+  // splits it into terms that are ANDed, so "vm storage s3" matches
+  // vm-storage-s3-design.md. A query that announces itself as a path (a
+  // leading /, ~, ./ or ../) re-roots the search at the directory it names:
+  // `search_dir` is then the directory matches are relative to, and
+  // `match_query` the part of the query matched within it. Content search is
+  // a second phase: pass `opts.content` "skip" for the fast name-only pass
+  // (no snippets), then "only" for git-grep hits alone — each match then
+  // carries `line`/`snippet`/`snippet_matched_indexes` and no path highlights
+  // — so name matches render immediately while grep catches up. `signal` lets
+  // callers abort superseded requests while the user types.
+  async findFiles(
+    dir: string,
+    query: string,
+    signal?: AbortSignal,
+    opts?: { content?: "skip" | "only" },
+  ): Promise<{
+    dir: string;
+    search_dir: string;
+    query: string;
+    match_query: string;
+    matches: Array<{
+      path: string;
+      matched_indexes?: number[];
+      line?: number;
+      snippet?: string;
+      snippet_matched_indexes?: number[];
+    }>;
+    total: number;
+    truncated: boolean;
+  }> {
+    const params = new URLSearchParams({ dir });
+    if (query) params.set("q", query);
+    if (opts?.content) params.set("content", opts.content);
+    const response = await fetch(`${this.baseUrl}/find-files?${params.toString()}`, { signal });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to find files");
+    }
+    return response.json();
+  }
+
+  async renameConversation(conversationId: string, slug: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/rename`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ slug }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text.trim() || `Failed to rename conversation: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // Moves an existing conversation to a different working directory: the
+  // user-driven counterpart of the agent's change_dir tool. The server
+  // validates the path, updates the live toolset, and tells the agent, so this
+  // is deliberately not a draft-style local update. Rejections are meaningful
+  // (a missing directory, or a turn in flight), so the message is surfaced.
+  async setConversationCwd(conversationId: string, cwd: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/cwd`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ cwd }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text.trim() || `Failed to change directory: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async updateConversationTags(conversationId: string, tags: string[]): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/tags`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ tags }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update tags: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getSubagents(conversationId: string): Promise<Conversation[]> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/subagents`);
+    if (!response.ok) {
+      throw new Error(`Failed to get subagents: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  // Version check APIs
+  async checkVersion(forceRefresh = false): Promise<VersionInfo> {
+    const url = forceRefresh ? "/version-check?refresh=true" : "/version-check";
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to check version: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getChangelog(currentTag: string, latestTag: string): Promise<CommitInfo[]> {
+    const params = new URLSearchParams({ current: currentTag, latest: latestTag });
+    const response = await fetch(`/version-changelog?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to get changelog: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async upgrade(restart: boolean = false): Promise<{ status: string; message: string }> {
+    const url = restart ? "/upgrade?restart=true" : "/upgrade";
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "X-Shelley-Request": "1" },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async upgradeHeadlessShell(): Promise<{ status: string; message: string; version: string }> {
+    const response = await fetch("/upgrade-headless-shell", {
+      method: "POST",
+      headers: { "X-Shelley-Request": "1" },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async exit(): Promise<{ status: string; message: string }> {
+    const response = await fetch("/exit", {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to exit: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getSettings(): Promise<Record<string, string>> {
+    const response = await fetch("/settings");
+    if (!response.ok) {
+      throw new Error(`Failed to get settings: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async setSetting(key: string, value: string): Promise<{ status: string }> {
+    const response = await fetch("/settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shelley-Request": "1",
+      },
+      body: JSON.stringify({ key, value }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async dismissDiskSpaceNotice(episodeId: number): Promise<DiskSpaceStatus> {
+    const response = await fetch("/api/disk-space/dismiss", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shelley-Request": "1",
+      },
+      body: JSON.stringify({ episode_id: episodeId }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+}
+
+export const api = new ApiService();
+
+// Feature flags API. Flags are declared in Go (package featureflags); the
+// server returns the merged registry+override list. `override === undefined`
+// means "no override stored"; deleting an override reverts to `default`.
+export interface FeatureFlag {
+  name: string;
+  description: string;
+  default: unknown;
+  override?: unknown;
+}
+
+export const featureFlagsApi = {
+  async list(): Promise<FeatureFlag[]> {
+    const r = await fetch("/feature-flags");
+    if (!r.ok) throw new Error(`Failed to load feature flags: ${r.statusText}`);
+    return r.json();
+  },
+  async set(name: string, value: unknown): Promise<void> {
+    const r = await fetch("/feature-flags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shelley-Request": "1" },
+      body: JSON.stringify({ name, value }),
+    });
+    if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  },
+  async clear(name: string): Promise<void> {
+    const r = await fetch("/feature-flags", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", "X-Shelley-Request": "1" },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  },
+};
+
+// models.dev pricing, USD per million tokens. null = model known but unpriced.
+export interface ModelCostDTO {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+// Module-level cache so reopening the context popup doesn't refetch.
+// Models whose fetch failed stay uncached and are retried next call.
+const modelCostCache = new Map<string, ModelCostDTO | null>();
+
+export const modelCostsApi = {
+  async lookup(
+    models: { model: string; url: string }[],
+  ): Promise<Record<string, ModelCostDTO | null>> {
+    const missing = models.filter((m) => !modelCostCache.has(m.model));
+    if (missing.length > 0) {
+      const r = await fetch("/api/model-costs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Shelley-Request": "1" },
+        body: JSON.stringify({ models: missing }),
+      });
+      if (!r.ok) throw new Error(`Failed to load model costs: ${r.statusText}`);
+      const data = (await r.json()) as { costs: Record<string, ModelCostDTO | null> };
+      for (const m of missing) modelCostCache.set(m.model, data.costs[m.model] ?? null);
+    }
+    const out: Record<string, ModelCostDTO | null> = {};
+    for (const m of models) out[m.model] = modelCostCache.get(m.model) ?? null;
+    return out;
+  },
+};
+
+// Aggregated LLM usage across a conversation's subagents (recursive).
+export interface SubagentUsageDTO {
+  llm_calls: number;
+  estimated_usd: number;
+  reported_usd: number;
+  unpriced_reported_usd: number;
+  unpriced_models: string[];
+  unpriced_calls: number;
+}
+
+export const subagentUsageApi = {
+  async get(conversationId: string, signal?: AbortSignal): Promise<SubagentUsageDTO> {
+    const r = await fetch(`/api/conversation/${conversationId}/subagent-usage`, {
+      headers: { "X-Shelley-Request": "1" },
+      signal,
+    });
+    if (!r.ok) throw new Error(`Failed to load subagent usage: ${r.statusText}`);
+    return (await r.json()) as SubagentUsageDTO;
+  },
+};
+
+// Custom models API
+export interface CustomModel {
+  model_id: string;
+  display_name: string;
+  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  endpoint: string;
+  api_key: string;
+  model_name: string;
+  max_tokens: number;
+  tags: string; // Comma-separated tags (e.g., "slug" for slug generation)
+  reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_support: "auto" | "yes" | "no";
+  reasoning_map: string;
+  supports_reasoning: boolean;
+  image_support: "auto" | "yes" | "no";
+  supports_images: boolean; // Resolved boolean that image_support evaluates to
+}
+
+export interface CreateCustomModelRequest {
+  display_name: string;
+  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  endpoint: string;
+  api_key: string;
+  model_name: string;
+  max_tokens: number;
+  tags: string; // Comma-separated tags
+  reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_support: "auto" | "yes" | "no";
+  reasoning_map: string;
+  image_support: "auto" | "yes" | "no";
+}
+
+export interface TestCustomModelRequest {
+  model_id?: string; // If provided with empty api_key, use stored key
+  provider_type: "anthropic" | "openai" | "openai-responses" | "gemini";
+  endpoint: string;
+  api_key: string;
+  model_name: string;
+  reasoning_effort?: string;
+  reasoning_support?: "auto" | "yes" | "no";
+  reasoning_map?: string;
+}
+
+class CustomModelsApi {
+  private baseUrl = "/api";
+
+  private postHeaders = {
+    "Content-Type": "application/json",
+  };
+
+  async getCustomModels(): Promise<CustomModel[]> {
+    const response = await fetch(`${this.baseUrl}/custom-models`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get custom models");
+    }
+    return response.json();
+  }
+
+  async createCustomModel(request: CreateCustomModelRequest): Promise<CustomModel> {
+    const response = await fetch(`${this.baseUrl}/custom-models`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to create custom model");
+    }
+    return response.json();
+  }
+
+  async updateCustomModel(
+    modelId: string,
+    request: Partial<CreateCustomModelRequest>,
+  ): Promise<CustomModel> {
+    const response = await fetch(`${this.baseUrl}/custom-models/${modelId}`, {
+      method: "PUT",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to update custom model");
+    }
+    return response.json();
+  }
+
+  async deleteCustomModel(modelId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/custom-models/${modelId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to delete custom model");
+    }
+  }
+
+  async duplicateCustomModel(modelId: string, displayName?: string): Promise<CustomModel> {
+    const response = await fetch(`${this.baseUrl}/custom-models/${modelId}/duplicate`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ display_name: displayName }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to duplicate custom model");
+    }
+    return response.json();
+  }
+
+  async testCustomModel(
+    request: TestCustomModelRequest,
+  ): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseUrl}/custom-models-test`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to test custom model");
+    }
+    return response.json();
+  }
+}
+
+export const customModelsApi = new CustomModelsApi();
+
+// Notification channels API
+export interface NotificationChannelAPI {
+  channel_id: string;
+  channel_type: string;
+  display_name: string;
+  enabled: boolean;
+  config: Record<string, string>;
+}
+
+export interface CreateNotificationChannelRequest {
+  channel_type: string;
+  display_name: string;
+  enabled: boolean;
+  config: Record<string, string>;
+}
+
+export interface UpdateNotificationChannelRequest {
+  display_name: string;
+  enabled: boolean;
+  config: Record<string, string>;
+}
+
+export interface ChannelTypeInfo {
+  type: string;
+  label: string;
+  config_fields: {
+    name: string;
+    label: string;
+    type: string;
+    required: boolean;
+    placeholder?: string;
+    default?: string;
+    description?: string;
+    options?: string[];
+  }[];
+}
+
+class NotificationChannelsApi {
+  private baseUrl = "/api";
+
+  private postHeaders = {
+    "Content-Type": "application/json",
+  };
+
+  private async throwIfNotOk(response: Response, fallback: string): Promise<void> {
+    if (response.ok) return;
+    const body = await response.text().catch(() => "");
+    throw new Error(body.trim() || `${fallback}: ${response.statusText}`);
+  }
+
+  async getChannels(): Promise<NotificationChannelAPI[]> {
+    const response = await fetch(`${this.baseUrl}/notification-channels`);
+    await this.throwIfNotOk(response, "Failed to get notification channels");
+    return response.json();
+  }
+
+  async createChannel(request: CreateNotificationChannelRequest): Promise<NotificationChannelAPI> {
+    const response = await fetch(`${this.baseUrl}/notification-channels`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    await this.throwIfNotOk(response, "Failed to create notification channel");
+    return response.json();
+  }
+
+  async updateChannel(
+    channelId: string,
+    request: UpdateNotificationChannelRequest,
+  ): Promise<NotificationChannelAPI> {
+    const response = await fetch(`${this.baseUrl}/notification-channels/${channelId}`, {
+      method: "PUT",
+      headers: this.postHeaders,
+      body: JSON.stringify(request),
+    });
+    await this.throwIfNotOk(response, "Failed to update notification channel");
+    return response.json();
+  }
+
+  async deleteChannel(channelId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/notification-channels/${channelId}`, {
+      method: "DELETE",
+    });
+    await this.throwIfNotOk(response, "Failed to delete notification channel");
+  }
+
+  async testChannel(channelId: string): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseUrl}/notification-channels/${channelId}/test`, {
+      method: "POST",
+      headers: this.postHeaders,
+    });
+    await this.throwIfNotOk(response, "Failed to test notification channel");
+    return response.json();
+  }
+}
+
+export const notificationChannelsApi = new NotificationChannelsApi();

@@ -1,0 +1,22 @@
+diff --git a/usestyle/index.mjs b/usestyle/index.mjs
+index ce789f5e781720f3ca7c0ca0851f7bdcb377e91e..e886560f64a1759d920b290263ad7860d65fd10e 100644
+--- a/usestyle/index.mjs
++++ b/usestyle/index.mjs
+@@ -73,7 +73,16 @@ function useStyle(css) {
+     }
+     if (isLoaded.value) return;
+     stop = watch(cssRef, function (value) {
+-      styleRef.value.textContent = value;
++      // PATCHED (shelley): skip no-op rewrites. PrimeVue directives re-run
++      // _loadStyles on every `updated` hook; when the theme service's style
++      // registry has been cleared (e.g. by another directive's
++      // _themeChangeListener) the same CSS text is written back to the same
++      // <style> element. Replacing a stylesheet — even with identical text —
++      // forces WebKit to invalidate style for the entire document, which in a
++      // huge conversation makes every keystroke cost hundreds of ms.
++      if (styleRef.value.textContent !== value) {
++        styleRef.value.textContent = value;
++      }
+       onStyleUpdated === null || onStyleUpdated === void 0 || onStyleUpdated(_name);
+     }, {
+       immediate: true

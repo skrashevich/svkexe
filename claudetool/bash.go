@@ -1,0 +1,700 @@
+package claudetool
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"shelley.exe.dev/claudetool/bashkit"
+	"shelley.exe.dev/llm"
+
+	"mvdan.cc/sh/v3/syntax"
+)
+
+// PermissionCallback is a function type for checking if a command is allowed to run
+type PermissionCallback func(command string) error
+
+// BashTool specifies an llm.Tool for executing shell commands.
+type BashTool struct {
+	// CheckPermission is called before running any command, if set
+	CheckPermission PermissionCallback
+	// EnableJITInstall enables just-in-time tool installation for missing commands
+	EnableJITInstall bool
+	// Timeouts holds the configurable timeout values (uses defaults if nil)
+	Timeouts *Timeouts
+	// WorkingDir is the shared mutable working directory.
+	WorkingDir *MutableWorkingDir
+	// LLMProvider provides access to LLM services for tool validation
+	LLMProvider LLMServiceProvider
+	// ModelID is the conversation's model, used to pick a workhorse model
+	// for tool validation.
+	ModelID string
+	// Env holds the conversation context exposed to invoked commands as
+	// SHELLEY_* environment variables.
+	Env ShelleyEnv
+}
+
+const (
+	EnableBashToolJITInstall = true
+	NoBashToolJITInstall     = false
+
+	DefaultFastTimeout = 30 * time.Second
+	DefaultSlowTimeout = 15 * time.Minute
+)
+
+// Timeouts holds the configurable timeout values for bash commands.
+type Timeouts struct {
+	Fast time.Duration // regular commands (e.g., ls, echo, simple scripts)
+	Slow time.Duration // commands that may reasonably take longer (e.g., downloads, builds, tests)
+}
+
+// Fast returns t's fast timeout, or DefaultFastTimeout if t is nil.
+func (t *Timeouts) fast() time.Duration {
+	if t == nil {
+		return DefaultFastTimeout
+	}
+	return t.Fast
+}
+
+// Slow returns t's slow timeout, or DefaultSlowTimeout if t is nil.
+func (t *Timeouts) slow() time.Duration {
+	if t == nil {
+		return DefaultSlowTimeout
+	}
+	return t.Slow
+}
+
+// Tool returns an llm.Tool based on b.
+func (b *BashTool) Tool() *llm.Tool {
+	return &llm.Tool{
+		Name:        bashName,
+		Description: strings.TrimSpace(bashDescription),
+		InputSchema: llm.MustSchema(bashInputSchema),
+		Run:         llm.RunJSON(b.run),
+	}
+}
+
+// getWorkingDir returns the current working directory.
+func (b *BashTool) getWorkingDir() string {
+	return b.WorkingDir.Get()
+}
+
+// isNoTrailerSet checks if user has disabled co-author trailer via git config.
+func isNoTrailerSet() bool {
+	out, err := exec.Command("git", "config", "--get", "shelley.no-trailer").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "true"
+}
+
+const (
+	bashName        = "bash"
+	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
+Bash state changes (working dir, variables, aliases) don't persist between calls.
+
+For long-running processes (servers, watch modes), use tmux instead.
+Do NOT use &, nohup, or disown — the bash tool kills its process group on exit.
+
+To wake yourself later (longer than the 15-min cap), detach a tmux session that
+sleeps then calls the Shelley client. Use double quotes so THIS shell expands
+$SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
+  tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+
+MUST set slow_ok=true for potentially slow commands: builds, downloads,
+installs, tests, or any other substantive operation.
+
+Avoid overly destructive cleanup commands. Commands that could delete .git
+directories, home directories, or use broad wildcards require explicit paths.
+Confirm with the user before running destructive operations.
+
+Use the change_dir tool instead of 'cd <path> && ...'; 'cd' does not persist across calls.
+
+IMPORTANT: Keep commands concise. The command input must be less than 60k tokens.
+For complex scripts, write them to a file first and then execute the file.
+`
+	// If you modify this, update the termui template for prettier rendering.
+	bashInputSchema = `
+{
+  "type": "object",
+  "required": ["command"],
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Shell to execute"
+    },
+    "slow_ok": {
+      "type": "boolean",
+      "description": "Use extended timeout"
+    }
+  }
+}
+`
+)
+
+type bashInput struct {
+	Command string `json:"command"`
+	SlowOK  bool   `json:"slow_ok,omitempty"`
+}
+
+// BashDisplayData is the display data sent to the UI for bash tool results.
+type BashDisplayData struct {
+	WorkingDir string `json:"workingDir"`
+}
+
+func (i *bashInput) timeout(t *Timeouts) time.Duration {
+	if i.SlowOK {
+		return t.slow()
+	}
+	return t.fast()
+}
+
+func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
+	// Check that the working directory exists
+	wd := b.getWorkingDir()
+	if _, err := os.Stat(wd); err != nil {
+		if os.IsNotExist(err) {
+			return llm.ErrorfToolOut("working directory does not exist: %s (use change_dir to switch to a valid directory)", wd)
+		}
+		return llm.ErrorfToolOut("cannot access working directory %s: %w", wd, err)
+	}
+
+	// do a quick permissions check (NOT a security barrier)
+	err := bashkit.Check(req.Command)
+	if err != nil {
+		return llm.ErrorToolOut(err)
+	}
+
+	// Custom permission callback if set
+	if b.CheckPermission != nil {
+		if err := b.CheckPermission(req.Command); err != nil {
+			return llm.ErrorToolOut(err)
+		}
+	}
+
+	// Check for missing tools and try to install them if needed, best effort only
+	if b.EnableJITInstall {
+		err := b.checkAndInstallMissingTools(ctx, req.Command)
+		if err != nil {
+			slog.DebugContext(ctx, "failed to auto-install missing tools", "error", err)
+		}
+	}
+
+	// Add co-author trailer to git commits unless user has disabled it
+	if !isNoTrailerSet() {
+		req.Command = bashkit.AddCoauthorTrailer(req.Command, "Co-authored-by: Shelley <shelley@exe.dev>")
+	}
+
+	timeout := req.timeout(b.Timeouts)
+
+	display := BashDisplayData{WorkingDir: wd}
+
+	out, execErr := b.executeBashInDir(ctx, req, timeout, wd)
+	if execErr != nil {
+		return llm.ErrorToolOut(execErr)
+	}
+	if paths := bashkit.ChainedCdPaths(req.Command); len(paths) > 0 {
+		out = chainedCdHint(paths, wd) + "\n\n" + out
+	}
+	return llm.ToolOut{LLMContent: llm.TextContent(out), Display: display}
+}
+
+func chainedCdHint(paths []string, workingDir string) string {
+	if len(paths) == 1 && paths[0] != "" && cdPathIsCurrentDir(paths[0], workingDir) {
+		return "[shelley hint: this command chained `cd <path>` with another command, but that path is already the current working directory. Drop the redundant `cd` and run the remaining command directly.]"
+	}
+	return "[shelley hint: this command chained `cd <path>` with another command. `cd` inside a bash invocation does not persist across tool calls. Prefer calling the change_dir tool once, then running subsequent commands directly.]"
+}
+
+func cdPathIsCurrentDir(path, workingDir string) bool {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workingDir, path)
+	}
+	return filepath.Clean(path) == filepath.Clean(workingDir)
+}
+
+const (
+	largeOutputThreshold = 50 * 1024 // 50KB - threshold for saving to file
+	firstLinesCount      = 2
+	lastLinesCount       = 5
+	maxLineLength        = 200 // truncate displayed lines to this length
+)
+
+func (b *BashTool) makeBashCommand(ctx context.Context, command string, out io.Writer, wd string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "bash", "--login", "-c", command)
+	cmd.Dir = wd
+	cmd.Stdin = nil
+	cmd.Stdout = out
+	cmd.Stderr = out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // set up for killing the process group
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			// Process hasn't started yet.
+			// Not sure whether this is possible in practice,
+			// but it is possible in theory, and it doesn't hurt to handle it gracefully.
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // kill entire process group
+	}
+	cmd.WaitDelay = 15 * time.Second // prevent indefinite hangs when child processes keep pipes open
+	// Strip any inherited SHELLEY_* vars so we control them explicitly below.
+	env := stripShelleyEnv(os.Environ())
+	env = append(env, "SKETCH=1")          // signal that this has been run by Sketch, sometimes useful for scripts
+	env = append(env, "EDITOR=/bin/false") // interactive editors won't work
+	env = append(env, b.Env.Environ(cmd.Dir)...)
+	cmd.Env = env
+	return cmd
+}
+
+func cmdWait(cmd *exec.Cmd) error {
+	err := cmd.Wait()
+	// We used to kill the process group here, but it's not clear that
+	// this is correct in the case of self-daemonizing processes,
+	// and I encountered issues where daemons that I tried to run
+	// as background tasks would mysteriously exit.
+	return err
+}
+
+const (
+	// progressMaxBytes is the maximum bytes of output kept in the progress tail buffer.
+	progressMaxBytes = 10 * 1024
+	// progressInterval is how often we report progress to the UI.
+	progressInterval = 500 * time.Millisecond
+)
+
+// progressWriter wraps a bytes.Buffer and periodically reports the tail of output.
+type progressWriter struct {
+	buf      bytes.Buffer
+	mu       sync.Mutex
+	progress llm.ToolProgressFunc
+	toolID   string
+	toolName string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func newProgressWriter(ctx context.Context, progress llm.ToolProgressFunc, toolID, toolName string) *progressWriter {
+	pCtx, cancel := context.WithCancel(ctx)
+	pw := &progressWriter{
+		progress: progress,
+		toolID:   toolID,
+		toolName: toolName,
+		ctx:      pCtx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+	go pw.reportLoop()
+	return pw
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	return pw.buf.Write(p)
+}
+
+// tail returns the last progressMaxBytes of accumulated output.
+func (pw *progressWriter) tail() string {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	b := pw.buf.Bytes()
+	if len(b) > progressMaxBytes {
+		b = b[len(b)-progressMaxBytes:]
+	}
+	return string(b)
+}
+
+func (pw *progressWriter) reportLoop() {
+	defer close(pw.done)
+	ticker := time.NewTicker(progressInterval)
+	defer ticker.Stop()
+	lastReported := ""
+	for {
+		select {
+		case <-pw.ctx.Done():
+			// Final report
+			if t := pw.tail(); t != lastReported {
+				pw.progress(llm.ToolProgress{
+					ToolUseID: pw.toolID,
+					ToolName:  pw.toolName,
+					Output:    t,
+				})
+			}
+			return
+		case <-ticker.C:
+			t := pw.tail()
+			if t != lastReported {
+				lastReported = t
+				pw.progress(llm.ToolProgress{
+					ToolUseID: pw.toolID,
+					ToolName:  pw.toolName,
+					Output:    t,
+				})
+			}
+		}
+	}
+}
+
+func (pw *progressWriter) stop() {
+	pw.cancel()
+	<-pw.done
+}
+
+// String returns the accumulated output as a string.
+func (pw *progressWriter) String() string {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	return pw.buf.String()
+}
+
+func (b *BashTool) executeBash(ctx context.Context, req bashInput, timeout time.Duration) (string, error) {
+	return b.executeBashInDir(ctx, req, timeout, b.getWorkingDir())
+}
+
+func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, timeout time.Duration, wd string) (string, error) {
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Check if there's a progress callback for streaming output
+	progressFn := GetToolProgress(ctx)
+	toolID := ToolUseID(ctx)
+
+	var output io.Writer
+	var getOutput func() string
+
+	if progressFn != nil && toolID != "" {
+		pw := newProgressWriter(execCtx, progressFn, toolID, bashName)
+		defer pw.stop()
+		output = pw
+		getOutput = pw.String
+	} else {
+		buf := new(bytes.Buffer)
+		output = buf
+		getOutput = buf.String
+	}
+
+	cmd := b.makeBashCommand(execCtx, req.Command, output, wd)
+	cmd.Env = append(cmd.Env, `GIT_SEQUENCE_EDITOR=echo "To do an interactive rebase, run it in a tmux session." && exit 1`)
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("command failed: %w", err)
+	}
+
+	err := cmdWait(cmd)
+
+	out, formatErr := formatForegroundBashOutput(getOutput())
+	if formatErr != nil {
+		return "", formatErr
+	}
+
+	if execCtx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("[command timed out after %s, showing output until timeout]\n%s", timeout, out)
+	}
+	if execCtx.Err() == context.Canceled {
+		// cmd.Wait commonly reports only "signal: killed" after CommandContext
+		// stops the process. Preserve the cancellation cause so the loop can
+		// classify this as an interrupted tool rather than an ordinary failure.
+		return "", fmt.Errorf("[command cancelled: %w]\n%s", execCtx.Err(), out)
+	}
+	if err != nil {
+		return "", fmt.Errorf("[command failed: %w]\n%s", err, out)
+	}
+
+	return out, nil
+}
+
+// formatForegroundBashOutput formats the output of a foreground bash command for display to the agent.
+// If output exceeds largeOutputThreshold, it saves to a file and returns a summary.
+func formatForegroundBashOutput(out string) (string, error) {
+	if len(out) <= largeOutputThreshold {
+		return out, nil
+	}
+
+	// Save full output to a temp file
+	tmpDir, err := os.MkdirTemp("", "shelley-output-")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir for large output: %w", err)
+	}
+
+	outFile := filepath.Join(tmpDir, "output")
+	if err := os.WriteFile(outFile, []byte(out), 0o644); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("failed to write large output to file: %w", err)
+	}
+
+	// Split into lines
+	lines := strings.Split(out, "\n")
+
+	// If fewer than 3 lines total, likely binary or single-line output
+	if len(lines) < 3 {
+		return fmt.Sprintf("[output too large (%s, %d lines), saved to: %s]",
+			humanizeBytes(len(out)), len(lines), outFile), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "[output too large (%s, %d lines), saved to: %s]\n\n",
+		humanizeBytes(len(out)), len(lines), outFile)
+
+	// First N lines
+	result.WriteString("First lines:\n")
+	firstN := min(firstLinesCount, len(lines))
+	for i := range firstN {
+		fmt.Fprintf(&result, "%5d: %s\n", i+1, truncateLine(lines[i]))
+	}
+
+	// Last N lines
+	result.WriteString("\n...\n\nLast lines:\n")
+	startIdx := max(0, len(lines)-lastLinesCount)
+	for i := startIdx; i < len(lines); i++ {
+		fmt.Fprintf(&result, "%5d: %s\n", i+1, truncateLine(lines[i]))
+	}
+
+	return result.String(), nil
+}
+
+// truncateLine truncates a line to maxLineLength characters, appending "..." if truncated.
+func truncateLine(line string) string {
+	if len(line) <= maxLineLength {
+		return line
+	}
+	return line[:maxLineLength] + "..."
+}
+
+func humanizeBytes(bytes int) string {
+	switch {
+	case bytes < 4*1024:
+		return fmt.Sprintf("%dB", bytes)
+	case bytes < 1024*1024:
+		kb := int(math.Round(float64(bytes) / 1024.0))
+		return fmt.Sprintf("%dkB", kb)
+	case bytes < 1024*1024*1024:
+		mb := int(math.Round(float64(bytes) / (1024.0 * 1024.0)))
+		return fmt.Sprintf("%dMB", mb)
+	}
+	return "more than 1GB"
+}
+
+// shellHasCommand checks whether a command is available inside the
+// same bash --login environment that the bash tool uses to run commands.
+// This accounts for version managers (uv, mise, direnv, …) that only
+// add entries to PATH after shell startup scripts are sourced.
+func shellHasCommand(ctx context.Context, name string) bool {
+	quoted, err := syntax.Quote(name, syntax.LangBash)
+	if err != nil {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "bash", "--login", "-c", "command -v "+quoted)
+	cmd.Stdin = nil
+	return cmd.Run() == nil
+}
+
+// checkAndInstallMissingTools analyzes a bash command and attempts to automatically install any missing tools.
+func (b *BashTool) checkAndInstallMissingTools(ctx context.Context, command string) error {
+	commands, err := bashkit.ExtractCommands(command)
+	if err != nil {
+		return err
+	}
+
+	autoInstallMu.Lock()
+	defer autoInstallMu.Unlock()
+
+	var missing []string
+	for _, cmd := range commands {
+		if doNotAttemptToolInstall[cmd] {
+			continue
+		}
+		if shellHasCommand(ctx, cmd) {
+			doNotAttemptToolInstall[cmd] = true // spare future checks
+			continue
+		}
+		missing = append(missing, cmd)
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+
+	for _, cmd := range missing {
+		err := b.installTool(ctx, cmd)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to install tool", "tool", cmd, "error", err)
+		}
+		doNotAttemptToolInstall[cmd] = true // either it's installed or it's not--either way, we're done with it
+	}
+	return nil
+}
+
+// Command safety check cache to avoid repeated LLM calls
+var (
+	autoInstallMu           sync.Mutex
+	doNotAttemptToolInstall = make(map[string]bool) // set to true if the tool should not be auto-installed
+)
+
+// autodetectPackageManager returns the first package‑manager binary
+// found in the login shell environment, or an empty string if none are present.
+func autodetectPackageManager() string {
+	// TODO: cache this result with a sync.OnceValue
+
+	managers := []string{
+		"apt", "apt-get", // Debian/Ubuntu
+		"brew", "port", // macOS (Homebrew / MacPorts)
+		"apk",        // Alpine
+		"yum", "dnf", // RHEL/Fedora
+		"pacman",          // Arch
+		"zypper",          // openSUSE
+		"xbps-install",    // Void
+		"emerge",          // Gentoo
+		"nix-env", "guix", // NixOS / Guix
+		"pkg",      // FreeBSD
+		"slackpkg", // Slackware
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, m := range managers {
+		if shellHasCommand(ctx, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// installTool attempts to install a single missing tool using LLM validation and system package manager.
+func (b *BashTool) installTool(ctx context.Context, cmd string) error {
+	slog.InfoContext(ctx, "attempting to install tool", "tool", cmd)
+
+	packageManager := autodetectPackageManager()
+	if packageManager == "" {
+		return fmt.Errorf("no known package manager found in PATH")
+	}
+	// Use LLM to validate and get package name
+	if b.LLMProvider == nil {
+		return fmt.Errorf("no LLM provider available for tool validation")
+	}
+
+	query := fmt.Sprintf(`Do you know this command/package/tool? Is it legitimate, clearly non-harmful, and commonly used? Can it be installed with package manager %s?
+
+Command: %s
+
+- YES: Respond ONLY with the package name used to install it
+- NO or UNSURE: Respond ONLY with the word NO`, packageManager, cmd)
+
+	req := &llm.Request{
+		Messages: []llm.Message{{
+			Role:    llm.MessageRoleUser,
+			Content: []llm.Content{llm.StringContent(query)},
+		}},
+		System: []llm.SystemContent{{
+			Type: "text",
+			Text: "You are an expert in software developer tools.",
+		}},
+	}
+
+	svc, err := b.LLMProvider.GetWorkhorseService(b.ModelID)
+	if err != nil {
+		return fmt.Errorf("failed to validate tool with LLM: %w", err)
+	}
+	resp, err := svc.Do(llm.WithPurpose(ctx, "tool_install"), req)
+	if err != nil {
+		return fmt.Errorf("failed to validate tool with LLM: %w", err)
+	}
+
+	response := strings.TrimSpace(llm.FirstText(resp))
+	if response == "" {
+		return fmt.Errorf("empty response from LLM for tool validation")
+	}
+	if response == "NO" || response == "UNSURE" {
+		slog.InfoContext(ctx, "tool installation declined by LLM", "tool", cmd, "response", response)
+		return fmt.Errorf("tool %s not approved for installation", cmd)
+	}
+
+	packageName := strings.TrimSpace(response)
+	if packageName == "" {
+		return fmt.Errorf("no package name provided for tool %s", cmd)
+	}
+
+	return b.installPackage(ctx, cmd, packageName, packageManager)
+}
+
+// installPackage handles the actual package installation
+func (b *BashTool) installPackage(ctx context.Context, cmd, packageName, packageManager string) error {
+	// Install the package (with update command first if needed)
+	// TODO: these invocations create zombies when we are PID 1.
+	// We should give them the same zombie-reaping treatment as above,
+	// if/when we care enough to put in the effort. Not today.
+	var updateCmd, installCmd string
+	switch packageManager {
+	case "apt", "apt-get":
+		updateCmd = fmt.Sprintf("sudo %s update", packageManager)
+		installCmd = fmt.Sprintf("sudo %s install -y %s", packageManager, packageName)
+	case "brew":
+		// brew handles updates automatically, no explicit update needed
+		installCmd = fmt.Sprintf("brew install %s", packageName)
+	case "apk":
+		updateCmd = "sudo apk update"
+		installCmd = fmt.Sprintf("sudo apk add %s", packageName)
+	case "yum", "dnf":
+		// For yum/dnf, we don't need a separate update command as the package cache is usually fresh enough
+		// and install will fetch the latest available packages
+		installCmd = fmt.Sprintf("sudo %s install -y %s", packageManager, packageName)
+	case "pacman":
+		updateCmd = "sudo pacman -Sy"
+		installCmd = fmt.Sprintf("sudo pacman -S --noconfirm %s", packageName)
+	case "zypper":
+		updateCmd = "sudo zypper refresh"
+		installCmd = fmt.Sprintf("sudo zypper install -y %s", packageName)
+	case "xbps-install":
+		updateCmd = "sudo xbps-install -S"
+		installCmd = fmt.Sprintf("sudo xbps-install -y %s", packageName)
+	case "emerge":
+		// Note: emerge --sync is expensive, so we skip it for JIT installs
+		// Users should manually sync if needed
+		installCmd = fmt.Sprintf("sudo emerge %s", packageName)
+	case "nix-env":
+		// nix-env doesn't require explicit updates for JIT installs
+		installCmd = fmt.Sprintf("nix-env -i %s", packageName)
+	case "guix":
+		// guix doesn't require explicit updates for JIT installs
+		installCmd = fmt.Sprintf("guix install %s", packageName)
+	case "pkg":
+		updateCmd = "sudo pkg update"
+		installCmd = fmt.Sprintf("sudo pkg install -y %s", packageName)
+	case "slackpkg":
+		updateCmd = "sudo slackpkg update"
+		installCmd = fmt.Sprintf("sudo slackpkg install %s", packageName)
+	default:
+		return fmt.Errorf("unsupported package manager: %s", packageManager)
+	}
+
+	slog.InfoContext(ctx, "installing tool", "tool", cmd, "package", packageName, "update_command", updateCmd, "install_command", installCmd)
+
+	// Execute the update command first if needed
+	if updateCmd != "" {
+		slog.InfoContext(ctx, "updating package cache", "command", updateCmd)
+		updateCmdExec := exec.CommandContext(ctx, "sh", "-c", updateCmd)
+		updateOutput, err := updateCmdExec.CombinedOutput()
+		if err != nil {
+			slog.WarnContext(ctx, "package cache update failed, proceeding with install anyway", "error", err, "output", string(updateOutput))
+		}
+	}
+
+	// Execute the install command
+	cmdExec := exec.CommandContext(ctx, "sh", "-c", installCmd)
+	output, err := cmdExec.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to install %s: %w\nOutput: %s", packageName, err, string(output))
+	}
+
+	slog.InfoContext(ctx, "tool installation successful", "tool", cmd, "package", packageName)
+	return nil
+}

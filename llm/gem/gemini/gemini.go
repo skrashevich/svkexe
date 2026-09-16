@@ -1,0 +1,232 @@
+package gemini
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+// https://ai.google.dev/api/generate-content#request-body
+type Request struct {
+	// Field order matters for JSON serialization - stable fields should come first
+	// to maximize prefix deduplication when storing LLM requests.
+	CachedContent     string            `json:"cachedContent,omitempty"` // format: "cachedContents/{name}"
+	GenerationConfig  *GenerationConfig `json:"generationConfig,omitempty"`
+	SystemInstruction *Content          `json:"systemInstruction,omitempty"`
+	Tools             []Tool            `json:"tools,omitempty"`
+	// ToolConfig has been left out because it does not appear to be useful.
+	// Contents comes last since it grows with each request in a conversation
+	Contents []Content `json:"contents"`
+}
+
+// https://ai.google.dev/api/generate-content#response-body
+type Response struct {
+	Candidates []Candidate `json:"candidates"`
+	headers    http.Header // captured HTTP response headers
+}
+
+// Header returns the HTTP response headers.
+func (r *Response) Header() http.Header {
+	return r.headers
+}
+
+type Candidate struct {
+	Content Content `json:"content"`
+}
+
+type Content struct {
+	Parts []Part `json:"parts"`
+	Role  string `json:"role,omitempty"`
+}
+
+// Part is a part of the content.
+// This is a union data structure, only one-of the fields can be set.
+type Part struct {
+	Text                string               `json:"text,omitempty"`
+	FunctionCall        *FunctionCall        `json:"functionCall,omitempty"`
+	FunctionResponse    *FunctionResponse    `json:"functionResponse,omitempty"`
+	ExecutableCode      *ExecutableCode      `json:"executableCode,omitempty"`
+	CodeExecutionResult *CodeExecutionResult `json:"codeExecutionResult,omitempty"`
+	// ThoughtSignature is required for Gemini 3 models when using function calling.
+	// It must be passed back exactly as received when sending the conversation history.
+	// Note: presence of ThoughtSignature does NOT mean the part is a thought summary —
+	// Gemini 3 attaches it to ordinary final-answer text and tool calls so that
+	// internal reasoning state can be rehydrated on the next turn. Use Thought to
+	// detect a thought summary.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+	// Thought is true when the part is a thought summary (only emitted when
+	// thinkingConfig.includeThoughts is true). https://ai.google.dev/gemini-api/docs/thinking
+	Thought    bool  `json:"thought,omitempty"`
+	InlineData *Blob `json:"inlineData,omitempty"`
+	// TODO fileData
+}
+
+// Blob is inline binary data (e.g. an image).
+// https://ai.google.dev/api/caching#Blob
+type Blob struct {
+	MimeType string `json:"mimeType"`
+	// Data is base64-encoded binary content.
+	Data string `json:"data"`
+}
+
+type FunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+type FunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
+}
+
+type ExecutableCode struct {
+	Language Language `json:"language"`
+	Code     string   `json:"code"`
+}
+
+type Language int
+
+const (
+	LanguageUnspecified Language = 0
+	LanguagePython      Language = 1 // python >= 3.10 with numpy and simpy
+)
+
+type CodeExecutionResult struct {
+	Outcome Outcome `json:"outcome"`
+	Output  string  `json:"output"`
+}
+
+type Outcome int
+
+const (
+	OutcomeUnspecified      Outcome = 0
+	OutcomeOK               Outcome = 1
+	OutcomeFailed           Outcome = 2
+	OutcomeDeadlineExceeded Outcome = 3
+)
+
+// https://ai.google.dev/api/generate-content#v1beta.GenerationConfig
+type GenerationConfig struct {
+	ResponseMimeType string          `json:"responseMimeType,omitempty"` // text/plain, application/json, or text/x.enum
+	ResponseSchema   *Schema         `json:"responseSchema,omitempty"`   // for JSON
+	ThinkingConfig   *ThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+// ThinkingConfig controls extended thinking for Gemini models.
+// ThinkingLevel and ThinkingBudget are mutually exclusive: setting both
+// returns a 400 from the API. Use ThinkingLevel for Gemini 3.x and
+// ThinkingBudget for Gemini 2.5.
+// https://ai.google.dev/gemini-api/docs/thinking
+type ThinkingConfig struct {
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"`   // Gemini 3.x: "minimal", "low", "medium", "high"
+	ThinkingBudget  *int   `json:"thinkingBudget,omitempty"`  // Gemini 2.5: token count, -1 dynamic, 0 disable
+	IncludeThoughts bool   `json:"includeThoughts,omitempty"` // include thought summaries in response
+}
+
+// https://ai.google.dev/api/caching#Tool
+type Tool struct {
+	FunctionDeclarations []FunctionDeclaration `json:"functionDeclarations"`
+	CodeExecution        *struct{}             `json:"codeExecution,omitempty"` // if present, enables the model to execute code
+	// TODO googleSearchRetrieval https://ai.google.dev/api/caching#GoogleSearchRetrieval
+}
+
+// https://ai.google.dev/api/caching#FunctionDeclaration
+type FunctionDeclaration struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  Schema `json:"parameters"`
+}
+
+// https://ai.google.dev/api/caching#Schema
+type Schema struct {
+	Type        DataType          `json:"type"`
+	Format      string            `json:"string,omitempty"` // for NUMBER type: float, double for INTEGER type: int32, int64 for STRING type: enum
+	Description string            `json:"description,omitempty"`
+	Nullable    *bool             `json:"nullable,omitempty"`
+	Enum        []string          `json:"enum,omitempty"`
+	MaxItems    string            `json:"maxItems,omitempty"`   // for ARRAY
+	MinItems    string            `json:"minItems,omitempty"`   // for ARRAY
+	Properties  map[string]Schema `json:"properties,omitempty"` // for OBJECT
+	Required    []string          `json:"required,omitempty"`   // for OBJECT
+	Items       *Schema           `json:"items,omitempty"`      // for ARRAY
+}
+
+type DataType int
+
+const (
+	DataTypeUNSPECIFIED = DataType(0) // Not specified, should not be used.
+	DataTypeSTRING      = DataType(1)
+	DataTypeNUMBER      = DataType(2)
+	DataTypeINTEGER     = DataType(3)
+	DataTypeBOOLEAN     = DataType(4)
+	DataTypeARRAY       = DataType(5)
+	DataTypeOBJECT      = DataType(6)
+)
+
+// DefaultEndpoint is the Gemini API base URL used when Model.Endpoint is empty.
+const DefaultEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+
+// APIError is returned by GenerateContent when the server returns a non-200 status.
+type APIError struct {
+	StatusCode int
+	Body       string
+	Header     http.Header
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("GenerateContent: HTTP status: %d, %s", e.StatusCode, e.Body)
+}
+
+type Model struct {
+	Model    string // e.g. "models/gemini-1.5-flash"
+	APIKey   string
+	HTTPC    *http.Client // if nil, http.DefaultClient is used
+	Endpoint string       // if empty, DefaultEndpoint is used
+}
+
+func (m Model) GenerateContent(ctx context.Context, req *Request) (*Response, error) {
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/%s:generateContent?key=%s", m.endpoint(), m.Model, m.APIKey), bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating HTTP request: %w", err)
+	}
+	httpReq.Header.Add("Content-Type", "application/json")
+	httpResp, err := m.httpc().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("GenerateContent: do: %w", err)
+	}
+	defer httpResp.Body.Close()
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("GenerateContent: reading response body: %w", err)
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: httpResp.StatusCode, Body: string(body), Header: httpResp.Header}
+	}
+	var res Response
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, fmt.Errorf("GenerateContent: unmarshaling response: %w, %s", err, string(body))
+	}
+	res.headers = httpResp.Header
+	return &res, nil
+}
+
+func (m Model) endpoint() string {
+	if m.Endpoint != "" {
+		return m.Endpoint
+	}
+	return DefaultEndpoint
+}
+
+func (m Model) httpc() *http.Client {
+	if m.HTTPC != nil {
+		return m.HTTPC
+	}
+	return http.DefaultClient
+}

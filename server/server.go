@@ -1,0 +1,2347 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/pprof"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"tailscale.com/util/singleflight"
+
+	"shelley.exe.dev/claudetool"
+	"shelley.exe.dev/db"
+	"shelley.exe.dev/db/generated"
+	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models"
+	"shelley.exe.dev/server/diskspace"
+	"shelley.exe.dev/server/notifications"
+	"shelley.exe.dev/subpub"
+	"shelley.exe.dev/ui"
+)
+
+// APIMessage is the message format sent to clients
+// TODO: We could maybe omit llm_data when display_data is available
+type APIMessage struct {
+	MessageID      string  `json:"message_id"`
+	ConversationID string  `json:"conversation_id"`
+	SequenceID     int64   `json:"sequence_id"`
+	Type           string  `json:"type"`
+	LlmData        *string `json:"llm_data,omitempty"`
+	UserData       *string `json:"user_data,omitempty"`
+	UsageData      *string `json:"usage_data,omitempty"`
+	// OtherUsageData is a JSON array of llm.PurposedUsage: usage from indirect
+	// LLM calls affiliated with this message (compaction summarization,
+	// LLM-backed tools). Nil when none. Slug-generation usage rides on its own
+	// appended slug marker message rather than on the message that triggered it,
+	// because message rows are append-only.
+	OtherUsageData *string   `json:"other_usage_data,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	DisplayData    *string   `json:"display_data,omitempty"`
+	Generation     int64     `json:"generation"`
+	EndOfTurn      *bool     `json:"end_of_turn,omitempty"`
+	// LLMAPIURL and ModelName identify which LLM produced this message's
+	// usage data; ForkedFromMessageID points at the source message a fork
+	// copy came from (nil for originally-incurred messages). Together they
+	// let clients attribute and de-duplicate usage across forks.
+	LLMAPIURL           *string `json:"llm_api_url,omitempty"`
+	ModelName           *string `json:"model_name,omitempty"`
+	ForkedFromMessageID *string `json:"forked_from_message_id,omitempty"`
+	// UserEmail is the exe.dev account that authored a user message (from the
+	// X-ExeDev-Email header the HTTPS proxy stamps). Only user messages carry
+	// it; nil otherwise (agent/tool/system rows, or direct/unauthenticated
+	// access without the header).
+	UserEmail *string `json:"user_email,omitempty"`
+}
+
+// ConversationState represents the current state of a conversation.
+// This is broadcast to all subscribers whenever the state changes.
+type ConversationState struct {
+	ConversationID string `json:"conversation_id"`
+	Working        bool   `json:"working"`
+	Model          string `json:"model,omitempty"`
+}
+
+// ConversationWithState combines a conversation with its working state.
+// Preview is the trailing text of the most recent agent message, used to
+// render a one-line summary in the conversation list without a separate
+// fetch. PreviewUpdatedAt is the agent message's CreatedAt (RFC 3339).
+type ConversationWithState struct {
+	generated.Conversation
+	Working          bool   `json:"working"`
+	GitRepoRoot      string `json:"git_repo_root,omitempty"`
+	GitWorktreeRoot  string `json:"git_worktree_root,omitempty"`
+	GitCommit        string `json:"git_commit,omitempty"`
+	GitSubject       string `json:"git_subject,omitempty"`
+	SubagentCount    int64  `json:"subagent_count"`
+	Preview          string `json:"preview,omitempty"`
+	PreviewUpdatedAt string `json:"preview_updated_at,omitempty"`
+	// MaxSequenceID is the highest message sequence_id stored for this
+	// conversation. Clients use it to decide whether their cached snapshot
+	// is up to date without a separate /api/conversation/<id> roundtrip.
+	MaxSequenceID int64 `json:"max_sequence_id"`
+	// Participants are the distinct exe.dev accounts (from the X-ExeDev-Email
+	// header) that authored messages in this conversation, sorted. Clients use
+	// it to filter the list down to their own conversations. Empty for
+	// conversations whose messages all arrived without the header (direct or
+	// local access) or predate the user_email column.
+	Participants []db.ConversationParticipant `json:"participants,omitempty"`
+	// SearchSnippet is set on hits from /api/conversations/search. Matched
+	// terms are wrapped in \x02..\x03 sentinels (see db.SnippetMarkStart /
+	// SnippetMarkEnd) so the UI can substitute spans without HTML injection.
+	SearchSnippet string `json:"search_snippet,omitempty"`
+}
+
+// StreamResponse represents the response format for conversation streaming
+type StreamResponse struct {
+	// ConversationID identifies which conversation this per-conversation
+	// event belongs to. The unified /api/stream2 delivers events for all
+	// active conversations on a single connection; clients route by this
+	// field. Server-wide events (heartbeat, list patches, list updates)
+	// leave it empty.
+	ConversationID    string                  `json:"conversation_id,omitempty"`
+	Messages          []APIMessage            `json:"messages,omitempty"`
+	Conversation      *generated.Conversation `json:"conversation,omitempty"`
+	ConversationState *ConversationState      `json:"conversation_state,omitempty"`
+	ContextWindowSize uint64                  `json:"context_window_size,omitempty"`
+	// ConversationListUpdate is set when another conversation in the list changed
+	ConversationListUpdate *ConversationListUpdate `json:"conversation_list_update,omitempty"`
+	// ConversationListPatch is set when requested conversation-list JSON Patch diffs are available.
+	ConversationListPatch *ConversationListPatchEvent `json:"conversation_list_patch,omitempty"`
+	// Heartbeat indicates this is a heartbeat message (no new data, just keeping connection alive)
+	Heartbeat bool `json:"heartbeat,omitempty"`
+	// NotificationEvent is set when a notification-worthy event occurs (e.g. agent finished).
+	NotificationEvent *notifications.Event `json:"notification_event,omitempty"`
+	// DiskSpaceStatus is global, including an immediate snapshot on reconnect.
+	DiskSpaceStatus *diskspace.DiskSpaceStatus `json:"disk_space_status,omitempty"`
+	// ToolProgress is set when a running tool reports partial output.
+	ToolProgress *llm.ToolProgress `json:"tool_progress,omitempty"`
+	// StreamDelta is set when the LLM streams partial text content.
+	StreamDelta *llm.StreamDelta `json:"stream_delta,omitempty"`
+	// MaxSequenceID, when non-zero, reports the highest message sequence_id
+	// known for this conversation. Set by the REST GET /api/conversation/<id>
+	// handler (computed from the returned message list) so the client can
+	// initialize its known-max cursor. Stream events leave this 0; clients
+	// derive max from delivered messages.
+	MaxSequenceID int64 `json:"max_sequence_id,omitempty"`
+	// SnapshotComplete marks the boundary between the stream's initial
+	// replay and live updates. Sent exactly once per connection,
+	// unconditionally — even when the replay is empty. Clients can use
+	// it to hide a loading spinner, or — for "peek and disconnect" use
+	// cases like notification previews — to close the connection.
+	SnapshotComplete bool `json:"snapshot_complete,omitempty"`
+}
+
+// LLMProvider is an interface for getting LLM services
+type LLMProvider interface {
+	GetService(modelID string) (llm.Service, error)
+	GetAvailableModels() []string
+	GetWorkhorseService(conversationModelID string) (llm.Service, error)
+	HasModel(modelID string) bool
+	GetModelInfo(modelID string) *models.ModelInfo
+	RefreshCustomModels() error
+}
+
+// NewLLMServiceManager creates a new LLM service manager from config.
+func NewLLMServiceManager(cfg *LLMConfig) LLMProvider {
+	manager, err := models.NewManager(&models.Config{
+		Models: cfg.Models,
+		Logger: cfg.Logger,
+		DB:     cfg.DB,
+		HTTPC:  cfg.HTTPC,
+	})
+	if err != nil {
+		cfg.Logger.Error("Failed to create models manager", "error", err)
+	}
+	return manager
+}
+
+// toAPIMessages converts database messages to API messages.
+// Image data is replaced with URLs and opaque provider continuation metadata
+// is stripped from llm_data before it is sent to clients.
+func toAPIMessages(messages []generated.Message) []APIMessage {
+	apiMessages := make([]APIMessage, len(messages))
+	for i, msg := range messages {
+		// llmData and endOfTurn both come from a single parse of llm_data
+		// (see llmDataForAPI). On big conversations this loop runs over every
+		// message in the history, so parsing the JSON once instead of once
+		// per concern (image stripping + end-of-turn) is a meaningful saving.
+		llmData, endOfTurnPtr := llmDataForAPI(msg.LlmData, msg.Type, msg.MessageID)
+
+		apiMsg := APIMessage{
+			MessageID:           msg.MessageID,
+			ConversationID:      msg.ConversationID,
+			SequenceID:          msg.SequenceID,
+			Type:                msg.Type,
+			LlmData:             llmData,
+			UserData:            msg.UserData,
+			UsageData:           msg.UsageData,
+			OtherUsageData:      msg.OtherUsageData,
+			CreatedAt:           msg.CreatedAt,
+			DisplayData:         msg.DisplayData,
+			Generation:          msg.Generation,
+			EndOfTurn:           endOfTurnPtr,
+			LLMAPIURL:           msg.LlmApiUrl,
+			ModelName:           msg.ModelName,
+			ForkedFromMessageID: msg.ForkedFromMessageID,
+			UserEmail:           msg.UserEmail,
+		}
+		apiMessages[i] = apiMsg
+	}
+	return apiMessages
+}
+
+// llmDataForAPI prepares a message's llm_data for the API in a single JSON
+// parse, returning client-safe data plus the end-of-turn flag for agent
+// messages. It combines what stripImageDataFromLLMData and
+// extractEndOfTurn did separately, each of which unmarshalled the full
+// message; doing it once halves the JSON work in the per-conversation
+// backfill, which dominates stream connect time for long conversations.
+//
+// On any parse error it falls back to returning llm_data unchanged with no
+// end-of-turn flag, matching the prior helpers' lenient behavior.
+func llmDataForAPI(llmData *string, msgType, messageID string) (*string, *bool) {
+	if llmData == nil {
+		return nil, nil
+	}
+	var msg llm.Message
+	if err := json.Unmarshal([]byte(*llmData), &msg); err != nil {
+		return llmData, nil
+	}
+
+	var endOfTurnPtr *bool
+	if msgType == string(db.MessageTypeAgent) {
+		eot := msg.EndOfTurn
+		endOfTurnPtr = &eot
+	}
+
+	changed := stripImageDataFromContents(msg.Content, messageID)
+	for i := range msg.Content {
+		if msgType == string(db.MessageTypeAgent) && msg.Content[i].Type == llm.ContentTypeText {
+			// Stripping shifts the text under any Citations annotation, whose
+			// start_index/end_index are relative to the raw text. No client
+			// places citations by offset — they render one marker per cited
+			// URL — but anything that starts to must rebase them here.
+			if stripped := llm.StripInlineCitationMarkers(msg.Content[i].Text); stripped != msg.Content[i].Text {
+				msg.Content[i].Text = stripped
+				changed = true
+			}
+		}
+		if msg.Content[i].OpenAIResponsesReasoning != nil {
+			msg.Content[i].OpenAIResponsesReasoning = nil
+			changed = true
+		}
+	}
+	if !changed {
+		return llmData, endOfTurnPtr
+	}
+	stripped, err := json.Marshal(msg)
+	if err != nil {
+		return llmData, endOfTurnPtr
+	}
+	s := string(stripped)
+	return &s, endOfTurnPtr
+}
+
+func extractEndOfTurn(raw string) (bool, bool) {
+	var message llm.Message
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		return false, false
+	}
+	return message.EndOfTurn, true
+}
+
+// calculateContextWindowSize returns the context window usage from the most recent message with non-zero usage.
+// Each API call's input tokens represent the full conversation history sent to the model,
+// so we only need the last message's tokens (not accumulated across all messages).
+// The total input includes regular input tokens plus cached tokens (both read and created).
+// Messages without usage data (user messages, tool messages, etc.) are skipped.
+//
+// Only messages from the latest generation are considered: when a conversation
+// starts a new generation (e.g. via distill-new-generation), older generations'
+// usage no longer reflects what will be sent to the LLM.
+func calculateContextWindowSize(messages []APIMessage) uint64 {
+	// Determine the latest generation present in the messages.
+	var latestGen int64
+	for i := range messages {
+		if messages[i].Generation > latestGen {
+			latestGen = messages[i].Generation
+		}
+	}
+	// Find the last message with non-zero usage data within the latest generation.
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Generation != latestGen {
+			continue
+		}
+		if msg.UsageData == nil {
+			continue
+		}
+		var usage llm.Usage
+		if err := json.Unmarshal([]byte(*msg.UsageData), &usage); err != nil {
+			continue
+		}
+		ctxUsed := usage.ContextWindowUsed()
+		if ctxUsed == 0 {
+			continue
+		}
+		// Return total context window used: all input tokens + output tokens
+		// This represents the full context that would be sent for the next turn
+		return ctxUsed
+	}
+	return 0
+}
+
+// isAgentEndOfTurn checks if a message is an agent or error message with end_of_turn=true.
+// This indicates the agent loop has finished processing.
+func isAgentEndOfTurn(msg *generated.Message) bool {
+	if msg == nil {
+		return false
+	}
+	// Agent and error messages can have end_of_turn
+	if msg.Type != string(db.MessageTypeAgent) && msg.Type != string(db.MessageTypeError) {
+		return false
+	}
+	if msg.LlmData == nil {
+		return false
+	}
+	endOfTurn, ok := extractEndOfTurn(*msg.LlmData)
+	if !ok {
+		return false
+	}
+	return endOfTurn
+}
+
+// calculateContextWindowSizeFromMsg calculates context window usage from a single message.
+// Returns 0 if the message has no usage data (e.g., user messages), in which case
+// the client should keep its previous context window value.
+func calculateContextWindowSizeFromMsg(msg *generated.Message) uint64 {
+	if msg == nil || msg.UsageData == nil {
+		return 0
+	}
+	var usage llm.Usage
+	if err := json.Unmarshal([]byte(*msg.UsageData), &usage); err != nil {
+		return 0
+	}
+	return usage.ContextWindowUsed()
+}
+
+// ConversationListUpdate represents an update to the conversation list
+type ConversationListUpdate struct {
+	Type            string                  `json:"type"` // "update", "delete"
+	Conversation    *generated.Conversation `json:"conversation,omitempty"`
+	ConversationID  string                  `json:"conversation_id,omitempty"` // For deletes
+	GitRepoRoot     string                  `json:"git_repo_root,omitempty"`
+	GitWorktreeRoot string                  `json:"git_worktree_root,omitempty"`
+}
+
+// Server manages the HTTP API and active conversations
+type Server struct {
+	db                       *db.DB
+	llmManager               LLMProvider
+	toolSetConfig            claudetool.ToolSetConfig
+	activeConversations      map[string]*ConversationManager
+	mu                       sync.Mutex
+	deletingConversations    map[string]bool
+	logger                   *slog.Logger
+	predictableOnly          bool
+	defaultModel             string
+	requireHeader            string
+	refreshBuiltModels       func(context.Context) ([]models.Built, error)
+	conversationGroup        singleflight.Group[string, *ConversationManager]
+	versionChecker           *VersionChecker
+	notifDispatcher          *notifications.Dispatcher
+	conversationListStream   *conversationListStream
+	conversationListGitCache *conversationListGitCache
+	// fileListCache memoizes working-directory file listings for the fuzzy
+	// file finder (/api/find-files) so a burst of queries lists the tree once.
+	fileListCache *fileListCache
+	// exeNotifyOnce guards lazy detection of the exe.dev "notify" integration
+	// (push notifications). exeNotifyDetected caches the result.
+	exeNotifyOnce     sync.Once
+	exeNotifyDetected bool
+	// streamPub is the server-wide subpub that fans out per-conversation
+	// events to every /api/stream2 subscriber. Events are tagged with their
+	// ConversationID so clients can route them.
+	streamPub   *subpub.SubPub[StreamResponse]
+	diskSpace   *diskSpaceMonitor
+	shutdownCh  chan struct{} // Signals background routines to stop
+	listenPort  int           // TCP port the server is listening on
+	terminals   *TerminalSessions
+	exitDelay   time.Duration
+	exitProcess func(int)
+
+	// Banner, when non-empty, is shown in a full-width bar at the top of
+	// the UI. Useful for marking demo instances so they're not confused
+	// with the primary Shelley. Set by `serve --banner`.
+	Banner string
+
+	// hooksDir is the directory searched for user hook scripts
+	// (end-of-turn, new-conversation). Defaults to
+	// $HOME/.config/shelley/hooks; tests override it to a per-test
+	// temp dir to avoid racing on $HOME with other parallel tests
+	// that invoke hooks via the server.
+	hooksDir string
+
+	// piDistillKeepRecentTokens overrides the pi-distillation recent-token
+	// retention budget. Zero means use defaultPiDistillSettings. Tests set it
+	// to force summarization without a giant transcript.
+	piDistillKeepRecentTokens int
+
+	// IndexedDB cache encryption master secret — see cache_key.go.
+	// Lives on the Server (not a package-global) so tests with
+	// independent DBs don't share state.
+	cacheMasterSecretMu    sync.Mutex
+	cacheMasterSecretCache []byte
+}
+
+// NewServer creates a new server instance
+func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool.ToolSetConfig, logger *slog.Logger, predictableOnly bool, defaultModel, requireHeader string) *Server {
+	s := &Server{
+		db:                    database,
+		llmManager:            llmManager,
+		toolSetConfig:         toolSetConfig,
+		activeConversations:   make(map[string]*ConversationManager),
+		deletingConversations: make(map[string]bool),
+		logger:                logger,
+		predictableOnly:       predictableOnly,
+		defaultModel:          defaultModel,
+		requireHeader:         requireHeader,
+		versionChecker:        NewVersionChecker(),
+		notifDispatcher:       notifications.NewDispatcher(logger),
+		shutdownCh:            make(chan struct{}),
+		hooksDir:              defaultHooksDir(),
+		exitDelay:             500 * time.Millisecond,
+		exitProcess:           os.Exit,
+	}
+
+	s.conversationListStream = newConversationListStream(s)
+	s.streamPub = subpub.New[StreamResponse]()
+	s.conversationListGitCache = newConversationListGitCache()
+	s.fileListCache = newFileListCache()
+
+	// Persistent terminal sessions live alongside the database so that they
+	// survive shelley restarts. In tests DBPath is empty; use a unique
+	// per-process dir so concurrent tests don't see each other.
+	var termDir string
+	if DBPath != "" {
+		termDir = filepath.Join(filepath.Dir(DBPath), "terminals")
+	} else {
+		td, err := os.MkdirTemp("", "shelley-terminals-")
+		if err != nil {
+			panic(fmt.Errorf("terminal sessions tempdir: %w", err))
+		}
+		termDir = td
+	}
+	ts, terr := NewTerminalSessions(termDir, logger)
+	if terr != nil {
+		panic(fmt.Errorf("init terminal sessions in %s: %w", termDir, terr))
+	}
+	s.terminals = ts
+
+	// Any committed write may change the conversation list. Refresh after
+	// every Tx commit so SSE clients always see the current state. This is
+	// the single source of truth for the patch stream — no caller needs to
+	// invoke notifyConversationListChanged for ordinary database writes.
+	database.Pool().OnCommit(s.notifyConversationListChanged)
+
+	// Set up subagent support
+	s.toolSetConfig.SubagentRunner = NewSubagentRunner(s)
+	s.toolSetConfig.SubagentDB = &db.SubagentDBAdapter{DB: database}
+	s.toolSetConfig.MaxSubagentDepth = 1 // Only top-level conversations can spawn subagents
+
+	return s
+}
+
+// SetModelRefresher configures the user-triggered model catalog refresh.
+func (s *Server) SetModelRefresher(refresh func(context.Context) ([]models.Built, error)) {
+	s.refreshBuiltModels = refresh
+}
+
+// RegisterNotificationChannel adds a backend notification channel to the dispatcher.
+func (s *Server) RegisterNotificationChannel(ch notifications.Channel) {
+	s.notifDispatcher.Register(ch)
+	s.logger.Info("registered notification channel", "channel", ch.Name())
+}
+
+// RegisterRoutes registers HTTP routes on the given mux
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	// API routes - wrap with compression where beneficial
+	mux.Handle("/api/conversations", compressionHandler(http.HandlerFunc(s.handleConversations)))
+	mux.Handle("GET /api/conversations/snapshot", compressionHandler(http.HandlerFunc(s.handleConversationsSnapshot)))
+	mux.Handle("GET /api/conversations/search", compressionHandler(http.HandlerFunc(s.handleSearchConversations)))
+	mux.Handle("GET /api/stream2", http.HandlerFunc(s.handleStream))
+	mux.HandleFunc("POST /api/disk-space/dismiss", s.handleDismissDiskSpace)
+	mux.Handle("/api/conversations/archived", compressionHandler(http.HandlerFunc(s.handleArchivedConversations)))
+	mux.Handle("/api/conversations/new", http.HandlerFunc(s.handleNewConversation))                         // Small response
+	mux.Handle("POST /api/conversations/draft", http.HandlerFunc(s.handleCreateDraft))                      // Small response
+	mux.Handle("/api/conversations/distill-new-generation", http.HandlerFunc(s.handleDistillNewGeneration)) // Small response
+	mux.Handle("/api/conversation/", http.StripPrefix("/api/conversation", s.conversationMux()))
+	mux.Handle("/api/conversation-by-slug/", compressionHandler(http.HandlerFunc(s.handleConversationBySlug)))
+	mux.Handle("/api/validate-cwd", http.HandlerFunc(s.handleValidateCwd)) // Small response
+	mux.Handle("POST /api/model-costs", http.HandlerFunc(s.handleModelCosts))
+	mux.Handle("/api/list-directory", compressionHandler(http.HandlerFunc(s.handleListDirectory)))
+	mux.Handle("/api/find-files", compressionHandler(http.HandlerFunc(s.handleFindFiles)))
+	mux.Handle("/api/create-directory", http.HandlerFunc(s.handleCreateDirectory))
+	mux.Handle("/api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
+	mux.Handle("/api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
+	mux.Handle("/api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
+	mux.Handle("/api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
+	mux.Handle("/api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
+	mux.Handle("/api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
+	mux.Handle("/api/git/file-diff/", compressionHandler(http.HandlerFunc(s.handleGitFileDiff)))
+	mux.Handle("/api/git/commit-messages", compressionHandler(http.HandlerFunc(s.handleGitCommitMessages)))
+	mux.Handle("/api/git/amend-message", http.HandlerFunc(s.handleGitAmendMessage))
+	mux.Handle("/api/git/create-worktree", http.HandlerFunc(s.handleGitCreateWorktree))                            // Small response
+	mux.HandleFunc("POST /api/upload/raw", s.handleUploadRaw)                                                      // Raw binary uploads
+	mux.HandleFunc("GET /api/upload/raw", s.handleUploadRawProbe)                                                  // Capability probe
+	mux.HandleFunc("/api/upload", s.handleUpload)                                                                  // Multipart binary uploads
+	mux.HandleFunc("/api/read", s.handleRead)                                                                      // Serves images from disk
+	mux.HandleFunc("GET /api/message/{message_id}/image/{content_index}/{toolresult_index}", s.handleMessageImage) // Serves images from DB
+	mux.HandleFunc("GET /api/message/{message_id}/file", s.handleMessageFile)                                      // Serves local images referenced in message markdown
+	mux.Handle("/api/write-file", http.HandlerFunc(s.handleWriteFile))                                             // Small response
+	mux.Handle("/api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                           // Reads arbitrary text files as JSON
+	mux.Handle("/api/user-agents-md", http.HandlerFunc(s.handleUserAgentsMd))                                      // Small response
+	mux.HandleFunc("/api/exec-ws", s.handleExecWS)                                                                 // Websocket for shell commands
+	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions
+	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)
+	mux.HandleFunc("POST /api/terminals/{id}/kill", s.handleTerminalDelete)
+	mux.HandleFunc("PUT /api/terminals/{id}/scope", s.handleTerminalScope) // Move a terminal between conversation-local and global
+
+	// Custom models API
+	mux.Handle("/api/custom-models", http.HandlerFunc(s.handleCustomModels))
+	mux.Handle("/api/custom-models/", http.HandlerFunc(s.handleCustomModel))
+	mux.Handle("/api/custom-models-test", http.HandlerFunc(s.handleTestModel))
+
+	// Notification channels API
+	mux.Handle("/api/notification-channels", http.HandlerFunc(s.handleNotificationChannels))
+	mux.Handle("/api/notification-channels/", http.HandlerFunc(s.handleNotificationChannel))
+	mux.Handle("/api/notification-channel-types", http.HandlerFunc(s.handleNotificationChannelTypes))
+
+	// Models API (dynamic list refresh)
+	mux.Handle("POST /api/models/refresh", compressionHandler(http.HandlerFunc(s.handleModelRefresh)))
+	mux.Handle("/api/models", compressionHandler(http.HandlerFunc(s.handleModels)))
+	mux.Handle("/api/tools", http.HandlerFunc(s.handleTools))
+
+	// Version endpoints
+	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
+	mux.Handle("GET /version-check", http.HandlerFunc(s.handleVersionCheck))
+	mux.Handle("GET /version-changelog", http.HandlerFunc(s.handleVersionChangelog))
+	mux.Handle("POST /upgrade", http.HandlerFunc(s.handleUpgrade))
+	mux.Handle("POST /upgrade-headless-shell", http.HandlerFunc(s.handleUpgradeHeadlessShell))
+	mux.Handle("POST /exit", http.HandlerFunc(s.handleExit))
+	mux.Handle("GET /settings", http.HandlerFunc(s.handleGetSettings))
+	mux.Handle("POST /settings", http.HandlerFunc(s.handleSetSetting))
+	mux.Handle("GET /feature-flags", http.HandlerFunc(s.handleGetFeatureFlags))
+	mux.Handle("POST /feature-flags", http.HandlerFunc(s.handleSetFeatureFlag))
+	mux.Handle("DELETE /feature-flags", http.HandlerFunc(s.handleDeleteFeatureFlag))
+
+	// IndexedDB cache encryption: hand out a per-browser AES-GCM key
+	// derived from a server master secret + per-browser session cookie.
+	mux.Handle("GET /api/cache-key", http.HandlerFunc(s.handleCacheKey))
+	mux.Handle("POST /api/cache-session/clear", http.HandlerFunc(s.handleCacheSessionClear))
+
+	// Debug endpoints
+	mux.Handle("GET /debug/conversations", http.HandlerFunc(s.handleDebugConversationsPage))
+	mux.Handle("GET /debug/conversation-stream", http.HandlerFunc(s.handleDebugConversationStreamPage))
+	mux.Handle("GET /debug/conversation-stream/history", http.HandlerFunc(s.handleDebugConversationStreamHistory))
+	mux.Handle("GET /debug/stylebook", http.HandlerFunc(s.handleDebugStylebook))
+	mux.Handle("GET /debug/loremipsum", http.HandlerFunc(s.handleDebugLoremIpsum))
+	mux.Handle("POST /debug/loremipsum", http.HandlerFunc(s.handleDebugLoremIpsum))
+	mux.Handle("GET /debug/histograms", http.HandlerFunc(s.handleDebugHistograms))
+
+	// pprof endpoints
+	mux.Handle("GET /debug/pprof/", http.HandlerFunc(pprof.Index))
+	mux.Handle("GET /debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+	mux.Handle("GET /debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	mux.Handle("GET /debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+	mux.Handle("GET /debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+
+	// Serve embedded UI assets
+	mux.Handle("/", s.staticHandler(ui.Assets()))
+}
+
+// handleValidateCwd validates that a path exists and is a directory
+func (s *Server) handleValidateCwd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": false,
+			"error": "path is required",
+		})
+		return
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": false,
+				"error": "directory does not exist",
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": false,
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	if !info.IsDir() {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": false,
+			"error": "path is not a directory",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"valid": true,
+	})
+}
+
+// DirectoryEntry represents a single directory entry for the directory picker
+type DirectoryEntry struct {
+	Name           string `json:"name"`
+	IsDir          bool   `json:"is_dir"`
+	GitHeadSubject string `json:"git_head_subject,omitempty"`
+}
+
+// ListDirectoryResponse is the response from the list-directory endpoint
+type ListDirectoryResponse struct {
+	Path           string           `json:"path"`
+	Parent         string           `json:"parent"`
+	Entries        []DirectoryEntry `json:"entries"`
+	GitHeadSubject string           `json:"git_head_subject,omitempty"`
+	// GitRepoRoot is the toplevel of the worktree containing Path (if any).
+	// For a path inside a worktree, this is the worktree's root directory.
+	GitRepoRoot string `json:"git_repo_root,omitempty"`
+	// GitWorktreeRoot is the main repository root, set only when GitRepoRoot
+	// is a linked worktree (different from the main repo).
+	GitWorktreeRoot string `json:"git_worktree_root,omitempty"`
+}
+
+// handleListDirectory lists the contents of a directory for the directory picker
+func (s *Server) handleListDirectory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		// Default to home directory or root
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			path = "/"
+		} else {
+			path = homeDir
+		}
+	}
+
+	// Clean and resolve the path
+	path = filepath.Clean(path)
+
+	// Verify path exists and is a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "directory does not exist",
+			})
+		} else if os.IsPermission(err) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "permission denied",
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	if !info.IsDir() {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "path is not a directory",
+		})
+		return
+	}
+
+	// Read directory contents
+	dirEntries, err := os.ReadDir(path)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if os.IsPermission(err) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "permission denied",
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	// Build response with only directories (for directory picker)
+	var entries []DirectoryEntry
+	for _, entry := range dirEntries {
+		// Only include directories
+		if entry.IsDir() {
+			entries = append(entries, DirectoryEntry{
+				Name:  entry.Name(),
+				IsDir: true,
+			})
+		}
+	}
+
+	// Check which entries are git repo roots and fetch their HEAD subjects.
+	// Each check execs git, so run them concurrently (bounded): serially, a
+	// directory full of repos (e.g. a worktree farm in $HOME) took multiple
+	// seconds to list.
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i := range entries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			entryPath := filepath.Join(path, entries[i].Name)
+			if isGitRepo(entryPath) {
+				if subject := getGitHeadSubject(entryPath); subject != "" {
+					entries[i].GitHeadSubject = subject
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Sort entries: non-hidden first, then hidden (.*), alphabetically within each group
+	sort.Slice(entries, func(i, j int) bool {
+		iHidden := strings.HasPrefix(entries[i].Name, ".")
+		jHidden := strings.HasPrefix(entries[j].Name, ".")
+		if iHidden != jHidden {
+			return !iHidden // non-hidden comes first
+		}
+		return entries[i].Name < entries[j].Name
+	})
+
+	// Calculate parent directory
+	parent := filepath.Dir(path)
+	if parent == path {
+		// At root, no parent
+		parent = ""
+	}
+
+	response := ListDirectoryResponse{
+		Path:    path,
+		Parent:  parent,
+		Entries: entries,
+	}
+
+	// Discover git info for the displayed path. Works for any path inside a
+	// repo, not just the repo root itself.
+	if repoRoot, err := getGitRoot(path); err == nil && repoRoot != "" {
+		response.GitRepoRoot = repoRoot
+		response.GitHeadSubject = getGitHeadSubject(repoRoot)
+		if main := getGitWorktreeRoot(repoRoot); main != "" {
+			response.GitWorktreeRoot = main
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// getGitHeadSubject returns the subject line of HEAD commit for a git repository.
+// Returns empty string if unable to get the subject.
+// isGitRepo checks if the given path is a git repository root.
+// Returns true for both regular repos (.git directory) and worktrees (.git file with gitdir:).
+func isGitRepo(dirPath string) bool {
+	gitPath := filepath.Join(dirPath, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return false
+	}
+	if fi.IsDir() {
+		return true // regular .git directory
+	}
+	if fi.Mode().IsRegular() {
+		// Check if it's a worktree .git file
+		content, err := os.ReadFile(gitPath)
+		if err == nil && strings.HasPrefix(string(content), "gitdir:") {
+			return true
+		}
+	}
+	return false
+}
+
+// gitInfoForCwd returns the git repo root and worktree root for a given cwd.
+// Returns empty strings if not in a git repo.
+func gitInfoForCwd(cwd string) (repoRoot, worktreeRoot string) {
+	root, err := getGitRoot(cwd)
+	if err != nil {
+		return "", ""
+	}
+	return root, getGitWorktreeRoot(root)
+}
+
+// getGitHeadSubject returns the subject line of HEAD commit for a git repository.
+// Returns empty string if unable to get the subject.
+func getGitHeadSubject(repoPath string) string {
+	cmd := exec.Command("git", "log", "-1", "--format=%s")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// getGitWorktreeRoot returns the main repository root if the given path is
+// a git worktree (not the main repo itself). Returns "" otherwise.
+func getGitWorktreeRoot(repoPath string) string {
+	// Get the worktree's git dir and the common (main repo) git dir
+	cmd := exec.Command("git", "rev-parse", "--git-dir", "--git-common-dir")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)
+	if len(lines) != 2 {
+		return ""
+	}
+	gitDir := lines[0]
+	commonDir := lines[1]
+
+	// Resolve relative paths
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repoPath, gitDir)
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repoPath, commonDir)
+	}
+	gitDir = filepath.Clean(gitDir)
+	commonDir = filepath.Clean(commonDir)
+
+	// If they're the same, this is the main repo, not a worktree
+	if gitDir == commonDir {
+		return ""
+	}
+
+	// The main repo root is the parent of the common .git dir
+	return filepath.Dir(commonDir)
+}
+
+// handleCreateDirectory creates a new directory
+func (s *Server) handleCreateDirectory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	if req.Path == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "path is required",
+		})
+		return
+	}
+
+	// Clean the path
+	path := filepath.Clean(req.Path)
+
+	// Check if path already exists
+	if _, err := os.Stat(path); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "path already exists",
+		})
+		return
+	}
+
+	// Verify parent directory exists
+	parentDir := filepath.Dir(path)
+	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "parent directory does not exist",
+		})
+		return
+	}
+
+	// Create the directory (only the final directory, not parents)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if os.IsPermission(err) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "permission denied",
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"path": path,
+	})
+}
+
+// getOrCreateConversationManager gets an existing conversation manager or creates a new one.
+func (s *Server) getOrCreateConversationManager(ctx context.Context, conversationID, userEmail string) (*ConversationManager, error) {
+	manager, err, _ := s.conversationGroup.Do(conversationID, func() (*ConversationManager, error) {
+		s.mu.Lock()
+		if s.deletingConversations[conversationID] {
+			s.mu.Unlock()
+			return nil, errConversationDeleting
+		}
+		if manager, exists := s.activeConversations[conversationID]; exists {
+			s.mu.Unlock()
+			manager.Touch()
+			return manager, nil
+		}
+		s.mu.Unlock()
+
+		// BTW readers use the ordinary conversation entry point but need their
+		// restricted tool depth and request decorator before hydration.
+		conversation, err := s.db.GetConversationByID(ctx, conversationID)
+		if err != nil {
+			return nil, err
+		}
+
+		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
+		}
+		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
+			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
+		}
+		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
+			return s.recordMessages(ctx, conversationID, msgs)
+		}
+
+		btwIdentity, btwReader := db.ManagedBtwReaderIdentity(*conversation)
+		s.mu.Lock()
+		parentDeleting := btwReader && s.deletingConversations[btwIdentity.ParentConversationID]
+		s.mu.Unlock()
+		if parentDeleting {
+			return nil, errConversationDeleting
+		}
+		onStateChange := func(state ConversationState) { s.publishConversationState(state) }
+
+		managerConfig := s.toolSetConfig
+		if btwReader {
+			managerConfig.SubagentDepth++
+		}
+		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
+		manager.userEmail = userEmail
+		manager.serverPort = s.listenPort
+		manager.btwReader = btwReader
+		if btwReader {
+			manager.decorateService = func(service llm.Service) (llm.Service, error) {
+				return newBtwService(context.Background(), s.db, btwIdentity.ParentConversationID, btwIdentity.ParentPointer, btwReaderParentHistoryLimit, service)
+			}
+		}
+		// Hydrate runs DB transactions, which fire OnCommit hooks. Those hooks
+		// (e.g. notify on the conversation list patch stream) acquire s.mu, so
+		// we must not hold it here.
+		if err := manager.Hydrate(ctx); err != nil {
+			return nil, err
+		}
+
+		s.mu.Lock()
+		if s.deletingConversations[conversationID] ||
+			(btwReader && s.deletingConversations[btwIdentity.ParentConversationID]) {
+			s.mu.Unlock()
+			manager.stopLoop()
+			return nil, errConversationDeleting
+		}
+		if existing, ok := s.activeConversations[conversationID]; ok {
+			s.mu.Unlock()
+			existing.Touch()
+			return existing, nil
+		}
+		s.activeConversations[conversationID] = manager
+		s.mu.Unlock()
+		return manager, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
+}
+
+// getOrCreateSubagentConversationManager is like getOrCreateConversationManager but
+// uses a toolSetConfig with SubagentDepth incremented by 1, preventing subagents
+// from spawning their own subagents (when MaxSubagentDepth is 1). Only this
+// subagent-tool entry point wires parent completion notification.
+func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, conversationID string) (*ConversationManager, error) {
+	manager, err, _ := s.conversationGroup.Do(conversationID, func() (*ConversationManager, error) {
+		s.mu.Lock()
+		if s.deletingConversations[conversationID] {
+			s.mu.Unlock()
+			return nil, errConversationDeleting
+		}
+		if manager, exists := s.activeConversations[conversationID]; exists {
+			s.mu.Unlock()
+			manager.Touch()
+			return manager, nil
+		}
+		s.mu.Unlock()
+
+		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
+		}
+		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
+			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
+		}
+		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
+			return s.recordMessages(ctx, conversationID, msgs)
+		}
+
+		onStateChange := func(state ConversationState) { s.publishConversationState(state) }
+
+		subagentConfig := s.toolSetConfig
+		subagentConfig.SubagentDepth++
+		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
+		manager.serverPort = s.listenPort
+		manager.onDone = func() { s.dispatchSubagentDone(conversationID) }
+		// See getOrCreateConversationManager for why we don't hold s.mu here.
+		if err := manager.Hydrate(ctx); err != nil {
+			return nil, err
+		}
+
+		s.mu.Lock()
+		if s.deletingConversations[conversationID] {
+			s.mu.Unlock()
+			manager.stopLoop()
+			return nil, errConversationDeleting
+		}
+		if existing, ok := s.activeConversations[conversationID]; ok {
+			s.mu.Unlock()
+			existing.Touch()
+			return existing, nil
+		}
+		s.activeConversations[conversationID] = manager
+		s.mu.Unlock()
+		return manager, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
+}
+
+// ExtractDisplayData extracts display data from message content for storage
+func ExtractDisplayData(message llm.Message) interface{} {
+	// Build a map of tool_use_id to tool_name for lookups
+	toolNameMap := make(map[string]string)
+	for _, content := range message.Content {
+		if content.Type == llm.ContentTypeToolUse {
+			toolNameMap[content.ID] = content.ToolName
+		}
+	}
+
+	var displayData []any
+	for _, content := range message.Content {
+		if content.Type == llm.ContentTypeToolResult && content.Display != nil {
+			// Include tool name if we can find it
+			toolName := toolNameMap[content.ToolUseID]
+			displayData = append(displayData, map[string]any{
+				"tool_use_id": content.ToolUseID,
+				"tool_name":   toolName,
+				"display":     content.Display,
+			})
+		}
+	}
+
+	if len(displayData) > 0 {
+		return displayData
+	}
+	return nil
+}
+
+// recordMessage records a new message to the database and also notifies subscribers
+// buildCreateMessageParams converts an llm.Message into the DB insert params,
+// applying the same message-type detection, display-data extraction, error
+// user_data stamping, and end-of-turn agent-done folding that recordMessage
+// uses. Shared by recordMessage and recordMessages.
+func (s *Server) buildCreateMessageParams(conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) (db.CreateMessageParams, error) {
+	// Log message based on role
+	if message.Role == llm.MessageRoleUser {
+		s.logger.Info("User message", "conversation_id", conversationID, "content_items", len(message.Content))
+	} else if message.Role == llm.MessageRoleAssistant {
+		s.logger.Info("Agent message", "conversation_id", conversationID, "content_items", len(message.Content), "end_of_turn", message.EndOfTurn)
+	}
+
+	messageType, err := s.getMessageType(message)
+	if err != nil {
+		return db.CreateMessageParams{}, fmt.Errorf("failed to determine message type: %w", err)
+	}
+
+	var ud interface{}
+	if len(userData) > 0 {
+		ud = userData[0]
+	}
+	// Stamp the error type + retryable flag into user_data for error messages
+	// so the UI can decide which affordance to show (Retry button for retryable
+	// llm_request errors; the "switch to Opus and continue" action for refusals)
+	// without parsing llm_data.
+	if message.ErrorType != llm.ErrorTypeNone && ud == nil {
+		udMap := map[string]any{
+			"error_type": string(message.ErrorType),
+			"retryable":  message.ErrorRetryable,
+		}
+		// Surface the provider's structured refusal reason so the UI can show the
+		// user WHY the model declined (Anthropic's stop_details).
+		if message.RefusalCategory != "" {
+			udMap["refusal_category"] = message.RefusalCategory
+		}
+		if message.RefusalExplanation != "" {
+			udMap["refusal_explanation"] = message.RefusalExplanation
+		}
+		ud = udMap
+	}
+	// End-of-turn agent and error messages mean the agent has finished. Fold
+	// the agent_working=false flip into the message-INSERT Tx so a single
+	// OnCommit hook emits one list-patch carrying both, instead of two
+	// patches where the first carries the stale pre-flip working=true row
+	// snapshot — that was the scroll-behavior.spec.ts "agent-thinking stays
+	// visible" flake. Mirror of AcceptUserMessage's SetAgentWorking(true)-
+	// before-recordMessage ordering on the Send side.
+	markAgentDone := (messageType == db.MessageTypeAgent || messageType == db.MessageTypeError) && message.EndOfTurn
+	params := db.CreateMessageParams{
+		ConversationID:      conversationID,
+		Type:                messageType,
+		LLMData:             message,
+		UserData:            ud,
+		UsageData:           usage,
+		LLMAPIURL:           usage.URL,
+		ModelName:           usage.Model,
+		DisplayData:         ExtractDisplayData(message),
+		ExcludedFromContext: message.ExcludedFromContext,
+		MarkAgentDone:       markAgentDone,
+	}
+	if len(otherUsage) > 0 {
+		params.OtherUsageData = otherUsage
+	}
+	return params, nil
+}
+
+func (s *Server) recordMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) error {
+	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage, userData...)
+	if err != nil {
+		return err
+	}
+	// Bump updated_at in the same Tx as the INSERT so the conversation
+	// re-sorts to the top on a single commit, rather than a second
+	// UpdateConversationTimestamp Tx (which fired a redundant full-list
+	// recompute on its own commit hook).
+	params.BumpTimestamp = true
+	markAgentDone := params.MarkAgentDone
+	createdMsg, err := s.db.CreateMessage(ctx, params)
+	if err != nil {
+		return fmt.Errorf("failed to create message: %w", err)
+	}
+	// Sync the conversation manager's in-memory agentWorking flag and fire
+	// onStateChange / onDone now that the DB has committed. The persisted
+	// agent_working=false was already written in the message-INSERT Tx above
+	// (via MarkAgentDone), so syncAgentWorking deliberately skips the DB write
+	// — re-writing it would only cost an extra commit + full-list recompute.
+	if markAgentDone {
+		s.mu.Lock()
+		mgr := s.activeConversations[conversationID]
+		s.mu.Unlock()
+		if mgr != nil {
+			mgr.syncAgentWorking(false)
+		}
+	}
+
+	// Touch active manager activity time if present and bump its max sequence ID.
+	s.mu.Lock()
+	mgr, ok := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if ok {
+		mgr.Touch()
+	}
+
+	// Notify subscribers with only the new message - use WithoutCancel because
+	// the HTTP request context may be cancelled after the handler returns, but
+	// we still want the notification to complete so SSE clients see the message immediately
+	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
+
+	return nil
+}
+
+// recordDrainedQueuedMessage records a queued user message at drain time as a
+// real, immutable user row AND removes its entry from the conversation's
+// queued_messages array in the SAME Tx (via CreateMessageParams.RemoveQueuedID).
+// This atomicity is the whole point: if the insert+removal Tx aborts (crash,
+// ctx cancel, error), neither the row nor the array change persists, so Hydrate
+// can't re-feed an already-delivered message as a duplicate. Mirrors
+// recordMessage's manager-sync + notify tail.
+//
+// userEmail is the exe.dev author captured at queue time (drain runs on a
+// background context, so it can't be read from the request here); it is
+// stamped onto the new row. Empty when the queuing request carried no header.
+func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string) error {
+	params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil)
+	if err != nil {
+		return err
+	}
+	params.BumpTimestamp = true
+	params.RemoveQueuedID = queuedID
+	params.UserEmail = userEmail
+	createdMsg, err := s.db.CreateMessage(ctx, params)
+	if err != nil {
+		return fmt.Errorf("failed to create drained queued message: %w", err)
+	}
+
+	s.mu.Lock()
+	mgr, ok := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if ok {
+		mgr.Touch()
+	}
+
+	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
+	return nil
+}
+
+// userEmailContextKey carries the authenticated exe.dev account (from the
+// X-ExeDev-Email header the HTTPS proxy stamps) from an HTTP handler down to
+// the message recorder, so a user turn's row can be attributed to its author.
+// Only the immediate-send path uses this; queued messages persist the email in
+// their QueuedMessage entry instead (drain runs on a background context).
+type (
+	userEmailContextKey    struct{}
+	turnUserDataContextKey struct{}
+)
+
+// contextWithUserEmail returns a child context carrying userEmail. An empty
+// string is threaded unchanged so a missing header stores NULL.
+func contextWithUserEmail(ctx context.Context, userEmail string) context.Context {
+	return context.WithValue(ctx, userEmailContextKey{}, userEmail)
+}
+
+// userEmailFromContext returns the exe.dev email stamped by contextWithUserEmail,
+// or "" if none was set.
+func userEmailFromContext(ctx context.Context) string {
+	email, _ := ctx.Value(userEmailContextKey{}).(string)
+	return email
+}
+
+func contextWithTurnUserData(ctx context.Context, userData any) context.Context {
+	return context.WithValue(ctx, turnUserDataContextKey{}, userData)
+}
+
+func turnUserDataFromContext(ctx context.Context) any {
+	return ctx.Value(turnUserDataContextKey{})
+}
+
+// recordTurnStartMessage records the user message that starts an agent turn,
+// folding the agent_working=true flip and the updated_at bump into the same Tx
+// as the message INSERT. This replaces a separate SetAgentWorking(true) commit
+// fired right before the insert: a single commit now carries the new message
+// AND working=true, so the conversation-list patch can't briefly snapshot a
+// stale working=false row (the flicker the old ordering guarded against), and
+// we drop two commits (the working flip and the timestamp bump) per turn.
+func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
+	var userData []interface{}
+	if turn := turnUserDataFromContext(ctx); turn != nil {
+		userData = append(userData, turn)
+	}
+	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage, userData...)
+	if err != nil {
+		return nil, err
+	}
+	params.MarkAgentStart = true
+	params.BumpTimestamp = true
+	// Attribute the turn-start user row to its author. recordTurnStartMessage
+	// is only ever called with a genuine user message (AcceptUserMessage's
+	// turn-start recorder), so unlike buildCreateMessageParams — which also
+	// serves tool_result rows that carry MessageRoleUser — it's safe to stamp
+	// the email here unconditionally.
+	params.UserEmail = userEmailFromContext(ctx)
+	createdMsg, err := s.db.CreateMessage(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create turn-start message: %w", err)
+	}
+
+	s.mu.Lock()
+	mgr, ok := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if ok {
+		mgr.Touch()
+	}
+
+	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
+	return createdMsg, nil
+}
+
+// recordMessages records several messages for one conversation in a SINGLE DB
+// transaction (one commit hook → one conversation-list recompute) and emits a
+// single SSE notification carrying all of them. This is the bulk counterpart to
+// recordMessage; compaction uses it to copy a whole tail of messages forward
+// without paying a full-list recompute per message.
+func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs []recordMessageInput) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	paramsList := make([]db.CreateMessageParams, 0, len(msgs))
+	for _, m := range msgs {
+		params, err := s.buildCreateMessageParams(conversationID, m.message, m.usage, m.otherUsage, m.userData...)
+		if err != nil {
+			return err
+		}
+		paramsList = append(paramsList, params)
+	}
+	// Whether any message ends the turn — used to sync the manager's in-memory
+	// agentWorking flag below, mirroring recordMessage. CreateMessages already
+	// wrote agent_working=false in the same Tx for these (via MarkAgentDone).
+	markAgentDone := false
+	for i := range paramsList {
+		if paramsList[i].MarkAgentDone {
+			markAgentDone = true
+			break
+		}
+	}
+	created, err := s.db.CreateMessages(ctx, paramsList)
+	if err != nil {
+		return fmt.Errorf("failed to create messages: %w", err)
+	}
+
+	s.mu.Lock()
+	mgr, ok := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if ok {
+		// Sync the in-memory flag / fire onStateChange now that the DB committed,
+		// same as recordMessage. The DB value is already false from the batch Tx,
+		// so the recompute finds no change and emits no extra patch.
+		if markAgentDone {
+			mgr.SetAgentWorking(false)
+		}
+		mgr.Touch()
+	}
+
+	go s.notifySubscribersNewMessages(context.WithoutCancel(ctx), conversationID, created)
+	return nil
+}
+
+// recordMessageInput is one message to record via recordMessages.
+type recordMessageInput struct {
+	message    llm.Message
+	usage      llm.Usage
+	otherUsage []llm.PurposedUsage
+	userData   []interface{}
+}
+
+// getMessageType determines the message type from an LLM message
+func (s *Server) getMessageType(message llm.Message) (db.MessageType, error) {
+	// System-generated errors are stored as error type
+	if message.ErrorType != llm.ErrorTypeNone {
+		return db.MessageTypeError, nil
+	}
+
+	switch message.Role {
+	case llm.MessageRoleUser:
+		return db.MessageTypeUser, nil
+	case llm.MessageRoleAssistant:
+		return db.MessageTypeAgent, nil
+	default:
+		// For tool messages, check if it's a tool call or tool result
+		for _, content := range message.Content {
+			if content.Type == llm.ContentTypeToolUse {
+				return db.MessageTypeTool, nil
+			}
+			if content.Type == llm.ContentTypeToolResult {
+				return db.MessageTypeTool, nil
+			}
+		}
+		return db.MessageTypeAgent, nil
+	}
+}
+
+// convertToLLMMessage converts a database message to an LLM message
+func convertToLLMMessage(msg generated.Message) (llm.Message, error) {
+	var llmMsg llm.Message
+	if msg.LlmData == nil {
+		return llm.Message{}, fmt.Errorf("message has no LLM data")
+	}
+	if err := json.Unmarshal([]byte(*msg.LlmData), &llmMsg); err != nil {
+		return llm.Message{}, fmt.Errorf("failed to unmarshal LLM data: %w", err)
+	}
+	return llmMsg, nil
+}
+
+// notifySubscribers sends conversation metadata updates (e.g., slug changes) to subscribers.
+// This is used when only the conversation data changes, not the messages.
+// Uses Broadcast instead of Publish to avoid racing with message sequence IDs.
+func (s *Server) notifySubscribers(ctx context.Context, conversationID string) {
+	s.mu.Lock()
+	manager, exists := s.activeConversations[conversationID]
+	s.mu.Unlock()
+
+	if !exists {
+		return
+	}
+
+	// Get conversation data only (no messages needed for metadata-only updates)
+	var conversation generated.Conversation
+	err := s.db.Queries(ctx, func(q *generated.Queries) error {
+		var err error
+		conversation, err = q.GetConversation(ctx, conversationID)
+		return err
+	})
+	if err != nil {
+		s.logger.Error("Failed to get conversation data for notification", "conversationID", conversationID, "error", err)
+		return
+	}
+
+	// Broadcast conversation update with no new messages.
+	// Using Broadcast instead of Publish ensures this metadata-only update
+	// doesn't race with notifySubscribersNewMessage which uses Publish with sequence IDs.
+	streamData := StreamResponse{
+		Messages:     nil, // No new messages, just conversation update
+		Conversation: &conversation,
+	}
+	manager.broadcastStream(streamData)
+
+	// Also notify conversation list subscribers (e.g., slug change)
+	s.publishConversationListUpdate(ConversationListUpdate{
+		Type:         "update",
+		Conversation: &conversation,
+	})
+}
+
+// notifySubscribersNewMessage sends a single new message to all subscribers.
+// This is more efficient than re-sending all messages on each update.
+func (s *Server) notifySubscribersNewMessage(ctx context.Context, conversationID string, newMsg *generated.Message) {
+	s.mu.Lock()
+	manager, exists := s.activeConversations[conversationID]
+	s.mu.Unlock()
+
+	if !exists {
+		return
+	}
+
+	// Get conversation data for the response
+	var conversation generated.Conversation
+	err := s.db.Queries(ctx, func(q *generated.Queries) error {
+		var err error
+		conversation, err = q.GetConversation(ctx, conversationID)
+		return err
+	})
+	if err != nil {
+		s.logger.Error("Failed to get conversation data for notification", "conversationID", conversationID, "error", err)
+		return
+	}
+
+	// Convert the single new message to API format
+	apiMessages := toAPIMessages([]generated.Message{*newMsg})
+
+	// End-of-turn agent_working flip already happened in recordMessage,
+	// in the same Tx as the message INSERT, so its list-patch already
+	// carries working=false. Just drain any queued messages now that
+	// we're idle.
+	if isAgentEndOfTurn(newMsg) {
+		go manager.drainPendingMessages(s)
+	}
+
+	// Publish only the new message
+	streamData := StreamResponse{
+		Messages:     apiMessages,
+		Conversation: &conversation,
+		// ContextWindowSize: 0 for messages without usage data (user/tool messages).
+		// With omitempty, 0 is omitted from JSON, so the UI keeps its cached value.
+		// Only agent messages have usage data, so context window updates when they arrive.
+		ContextWindowSize: calculateContextWindowSizeFromMsg(newMsg),
+	}
+	manager.publishStream(newMsg.SequenceID, streamData)
+
+	// Also notify conversation list subscribers about the update (updated_at changed)
+	s.publishConversationListUpdate(ConversationListUpdate{
+		Type:         "update",
+		Conversation: &conversation,
+	})
+}
+
+// notifySubscribersNewMessages publishes several new messages in a single SSE
+// frame. The bulk counterpart to notifySubscribersNewMessage; used by
+// recordMessages so a batch insert (e.g. compaction copying a tail forward)
+// produces one stream event instead of one per message.
+func (s *Server) notifySubscribersNewMessages(ctx context.Context, conversationID string, newMsgs []generated.Message) {
+	if len(newMsgs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	manager, exists := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if !exists {
+		return
+	}
+
+	var conversation generated.Conversation
+	err := s.db.Queries(ctx, func(q *generated.Queries) error {
+		var err error
+		conversation, err = q.GetConversation(ctx, conversationID)
+		return err
+	})
+	if err != nil {
+		s.logger.Error("Failed to get conversation data for notification", "conversationID", conversationID, "error", err)
+		return
+	}
+
+	apiMessages := toAPIMessages(newMsgs)
+
+	// If any message ends the turn, drain queued messages once.
+	for i := range newMsgs {
+		if isAgentEndOfTurn(&newMsgs[i]) {
+			go manager.drainPendingMessages(s)
+			break
+		}
+	}
+
+	// Context window from the last message that carries usage (others are 0,
+	// omitted via omitempty so the client keeps its cached value otherwise).
+	var ctxSize uint64
+	for i := len(newMsgs) - 1; i >= 0; i-- {
+		if sz := calculateContextWindowSizeFromMsg(&newMsgs[i]); sz > 0 {
+			ctxSize = sz
+			break
+		}
+	}
+
+	streamData := StreamResponse{
+		Messages:          apiMessages,
+		Conversation:      &conversation,
+		ContextWindowSize: ctxSize,
+	}
+	// Publish at the highest sequence id in the batch so resuming subscribers
+	// advance past all of them.
+	maxSeq := newMsgs[len(newMsgs)-1].SequenceID
+	manager.publishStream(maxSeq, streamData)
+
+	s.publishConversationListUpdate(ConversationListUpdate{
+		Type:         "update",
+		Conversation: &conversation,
+	})
+}
+
+// publishConversationListUpdate broadcasts a conversation list update to ALL active
+// conversation streams. This allows clients to receive updates about other conversations
+// while they're subscribed to their current conversation's stream.
+//
+// The conversation list patch stream is refreshed automatically by Pool.OnCommit
+// after every committed write Tx (see NewServer). Callers do NOT need to invoke
+// this function for that purpose. It is retained only to fan the legacy
+// `conversation_list_update` SSE field out to active conversation managers,
+// which older clients (notably iOS) still rely on.
+
+// notifyConversationListChanged recomputes the conversation list patch
+// stream so subscribers receive a patch event that reflects the latest
+// state. It is registered as a Pool.OnCommit hook so every successful
+// write Tx triggers a refresh; this is the single source of truth for the
+// patch stream.
+//
+// Note: this method runs synchronously on whatever goroutine fired the
+// commit. The patch stream's recompute is itself serialized internally,
+// so concurrent commits queue up cleanly.
+func (s *Server) notifyConversationListChanged() {
+	// Deliberately do NOT clear conversationListGitCache here. The cache
+	// exists precisely so that the patch recompute (which runs on every DB
+	// commit) doesn't shell out to git for every conversation in the list.
+	// Git state only changes through user/agent git operations, not through
+	// Shelley's own DB writes; the cache's per-read HEAD fingerprint catches
+	// real changes (commits, checkouts, resets) on the next list refresh.
+	if err := s.conversationListStream.notify(context.Background()); err != nil {
+		s.logger.Error("failed to publish conversation list patch", "error", err)
+	}
+}
+
+func (s *Server) publishConversationListUpdate(update ConversationListUpdate) {
+	// Populate git info from conversation cwd
+	if update.Conversation != nil && update.Conversation.Cwd != nil {
+		update.GitRepoRoot, update.GitWorktreeRoot = gitInfoForCwd(*update.Conversation.Cwd)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	streamData := StreamResponse{ConversationListUpdate: &update}
+	if update.Conversation != nil {
+		streamData.ConversationID = update.Conversation.ConversationID
+	}
+	// /api/stream2 subscribers get a single fan-out via the server-wide stream.
+	if s.streamPub != nil {
+		s.streamPub.Broadcast(streamData)
+	}
+	// Legacy /api/conversation/<id>/stream subscribers (iOS, CLI) still
+	// receive list updates via the per-conversation subpub.
+	for _, manager := range s.activeConversations {
+		manager.subpub.Broadcast(streamData)
+	}
+}
+
+// publicHostname returns the server's public hostname.
+func publicHostname() string {
+	if h, err := os.Hostname(); err == nil {
+		if !strings.Contains(h, ".") {
+			return h + ".exe.xyz"
+		}
+		return h
+	}
+	return "localhost"
+}
+
+// conversationURL returns the full URL for a conversation, using slug if available.
+func (s *Server) conversationURL(slug string) string {
+	hostname := publicHostname()
+	path := "/"
+	if slug != "" {
+		path = "/c/" + slug
+	}
+	if s.listenPort == 443 || s.listenPort == 0 {
+		return fmt.Sprintf("https://%s%s", hostname, path)
+	}
+	return fmt.Sprintf("https://%s:%d%s", hostname, s.listenPort, path)
+}
+
+// publishConversationState broadcasts a conversation state update to ALL active
+// conversation streams. This allows clients to see the working state of other conversations.
+func (s *Server) publishConversationState(state ConversationState) {
+	// The conversation list patch stream picks up the working-state change
+	// from the SetConversationAgentWorking Tx commit hook — no explicit
+	// notify needed here. This function is now responsible only for the
+	// per-conversation SSE broadcast and end-of-turn notifications.
+
+	// When the agent finishes working, emit a notification event.
+	// Skip notifications for subagent conversations — they're internal
+	// and would just be noise for the user.
+	var notifEvent *notifications.Event
+	if !state.Working {
+		conv, convErr := s.db.GetConversationByID(context.Background(), state.ConversationID)
+		isSubagent := convErr == nil && isManagedChild(*conv)
+		// Honor an explicit per-conversation opt-out: conversations created
+		// with disable_notifications suppress all end-of-turn notifications
+		// (push, email, discord, ntfy) and hooks, same as subagents.
+		notifyDisabled := convErr == nil && db.ParseConversationOptions(conv.ConversationOptions).DisableNotifications
+		suppressNotify := isSubagent || notifyDisabled
+		var hooks []db.ConversationHook
+		if !suppressNotify {
+			s.mu.Lock()
+			manager := s.activeConversations[state.ConversationID]
+			s.mu.Unlock()
+			if manager != nil {
+				var err error
+				hooks, err = manager.EndOfTurnHooks(context.Background())
+				if err != nil {
+					s.logger.Warn("failed to load end-of-turn hooks", "conversationID", state.ConversationID, "error", err)
+				}
+			}
+			// Auto-configure exe.dev push: deliver end-of-turn notifications
+			// to the notify gateway when the VM has the integration and the
+			// user hasn't disabled it. This reuses the existing end-of-turn
+			// hook path, deduped by URL so it collapses with the hook the iOS
+			// app registers (one push, not two); when disabled it strips any
+			// gateway hook so the toggle reliably silences pushes.
+			hooks = withExeNotifyHook(hooks, s.exeNotifyEnabled(context.Background()))
+		}
+
+		var slug string
+		if convErr == nil && conv.Slug != nil {
+			slug = *conv.Slug
+		}
+		hostname := publicHostname()
+		payload := notifications.AgentDonePayload{
+			Hostname:          hostname,
+			Model:             state.Model,
+			ConversationTitle: slug,
+			ConversationURL:   s.conversationURL(slug),
+			VMName:            strings.TrimSuffix(hostname, ".exe.xyz"),
+		}
+		// The literal latest agent message is often a tool-only turn (e.g.
+		// agent ended on `git status`), which produces a useless "Agent
+		// finished" notification. Walk back through every agent message
+		// since the most recent user message and pick the newest one with
+		// real text content; if none, summarize the last tool call.
+		if msgs, err := s.db.ListAgentMessagesSinceLastUser(context.Background(), state.ConversationID); err == nil {
+			payload.FinalResponse = finalResponseBody(msgs)
+		}
+		event := notifications.Event{
+			Type:           notifications.EventAgentDone,
+			ConversationID: state.ConversationID,
+			Timestamp:      time.Now(),
+			Payload:        payload,
+		}
+		s.refreshDiskSpace(context.Background())
+		if !suppressNotify {
+			s.notifDispatcher.Dispatch(context.Background(), event)
+			for _, hook := range hooks {
+				go s.sendEndOfTurnHook(context.Background(), hook, event)
+			}
+			// The end-of-turn hook is a side-channel for local automation
+			// (sounds, desktop notifications, etc). Fire-and-forget on a
+			// background goroutine so a slow hook doesn't delay the SSE
+			// "agent done" broadcast — but still log non-nil errors so a
+			// broken hook is visible.
+			input := EndOfTurnHookInput{
+				Type:            "end_of_turn",
+				ConversationID:  event.ConversationID,
+				Timestamp:       event.Timestamp,
+				Hostname:        payload.Hostname,
+				Model:           payload.Model,
+				Slug:            payload.ConversationTitle,
+				ConversationURL: payload.ConversationURL,
+				VMName:          payload.VMName,
+				FinalResponse:   payload.FinalResponse,
+			}
+			go func() {
+				if err := RunEndOfTurnHookIn(s.hooksDir, input); err != nil {
+					s.logger.Error("end-of-turn hook failed", "conversationID", input.ConversationID, "error", err)
+				}
+			}()
+		}
+		// Still set notifEvent so the SSE stream broadcasts it to the UI.
+		notifEvent = &event
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	streamData := StreamResponse{
+		ConversationID:    state.ConversationID,
+		ConversationState: &state,
+		NotificationEvent: notifEvent,
+	}
+	if s.streamPub != nil {
+		s.streamPub.Broadcast(streamData)
+	}
+	// Legacy /api/conversation/<id>/stream subscribers (iOS, CLI) still
+	// receive state updates via the per-conversation subpub.
+	for _, manager := range s.activeConversations {
+		manager.subpub.Broadcast(streamData)
+	}
+}
+
+// IsAgentWorking returns whether the agent is currently working on the given conversation.
+// Returns false if the conversation doesn't have an active manager.
+func (s *Server) IsAgentWorking(conversationID string) bool {
+	s.mu.Lock()
+	manager, exists := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if !exists {
+		return false
+	}
+	return manager.IsAgentWorking()
+}
+
+// stopAllConversations stops every active conversation loop and cleans up
+// their tool sets. Used on graceful shutdown to ensure browser subprocesses
+// (headless-shell and its descendants) are killed. Returns when every loop
+// has stopped or ctx is done. On timeout, lingering stopLoop goroutines keep
+// running in the background; if the process exits before they finish their
+// browser groups will be orphaned, but that's a strict improvement over the
+// previous unbounded behavior.
+func (s *Server) stopAllConversations(ctx context.Context) {
+	s.mu.Lock()
+	managers := make([]*ConversationManager, 0, len(s.activeConversations))
+	for id, manager := range s.activeConversations {
+		managers = append(managers, manager)
+		delete(s.activeConversations, id)
+	}
+	s.mu.Unlock()
+
+	// stopLoop can block briefly waiting for browser process exit. Run them
+	// in parallel so a slow browser doesn't serialize shutdown across many
+	// conversations.
+	done := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for _, manager := range managers {
+			wg.Add(1)
+			go func(m *ConversationManager) {
+				defer wg.Done()
+				m.stopLoop()
+			}(manager)
+		}
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		s.logger.Warn("Conversation cleanup timed out, leaving stopLoop in background", "count", len(managers))
+	}
+}
+
+// Cleanup removes inactive conversation managers
+func (s *Server) Cleanup() {
+	// Collect managers to clean up under the lock, but don't call stopLoop
+	// while holding s.mu. stopLoop can block on browser shutdown, and holding
+	// s.mu would block all /api/conversations requests and getOrCreateConversationManager.
+	var toCleanup []*ConversationManager
+	var toCleanupIDs []string
+
+	s.mu.Lock()
+	now := time.Now()
+	for id, manager := range s.activeConversations {
+		// Remove managers that have been inactive for more than 30 minutes.
+		// A manager whose agent is mid-turn is NEVER inactive, no matter how
+		// stale lastActivity looks: long-running tool calls (e.g. a wait=true
+		// subagent call that blocks for an hour) don't Touch the parent
+		// manager. Evicting it would tear down the loop context mid-flight,
+		// cancelling in-flight tool calls and LLM requests and orphaning the
+		// turn — the parent then never sees its subagent's completion.
+		// Same for managers still holding queued work or a registered
+		// synchronous subagent waiter.
+		manager.mu.Lock()
+		lastActivity := manager.lastActivity
+		busy := manager.agentWorking || manager.distilling || manager.draining ||
+			len(manager.pendingBatches) > 0 || manager.subagentWaitOwners > 0
+		manager.mu.Unlock()
+		if !busy && now.Sub(lastActivity) > 30*time.Minute {
+			toCleanup = append(toCleanup, manager)
+			toCleanupIDs = append(toCleanupIDs, id)
+			delete(s.activeConversations, id)
+		}
+	}
+	s.mu.Unlock()
+
+	// Stop loops outside the lock to avoid blocking other requests.
+	for i, manager := range toCleanup {
+		manager.stopLoop()
+		s.logger.Debug("Cleaned up inactive conversation", "conversationID", toCleanupIDs[i])
+	}
+}
+
+// Start starts the HTTP server and handles the complete lifecycle
+func (s *Server) Start(port string) error {
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		s.logger.Error("Failed to create listener", "error", err, "port_info", getPortOwnerInfo(port))
+		return err
+	}
+	return s.StartWithListeners(listener, "")
+}
+
+// StartWithListener starts the HTTP server using the provided listener.
+// This is useful for systemd socket activation where the listener is created externally.
+func (s *Server) StartWithListener(listener net.Listener) error {
+	return s.StartWithListeners(listener, "")
+}
+
+// StartWithListeners starts the HTTP server on the given TCP listener and optionally
+// also on a Unix socket. The TCP listener gets full middleware (CSRF, requireHeader, logger).
+// The Unix socket listener gets only the logger middleware (no CSRF, no requireHeader)
+// since it is local and trusted.
+func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string) error {
+	if err := s.initDiskSpace(context.Background(), diskAvailableBytes); err != nil {
+		return fmt.Errorf("initialize disk space monitor: %w", err)
+	}
+
+	// agent_working is runtime-only state. Decide what to do with the values the
+	// previous process left behind BEFORE serving: an ordinary restart or crash
+	// clears them, while an upgrade-with-restart hands back the conversations
+	// that were mid-turn so we can resume them once the server is up.
+	resumeIDs, err := s.db.ConsumeResumeAfterUpgrade(context.Background())
+	if err != nil {
+		s.logger.Error("Failed to recover agent_working state", "error", err)
+		return err
+	}
+
+	// Set up shared mux with routes
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+
+	// TCP handler: full middleware (applied in reverse order: last added = first executed)
+	tcpHandler := LoggerMiddleware(s.logger)(mux)
+	cop := http.NewCrossOriginProtection()
+	tcpHandler = cop.Handler(tcpHandler)
+	if s.requireHeader != "" {
+		tcpHandler = RequireHeaderMiddleware(s.requireHeader)(tcpHandler)
+	}
+
+	tcpServer := &http.Server{
+		Handler: tcpHandler,
+	}
+
+	// Start cleanup routine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.Cleanup()
+		}
+	}()
+
+	// Start auto-upgrade routine
+	go s.autoUpgradeRoutine()
+
+	// Get actual port from listener
+	actualPort := tcpListener.Addr().(*net.TCPAddr).Port
+	s.listenPort = actualPort
+
+	// Start TCP server in goroutine
+	serverErrCh := make(chan error, 2)
+	go func() {
+		s.logger.Info("Server starting", "port", actualPort, "url", fmt.Sprintf("http://localhost:%d", actualPort))
+		if err := tcpServer.Serve(tcpListener); err != nil && err != http.ErrServerClosed {
+			serverErrCh <- err
+		}
+	}()
+
+	// Optionally start Unix socket server
+	var socketServer *http.Server
+	var actualSocketPath string
+	if socketPath != "" {
+		actualSocketPath = resolveSocketPath(socketPath, s.logger)
+
+		// Ensure the directory exists
+		if err := os.MkdirAll(filepath.Dir(actualSocketPath), 0o700); err != nil {
+			s.logger.Error("Failed to create socket directory", "error", err)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			tcpServer.Shutdown(shutdownCtx)
+			return err
+		}
+
+		unixListener, err := net.Listen("unix", actualSocketPath)
+		if err != nil {
+			s.logger.Error("Failed to create Unix socket listener", "error", err, "path", actualSocketPath)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			tcpServer.Shutdown(shutdownCtx)
+			return err
+		}
+
+		// Make socket accessible to the current user only
+		if err := os.Chmod(actualSocketPath, 0o600); err != nil {
+			s.logger.Warn("Failed to chmod socket", "path", actualSocketPath, "error", err)
+		}
+
+		// Unix socket handler: relaxed middleware (only logger, no CSRF or requireHeader)
+		socketHandler := LoggerMiddleware(s.logger)(mux)
+
+		socketServer = &http.Server{
+			Handler: socketHandler,
+		}
+
+		go func() {
+			s.logger.Info("Unix socket server starting", "path", actualSocketPath)
+			if err := socketServer.Serve(unixListener); err != nil && err != http.ErrServerClosed {
+				serverErrCh <- err
+			}
+		}()
+	}
+
+	// Resume conversations interrupted by an upgrade restart now that the
+	// listeners (and therefore ports, streams and the subagent runner) are live.
+	go s.resumeInterruptedConversations(context.Background(), resumeIDs)
+
+	// Wait for shutdown signal or server error
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErrCh:
+		s.logger.Error("Server failed", "error", err)
+		close(s.shutdownCh)
+		return err
+	case <-quit:
+		s.logger.Info("Shutting down server")
+	}
+
+	// Signal background routines to stop
+	close(s.shutdownCh)
+
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Stop active conversation loops so their tool sets (notably the browser,
+	// which spawns headless-shell + descendants) are cleaned up. Without this
+	// we'd rely on process exit + chromedp's Pdeathsig, which only kills the
+	// direct child and leaves zygote/renderer/GPU processes orphaned. Bound
+	// it by the shutdown context so a hung stopLoop can't starve HTTP
+	// shutdown's deadline.
+	s.stopAllConversations(ctx)
+
+	if err := tcpServer.Shutdown(ctx); err != nil {
+		s.logger.Error("TCP server forced to shutdown", "error", err)
+	}
+
+	if socketServer != nil {
+		if err := socketServer.Shutdown(ctx); err != nil {
+			s.logger.Error("Unix socket server forced to shutdown", "error", err)
+		}
+		os.Remove(actualSocketPath)
+	}
+
+	s.logger.Info("Server exited")
+	return nil
+}
+
+// autoUpgradeRoutine checks for upgrades every 24 hours if auto-upgrade is enabled
+func (s *Server) autoUpgradeRoutine() {
+	// Wait a bit before starting to let the server fully initialize
+	timer := time.NewTimer(1 * time.Minute)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		// Continue to main loop
+	case <-s.shutdownCh:
+		return
+	}
+
+	// Do initial check after startup delay
+	s.tryAutoUpgrade()
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.tryAutoUpgrade()
+		case <-s.shutdownCh:
+			return
+		}
+	}
+}
+
+// tryAutoUpgrade attempts to upgrade if auto-upgrade is enabled and server is idle
+func (s *Server) tryAutoUpgrade() {
+	ctx := context.Background()
+
+	// Check if auto-upgrade is enabled
+	autoUpgradeEnabled, err := s.db.GetSetting(ctx, "auto_upgrade")
+	if err != nil || autoUpgradeEnabled != "true" {
+		return
+	}
+
+	// Check for updates first
+	versionInfo, err := s.versionChecker.Check(ctx, true)
+	if err != nil {
+		s.logger.Error("Auto-upgrade version check failed", "error", err)
+		return
+	}
+
+	if !versionInfo.HasUpdate {
+		s.logger.Debug("Auto-upgrade: no update available")
+		return
+	}
+
+	if versionInfo.Customized {
+		s.logger.Info("Auto-upgrade: skipping customized build (upgrade via rebase; see customizing-shelley skill)")
+		return
+	}
+
+	s.logger.Info("Auto-upgrade: update available", "current", versionInfo.CurrentTag, "latest", versionInfo.LatestTag)
+
+	// Try to find an idle spot for up to 1 hour (check every 10 minutes)
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	timeout := time.After(1 * time.Hour)
+
+	// Check immediately first
+	if s.isServerIdle() {
+		s.performUpgradeAndRestart(ctx, versionInfo)
+		return
+	}
+
+	s.logger.Info("Auto-upgrade: waiting for idle window (will retry for 1 hour)")
+
+	for {
+		select {
+		case <-ticker.C:
+			if s.isServerIdle() {
+				s.performUpgradeAndRestart(ctx, versionInfo)
+				return
+			}
+			s.logger.Debug("Auto-upgrade: server still busy, will retry")
+		case <-timeout:
+			s.logger.Info("Auto-upgrade: timed out waiting for idle window (1 hour)")
+			return
+		case <-s.shutdownCh:
+			return
+		}
+	}
+}
+
+// isServerIdle checks if any conversations are actively running
+func (s *Server) isServerIdle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, cm := range s.activeConversations {
+		if cm.IsAgentWorking() {
+			return false
+		}
+	}
+	return true
+}
+
+// performUpgradeAndRestart performs the upgrade and restarts the server
+func (s *Server) performUpgradeAndRestart(ctx context.Context, versionInfo *VersionInfo) {
+	s.logger.Info("Auto-upgrade: starting upgrade", "current", versionInfo.CurrentTag, "latest", versionInfo.LatestTag)
+
+	err := s.versionChecker.DoUpgrade(ctx)
+	if err != nil {
+		s.logger.Error("Auto-upgrade failed", "error", err)
+		return
+	}
+
+	s.logger.Info("Auto-upgrade complete, restarting")
+
+	// Exit to trigger restart (systemd will restart us)
+	time.Sleep(100 * time.Millisecond)
+	os.Exit(0)
+}
+
+// resolveSocketPath finds an available socket path. If the requested path has a
+// stale socket file (no one listening), it removes the file and returns the path.
+// If the socket is actively in use, it appends -2, -3, etc. to the base name.
+func resolveSocketPath(requested string, logger *slog.Logger) string {
+	path := requested
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			// e.g. shelley.sock → shelley-2.sock
+			ext := filepath.Ext(requested)
+			base := strings.TrimSuffix(requested, ext)
+			path = fmt.Sprintf("%s-%d%s", base, i+1, ext)
+		}
+
+		_, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			// Path is free
+			return path
+		}
+		if err != nil {
+			// Can't stat — try it anyway
+			return path
+		}
+
+		// File exists — check if it's a live socket
+		conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
+		if err != nil {
+			// Stale socket — remove and use this path
+			os.Remove(path)
+			if path != requested {
+				logger.Info("Removed stale socket", "path", path)
+			}
+			return path
+		}
+		conn.Close()
+
+		// Socket is live — another instance is using it, try next
+		logger.Info("Socket in use, trying next", "path", path)
+	}
+
+	// All slots taken, return the last one and let Listen fail with a clear error
+	return path
+}
+
+// getPortOwnerInfo tries to identify what process is using a port.
+// Returns a human-readable string with the PID and process name, or an error message.
+func getPortOwnerInfo(port string) string {
+	// Use lsof to find the process using the port
+	cmd := exec.Command("lsof", "-i", ":"+port, "-sTCP:LISTEN", "-n", "-P")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Sprintf("(unable to determine: %v)", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) < 2 {
+		return "(no process found)"
+	}
+
+	// Parse lsof output: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+	// Skip the header line
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			command := fields[0]
+			pid := fields[1]
+			return fmt.Sprintf("pid=%s process=%s", pid, command)
+		}
+	}
+
+	return "(could not parse lsof output)"
+}
+
+// withExeNotifyHook reconciles the exe.dev notify-gateway end-of-turn hook with
+// the enabled state. When enabled it ensures exactly one gateway hook is
+// present (deduping against the iOS app's own registration of the same URL).
+// When disabled it removes any gateway hook — including one the iOS app
+// registered — so the toggle reliably means "no exe.dev pushes".
+func withExeNotifyHook(hooks []db.ConversationHook, enabled bool) []db.ConversationHook {
+	out := hooks[:0:0] // never mutate the caller's backing array
+	hasGateway := false
+	for _, h := range hooks {
+		if h.URL == exeNotifyGatewayURL {
+			if !enabled || hasGateway {
+				continue // drop when disabled, or dedupe duplicates
+			}
+			hasGateway = true
+		}
+		out = append(out, h)
+	}
+	if enabled && !hasGateway {
+		out = append(out, db.ConversationHook{URL: exeNotifyGatewayURL})
+	}
+	return out
+}
+
+// endOfTurnPushCategory is the APNs notification category attached to
+// end-of-turn pushes. It is a contract with the client: the client
+// registers the inline "Reply" action against this exact identifier and
+// shows the reply button only for categories it recognizes.
+//
+// The "_V2" generation gates replies on a server that can actually accept
+// them. The original (un-suffixed) category was emitted by server builds
+// whose chat handler silently 400'd a reply that omitted the model on any
+// conversation running a non-default model — the reply never reached the
+// agent. Because the category and that fix both live in the server, a
+// build emits the V2 category iff it carries the fix, so a client gated on
+// V2 never offers a reply to a server that would drop it. Bump the
+// generation again if a future change alters what the client may assume
+// about end-of-turn pushes.
+const endOfTurnPushCategory = "SHELLEY_END_OF_TURN_MESSAGE_V2"
+
+const shelleyConversationIDHeader = "Shelley-Conversation-Id"
+
+func (s *Server) sendEndOfTurnHook(ctx context.Context, hook db.ConversationHook, event notifications.Event) {
+	payload, ok := event.Payload.(notifications.AgentDonePayload)
+	if !ok {
+		return
+	}
+
+	// Push notifications: prefer slug as the title and hostname as the
+	// subtitle, so iOS renders the (more useful) slug in the bold first
+	// line and the host in a smaller line below. Falls back gracefully
+	// when either is missing.
+	title, subtitle := pushTitleAndSubtitle(payload.Hostname, payload.ConversationTitle)
+	body := payload.FinalResponse
+	if body == "" {
+		body = "Agent finished"
+	}
+	if len(body) > 4096 {
+		body = body[:4093] + "..."
+	}
+
+	data := map[string]string{
+		"type":            "shelley_conversation",
+		"conversation_id": event.ConversationID,
+	}
+	if payload.VMName != "" {
+		data["vm_name"] = payload.VMName
+	}
+	if payload.ConversationURL != "" {
+		data["conversation_url"] = payload.ConversationURL
+	}
+	if payload.ConversationTitle != "" {
+		data["conversation_title"] = payload.ConversationTitle
+	}
+
+	hookPayload := map[string]any{
+		"title":    title,
+		"body":     body,
+		"data":     data,
+		"category": endOfTurnPushCategory,
+	}
+	if subtitle != "" {
+		hookPayload["subtitle"] = subtitle
+	}
+	bodyBytes, err := json.Marshal(hookPayload)
+	if err != nil {
+		s.logger.Warn("failed to marshal end-of-turn hook", "conversationID", event.ConversationID, "error", err)
+		return
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, hook.URL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		s.logger.Warn("failed to create end-of-turn hook request", "conversationID", event.ConversationID, "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if event.ConversationID != "" {
+		req.Header.Set(shelleyConversationIDHeader, event.ConversationID)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.logger.Warn("failed to send end-of-turn hook", "conversationID", event.ConversationID, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		s.logger.Warn("end-of-turn hook failed", "conversationID", event.ConversationID, "status", resp.Status)
+	}
+}
+
+func validateConversationHookURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid url")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("url scheme must be http or https")
+	}
+	if _, err := os.Stat("/exe.dev"); err == nil && !strings.HasSuffix(u.Hostname(), ".int.exe.xyz") {
+		return fmt.Errorf("hook url host must end in .int.exe.xyz")
+	}
+	return nil
+}

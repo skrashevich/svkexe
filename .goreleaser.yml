@@ -1,0 +1,70 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - python3 scripts/fetch-exe-scroll.py --all --wait 900
+
+builds:
+  - id: shelley
+    binary: shelley
+    main: ./cmd/shelley
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X shelley.exe.dev/version.Version={{ .Version }}
+      - -X shelley.exe.dev/version.Tag={{ .Tag }}
+
+archives:
+  - id: shelley
+    formats:
+      - binary
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'typo'
+
+release:
+  github:
+    owner: boldsoftware
+    name: shelley
+  draft: false
+  prerelease: auto
+
+homebrew_casks:
+  - name: shelley
+    binaries:
+      - shelley
+    repository:
+      owner: boldsoftware
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/boldsoftware/shelley
+    description: "A mobile-friendly, web-based, multi-modal coding agent"
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{caskroom_path}"]

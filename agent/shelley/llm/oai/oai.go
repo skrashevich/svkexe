@@ -1094,12 +1094,15 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 		}
 		if err != nil {
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, llm.TruncatedStream("chat completion stream failed after response started", err)
 			}
 			return nil, err
 		}
 		var chunk chatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &chunk); err != nil {
+			// Not a truncated stream: frames arrive whole, so a frame that does
+			// not decode is a schema the client cannot read. Repeating the
+			// request would fail the same way every time.
 			if started {
 				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
 			}
@@ -1165,7 +1168,7 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 	}
 
 	if finishReason == "" {
-		return nil, fmt.Errorf("incomplete chat completion stream: no finish reason")
+		return nil, llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)
 	}
 	return &llm.Response{
 		ID:         id,
@@ -1334,7 +1337,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	if s.Org != "" {
 		config.OrgID = s.Org
 	}
-	config.HTTPClient = httpc
+	config.HTTPClient = withoutSSEComments(httpc)
 
 	client := openai.NewClientWithConfig(config)
 

@@ -1140,7 +1140,7 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 		}
 	}
 	if completed == nil {
-		return nil, fmt.Errorf("incomplete stream: no response.completed event")
+		return nil, llm.TruncatedStream("incomplete stream: no response.completed event", nil)
 	}
 	return completed, nil
 }

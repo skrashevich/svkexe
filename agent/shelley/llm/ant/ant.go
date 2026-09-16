@@ -1202,11 +1202,11 @@ func parseSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*response, err
 	}
 
 	if resp == nil {
-		return nil, fmt.Errorf("no message_start event in stream")
+		return nil, llm.TruncatedStream("no message_start event in stream", nil)
 	}
 
 	if !messageDone {
-		return nil, fmt.Errorf("incomplete stream: no stop_reason received (stream may have been truncated)")
+		return nil, llm.TruncatedStream("incomplete stream: no stop_reason received (stream may have been truncated)", nil)
 	}
 
 	// Ensure tool_use blocks always have a non-nil ToolInput.

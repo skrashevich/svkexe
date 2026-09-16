@@ -1,6 +1,6 @@
 {
-  "name": "Shelley",
-  "short_name": "Shelley",
+  "name": "PicoClaw",
+  "short_name": "PicoClaw",
   "description": "AI coding assistant",
   "start_url": "/",
   "display": "standalone",

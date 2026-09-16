@@ -725,6 +725,10 @@ func collectGitInfo(dir string) (*GitInfo, error) {
 	}, nil
 }
 
+// platformAgentsFile is where the host platform describes this VM to the agent.
+// It is a variable so tests can point it at a temporary file.
+var platformAgentsFile = "/etc/picoclaw/AGENTS.md"
+
 func collectCodebaseInfo(wd string, gitInfo *GitInfo) (*CodebaseInfo, error) {
 	info := &CodebaseInfo{
 		InjectFiles:        []string{},
@@ -735,6 +739,17 @@ func collectCodebaseInfo(wd string, gitInfo *GitInfo) (*CodebaseInfo, error) {
 	// and case-insensitive filesystems) and by content (handles copies).
 	seenFiles := make(map[string]bool)
 	seenContents := make(map[string]bool)
+
+	// /etc/picoclaw/AGENTS.md describes the VM itself — the host it is served
+	// on, the port published to the outside — and is written by the platform,
+	// not by the user. It is read first and lives outside $HOME so neither the
+	// user nor the agent can overwrite what the platform knows about the VM.
+	if content, err := os.ReadFile(platformAgentsFile); err == nil && len(content) > 0 {
+		info.InjectFiles = append(info.InjectFiles, platformAgentsFile)
+		info.InjectFileContents[platformAgentsFile] = string(content)
+		seenFiles[resolveAndNormalize(platformAgentsFile)] = true
+		seenContents[string(content)] = true
+	}
 
 	// Check for user-level agent instructions in ~/.config/AGENTS.md, ~/.config/shelley/AGENTS.md, and ~/.shelley/AGENTS.md
 	if home, err := os.UserHomeDir(); err == nil {

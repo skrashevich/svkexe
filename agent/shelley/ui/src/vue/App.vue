@@ -307,7 +307,7 @@ function updatePageTitle(conversation: Conversation | undefined) {
   const parts: string[] = [];
   if (conversation?.slug && !isGeneratedId(conversation.slug)) parts.push(conversation.slug);
   if (hostname) parts.push(hostname);
-  parts.push("Shelley Agent");
+  parts.push("PicoClaw");
   document.title = parts.join(" - ");
 }
 

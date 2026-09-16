@@ -1704,6 +1704,17 @@ func TestIsRetryableError(t *testing.T) {
 		{"structured non-retryable overrides EOF text", &testRequestError{message: "EOF", info: llm.RequestErrorInfo{}}, false},
 		{"rate limit not in tight set", fmt.Errorf("rate limit exceeded"), false},
 		{"503 not in tight set", fmt.Errorf("upstream returned 503"), false},
+		{"truncated stream", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil), true},
+		{"truncated stream text only", fmt.Errorf("attempt 1 at 2026-09-10 20:09:03: url=https://openrouter.ai/api/v1/chat/completions model=openrouter/free: incomplete chat completion stream: no finish reason"), true},
+		// The structured verdict answers for the attempt the request ended on,
+		// so a permanent 401 after a cut stream is not repeated on that basis.
+		// Its wording still is, because this classifier has no non-retryable
+		// list — one extra attempt out of the two it is allowed, which is what
+		// the pre-existing "eof" patterns have always cost here too.
+		{"permanent failure after a truncated attempt", errors.Join(
+			fmt.Errorf("attempt 1: %w", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)),
+			fmt.Errorf("attempt 2: status 401 (url=U, model=M): invalid api key"),
+		), true},
 		{"generic error", fmt.Errorf("something went wrong"), false},
 	}
 
@@ -1740,6 +1751,30 @@ func TestIsRetryableLLMError(t *testing.T) {
 		{"invalid api key not retryable", fmt.Errorf("invalid api key"), false},
 		{"invalid_request_error not retryable", fmt.Errorf("invalid_request_error: messages.0.content.0.thinking.signature: Field required"), false},
 		{"model_not_found not retryable", fmt.Errorf("model_not_found: The model gpt-foo does not exist"), false},
+		// The failure that ended conversation c2H2VP7 mid-install: the SSE
+		// stream was cut before any finish_reason arrived, the turn stopped
+		// after one attempt, and the Retry button was disabled because this
+		// classifier called a truncated stream permanent.
+		{"truncated stream retryable", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil), true},
+		{"truncated stream text only retryable", fmt.Errorf("attempt 1 at 2026-09-10 20:09:03: url=https://openrouter.ai/api/v1/chat/completions model=openrouter/free: incomplete chat completion stream: no finish reason"), true},
+		{"anthropic truncated stream retryable", fmt.Errorf("incomplete stream: no stop_reason received (stream may have been truncated)"), true},
+		{"responses api truncated stream retryable", fmt.Errorf("incomplete stream: no response.completed event"), true},
+		{"stream cut after start retryable", llm.TruncatedStream("chat completion stream failed after response started", io.ErrUnexpectedEOF), true},
+		// A frame the client cannot decode is a schema mismatch, not a cut
+		// stream: repeating the request would fail identically.
+		{"undecodable frame not retryable", fmt.Errorf("chat completion stream failed after response started: invalid character '{' after top-level value"), false},
+		// A truncated stream on an earlier attempt must not make the failure the
+		// request actually ended on look repeatable.
+		{"permanent failure after a truncated attempt not retryable", errors.Join(
+			fmt.Errorf("attempt 1: %w", llm.TruncatedStream("incomplete chat completion stream: no finish reason", nil)),
+			fmt.Errorf("attempt 2: status 401 (url=U, model=M): invalid api key"),
+		), false},
+		// A provider that gives up says so in its closing message rather than in
+		// the last attempt it recorded. Reading only the final attempt would
+		// call this stall permanent and disable the Retry button on it.
+		{"closing message decides a stall", fmt.Errorf("openai request failed after 16 attempts (context cancelled during backoff): %w", errors.Join(
+			fmt.Errorf("attempt 1 at X: TLS error: %w", errors.New("tls: bad record MAC")),
+		)), true},
 		{"generic error not retryable", fmt.Errorf("something weird happened"), false},
 	}
 

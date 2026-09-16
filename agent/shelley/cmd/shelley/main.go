@@ -175,8 +175,12 @@ func runSkill(args []string) {
 	}
 }
 
+// Platform builds override this through -ldflags; standalone binds loopback.
+var defaultListenHost = "127.0.0.1"
+
 func runServe(global GlobalConfig, args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	host := fs.String("host", defaultListenHost, "Interface to listen on (empty for all interfaces)")
 	port := fs.String("port", "9000", "Port to listen on")
 	portFile := fs.String("port-file", "", "Write the actual listening port to this file (useful with --port 0)")
 	systemdActivation := fs.Bool("systemd-activation", false, "Use systemd socket activation (listen on fd from systemd)")
@@ -232,7 +236,7 @@ func runServe(global GlobalConfig, args []string) {
 		logger.Info("Using systemd socket activation")
 		err = svr.StartWithListeners(listener, effectiveSocket)
 	} else {
-		listener, listenerErr := net.Listen("tcp", ":"+*port)
+		listener, listenerErr := net.Listen("tcp", net.JoinHostPort(*host, *port))
 		if listenerErr != nil {
 			logger.Error("Failed to create listener", "error", listenerErr)
 			os.Exit(1)

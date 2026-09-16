@@ -315,14 +315,9 @@ func (l *Loop) ProcessOneTurn(ctx context.Context) error {
 	return l.processLLMRequest(ctx)
 }
 
-// processLLMRequest sends a request to the LLM and handles the response.
-// It loops internally: when the LLM responds with tool calls, it executes
-// the tools and sends another request, repeating until the turn ends or an
-// error occurs. This iterative design avoids the O(n²) peak memory that
-// mutual recursion (processLLMRequest ↔ executeToolCalls) caused, because
-// each iteration's locals are freed before the next iteration starts.
+// processLLMRequest preserves the rich request/persistence contract; PicoClaw drives tool rounds.
 func (l *Loop) processLLMRequest(ctx context.Context) error {
-	for {
+	round := func(ctx context.Context) (*llm.Response, error) {
 		// Splice in externally injected messages (e.g. subagent completion
 		// notifications) so this request already carries them. This runs
 		// between tool rounds too, letting an in-flight turn react to a
@@ -470,7 +465,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			// producing a scary log line on every user cancel. Skip it.
 			if errors.Is(ctx.Err(), context.Canceled) {
 				l.logger.Info("LLM request aborted by loop cancellation", "error", err)
-				return fmt.Errorf("LLM request failed: %w", err)
+				return nil, fmt.Errorf("LLM request failed: %w", err)
 			}
 			// Record the error as a message so it can be displayed in the UI.
 			// EndOfTurn must be true so the agent working state is properly
@@ -494,7 +489,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			if recordErr := l.recordMessage(context.WithoutCancel(ctx), errorMessage, llm.Usage{}, nil); recordErr != nil {
 				l.logger.Error("failed to record error message", "error", recordErr)
 			}
-			return fmt.Errorf("LLM request failed: %w", err)
+			return nil, fmt.Errorf("LLM request failed: %w", err)
 		}
 
 		l.logger.Debug("received LLM response", "content_count", len(resp.Content), "stop_reason", resp.StopReason.String(), "usage", resp.Usage.String())
@@ -508,7 +503,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// should not be added to history normally (they get special handling)
 		if resp.StopReason == llm.StopReasonMaxTokens {
 			l.logger.Warn("LLM response truncated due to max tokens")
-			return l.handleMaxTokensTruncation(ctx, resp)
+			return nil, l.handleMaxTokensTruncation(ctx, resp)
 		}
 
 		// Handle refusals BEFORE adding to history. On stop_reason=refusal the
@@ -519,7 +514,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// endless string of blank turns. Surface it as a visible error instead.
 		if resp.StopReason == llm.StopReasonRefusal {
 			l.logger.Warn("LLM declined to continue (stop_reason=refusal)")
-			return l.handleRefusal(ctx, resp)
+			return nil, l.handleRefusal(ctx, resp)
 		}
 
 		assistantMessage := resp.ToMessage()
@@ -530,11 +525,11 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			l.toolResultMu.Lock()
 			if err := ctx.Err(); err != nil {
 				l.toolResultMu.Unlock()
-				return err
+				return nil, err
 			}
 			if err := l.recordMessage(context.WithoutCancel(ctx), assistantMessage, resp.UsageWithMeta(), nil); err != nil {
 				l.toolResultMu.Unlock()
-				return fmt.Errorf("%w: assistant tool-use message: %v", errMessagePersistence, err)
+				return nil, fmt.Errorf("%w: assistant tool-use message: %v", errMessagePersistence, err)
 			}
 			l.mu.Lock()
 			l.history = append(l.history, assistantMessage)
@@ -549,18 +544,12 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			}
 		}
 
-		// If no tool calls, the turn is over
 		if resp.StopReason != llm.StopReasonToolUse {
 			l.checkGitStateChange(ctx)
-			return nil
 		}
-
-		// Execute tool calls and loop back for the next LLM request
-		l.logger.Debug("handling tool calls", "content_count", len(resp.Content))
-		if err := l.executeToolCalls(ctx, resp.Content); err != nil {
-			return err
-		}
+		return resp, nil
 	}
+	return l.runPicoClaw(ctx, round)
 }
 
 // maxPauseContinuations bounds how many times we will re-request to resolve a
@@ -929,40 +918,11 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 		}
 	}
 
-	toolResults := make([]llm.Content, len(toolUses))
+	toolResults := l.picoExecuteBatch(ctx, toolUses)
+	return l.publishToolResults(ctx, toolResults, otherUsage.Take())
+}
 
-	// Do not let goroutine scheduling decide which siblings were "never
-	// started." Every worker first reaches this barrier. If cancellation won
-	// before the cohort was released, all calls get the same not-started
-	// result. Otherwise all calls are logically started and invoke Run, even
-	// when cancellation reaches an individual worker before it is scheduled.
-	var ready, finished sync.WaitGroup
-	ready.Add(len(toolUses))
-	finished.Add(len(toolUses))
-	start := make(chan struct{})
-	run := false
-	for i, c := range toolUses {
-		go func(i int, c llm.Content) {
-			defer finished.Done()
-			ready.Done()
-			<-start
-			if !run {
-				toolResults[i] = llm.Content{
-					Type:       llm.ContentTypeToolResult,
-					ToolUseID:  c.ID,
-					ToolError:  true,
-					ToolResult: llm.TextContent(notExecutedToolResultText),
-				}
-				return
-			}
-			toolResults[i] = l.executeToolCall(ctx, c)
-		}(i, c)
-	}
-	ready.Wait()
-	run = ctx.Err() == nil
-	close(start)
-	finished.Wait()
-
+func (l *Loop) publishToolResults(ctx context.Context, toolResults []llm.Content, otherUsage []llm.PurposedUsage) error {
 	l.toolResultMu.Lock()
 	defer l.toolResultMu.Unlock()
 	recordCtx := context.WithoutCancel(ctx)
@@ -977,7 +937,7 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 		// Persist before exposing the result in memory. Cancellation holds the
 		// same publication lock, so it either observes the committed result or
 		// records a synthetic cancellation result, never a half-published one.
-		if err := l.recordMessage(recordCtx, toolMessage, llm.Usage{}, otherUsage.Take()); err != nil {
+		if err := l.recordMessage(recordCtx, toolMessage, llm.Usage{}, otherUsage); err != nil {
 			return fmt.Errorf("%w: tool result message: %v", errMessagePersistence, err)
 		}
 
@@ -1223,6 +1183,34 @@ func isRetryableError(err error) bool {
 			return true
 		}
 	}
+	return isTruncatedStreamText(lower)
+}
+
+// truncatedStreamPatterns are the provider wordings for a stream that ended
+// before the provider said why it stopped. llm.TruncatedStream already marks
+// these retryable through structured metadata; the wording is matched as well so
+// that a copy which lost its chain — reformatted, or read back from a stored
+// message — is still recognised for what it is.
+//
+// Each entry is the whole phrase its site emits. A looser prefix would also
+// match a provider body quoting it, and "chat completion stream failed after
+// response started" is deliberately absent: two sites share that wording and
+// only one of them is a cut stream.
+var truncatedStreamPatterns = []string{
+	"incomplete chat completion stream: no finish reason",
+	"incomplete stream: no stop_reason received",
+	"incomplete stream: no response.completed event",
+	"no message_start event in stream",
+}
+
+// isTruncatedStreamText reports whether an already-lowercased error message
+// describes a truncated provider stream.
+func isTruncatedStreamText(lower string) bool {
+	for _, p := range truncatedStreamPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1250,6 +1238,11 @@ func IsRetryableLLMError(err error) bool {
 	if info, ok := llm.RequestErrorInfoFromError(err); ok {
 		return info.Retryable
 	}
+	// The whole error is read here, not just its final attempt: a provider that
+	// gives up says so in a closing message rather than in the last attempt it
+	// recorded, and dropping that message would call a stall permanent. The hard
+	// non-retryable list below is what keeps an earlier attempt's wording from
+	// speaking for a request that ended for good.
 	lower := strings.ToLower(err.Error())
 
 	// Hard non-retryable signals override anything else.
@@ -1269,6 +1262,10 @@ func IsRetryableLLMError(err error) bool {
 		if strings.Contains(lower, p) {
 			return false
 		}
+	}
+
+	if isTruncatedStreamText(lower) {
+		return true
 	}
 
 	retryableSubstrings := []string{

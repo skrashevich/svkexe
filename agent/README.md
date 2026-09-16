@@ -6,7 +6,7 @@ This directory is the complete source package. Copy it into another project, or 
 
 ## Build
 
-Build dependencies: Go with automatic toolchain selection (the pinned application requires Go 1.27.1), Git, Python 3, make, and Node.js/npm. The script bootstraps pinned Node 22.22.0 and pnpm 10.34.0. The initial build needs network access to fetch pinned sources, dependencies and the checksum-verified `exe-scroll` helper.
+Build dependencies: Go with automatic toolchain selection (the vendored application requires Go 1.27.1), Python 3, make, and Node.js/npm. The script bootstraps pinned Node 22.22.0 and pnpm 10.34.0. The initial build needs network access to fetch Go and npm dependencies and the checksum-verified `exe-scroll` helper; the application source itself is in `shelley/`.
 
 ```sh
 cd agent
@@ -27,7 +27,7 @@ Build settings:
 | `AGENT_GOOS` | Host OS | Target OS, e.g. `linux` |
 | `AGENT_GOARCH` | Host Go architecture | Target architecture, e.g. `amd64` |
 | `AGENT_OUTPUT` | `agent/bin/picoclaw` | Binary destination |
-| `AGENT_SOURCE_DIR` | `agent/bin/source-<profile>` | Generated source/cache directory |
+| `AGENT_SOURCE_DIR` | `agent/bin/source-<profile>` | Build directory, synced from `shelley/` |
 
 Caller-supplied paths are resolved from the working directory. When using `make -C agent`, that directory is `agent/`. Native builds can run the smoke test; cross-compiled binaries must be tested on a matching host.
 
@@ -102,13 +102,23 @@ The `svkexe` profile changes the default listen host to all interfaces, preserve
 
 ## Source layout and upstream maintenance
 
+- `shelley/`: the application source. It is a squashed `git subtree` of [boldsoftware/shelley](https://github.com/boldsoftware/shelley) at the commit recorded in `upstream.env`, plus this package's modifications as ordinary tracked files: the PicoClaw adapter (`loop/picoclaw.go`), loop delegation, provider stream fixes, the listen-host flag, the platform prompt file, disabled upstream self-updates, the standalone version dialog and generic branding. Edit it directly; `go test ./...` works inside it once `make ui` has produced `ui/dist`.
 - `build.sh`, `Makefile`: independent build/test entrypoints.
-- `upstream.env`, `go.mod.lock`, `go.sum.lock`: pinned application, runtime and dependency versions.
-- `runtime.patch`: modifications to the pinned Shelley application, including loop delegation, provider fixes, the host flag and disabled upstream self-updates.
-- `overlay/`: ordinary source templates added/replaced in the prepared upstream tree, including the PicoClaw adapter and standalone version dialog.
+- `prepare.py`: syncs `shelley/` into the build directory and applies the profile overlay and application name there, so the tracked tree never carries build products or branding.
+- `upstream.env`: the vendored Shelley commit and the pinned PicoClaw, Node and pnpm versions.
+- `update-shelley.sh`: merges a newer upstream commit into `shelley/` (see below); repository-only, not exported by `make package`.
 - `profiles/svkexe/`: platform-specific UI overlay.
-- `configure.py`: applies overlays and safely encodes the selected application name.
 - `tests/smoke.py`: independent real-process integration test.
 - `licenses/`: Shelley (Apache-2.0) and PicoClaw (MIT) license notices.
 
-Prepared sources under `bin/` are disposable; edit package inputs instead. `runtime.patch` is applied to an exact upstream commit, not to the latest branch. Updating that pin requires reviewing/rebasing the patch and running both compatibility and smoke tests. This packaging separates the agent from svkexe but retains the existing upstream-patch maintenance model.
+Build directories under `bin/` are disposable copies; changes belong in `shelley/`. Only files whose content changed are rewritten there, so binaries built earlier keep starting (the application refuses to run when `ui/src` is newer than its embedded UI bundle).
+
+### Updating upstream
+
+From a git checkout of the repository:
+
+```sh
+agent/update-shelley.sh <upstream commit sha>
+```
+
+This runs `git subtree pull --squash` for `agent/shelley`, which three-way merges the upstream changes with the local modifications, then records the new commit in `upstream.env`. When upstream and the local changes touch the same lines, git stops with ordinary merge conflicts inside `shelley/`; resolve them, commit the merge and re-run the script to record the pin. Afterwards rebuild and run both `make test` and `make smoke`. The script needs the history of this repository back to the last subtree squash commit, so run `git fetch --unshallow` in a shallow clone first; it fetches the upstream history itself. It is a repository tool and is not part of the exported source package.

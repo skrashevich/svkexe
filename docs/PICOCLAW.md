@@ -15,11 +15,11 @@ Each VM runs `/usr/local/bin/picoclaw` on port 9000. This is svkexe's integratio
 - The former `/usr/local/bin/shelley` symlink and `shelley.service` alias are removed during migration, so the guest exposes only the name that actually runs.
 - Provider keys configured by the user still use the retained model adapters. The gateway's custom models use the exact `/api/llm/v1` endpoint and internal bearer token. `llm_gateway` is deliberately not set: that Shelley setting expects exe.dev's provider-specific API.
 
-The adapter lives in `agent/overlay/loop/picoclaw.go.in`; the application changes are in `agent/runtime.patch`. The platform version dialog lives in `agent/profiles/svkexe/`, separate from the standalone UI. Its private per-call dispatch identifiers preserve raw JSON arguments and original tool-use IDs; those identifiers are never exposed to the model or the UI. The agent advertises `picoclaw-engine` in `/version`. The version menu compares the running agent executable's SHA-256 with the artifact shipped by the gateway. Its Update action installs that artifact and restarts only `picoclaw.service`, waits for HTTP readiness, then reloads the UI. The VM remains running; active agent work is interrupted. Both endpoints are handled by the gateway after agent-host authentication and ownership checks. Standalone Shelley release checks, binary self-updates and rebase conversations are disabled in the integration source, including builds without version linker flags. Platform updates still reconcile running VMs on gateway startup and stopped VMs on their next start.
+The Shelley source is vendored under `agent/shelley/` as a git subtree; the adapter is `agent/shelley/loop/picoclaw.go` and the other application changes are ordinary commits to that tree (see `agent/README.md` for the upstream update workflow). The platform version dialog lives in `agent/profiles/svkexe/`, separate from the standalone UI. Its private per-call dispatch identifiers preserve raw JSON arguments and original tool-use IDs; those identifiers are never exposed to the model or the UI. The agent advertises `picoclaw-engine` in `/version`. The version menu compares the running agent executable's SHA-256 with the artifact shipped by the gateway. Its Update action installs that artifact and restarts only `picoclaw.service`, waits for HTTP readiness, then reloads the UI. The VM remains running; active agent work is interrupted. Both endpoints are handled by the gateway after agent-host authentication and ownership checks. Standalone Shelley release checks, binary self-updates and rebase conversations are disabled in the integration source, including builds without version linker flags. Platform updates still reconcile running VMs on gateway startup and stopped VMs on their next start.
 
 ## Build and checks
 
-Requirements: Go with automatic toolchain selection (the pinned shell needs Go 1.27.1), Node.js/npm (used to bootstrap pinned Node 22.22.0 and pnpm), Python 3, git and make. `agent/build.sh` owns the pinned upstream source SHA, PicoClaw dependency, module checksums and pnpm version. `scripts/build-agent.sh` is the platform compatibility wrapper; `make -C agent build` builds the native standalone variant instead. No `latest` agent release is downloaded. Node is a build dependency only; the resulting agent embeds the UI.
+Requirements: Go with automatic toolchain selection (the vendored shell needs Go 1.27.1), Node.js/npm (used to bootstrap pinned Node 22.22.0 and pnpm), Python 3 and make. `agent/upstream.env` records the vendored upstream commit and the pinned PicoClaw, Node and pnpm versions; `agent/shelley/go.mod` pins the Go dependencies. `scripts/build-agent.sh` is the platform compatibility wrapper; `make -C agent build` builds the native standalone variant instead. No `latest` agent release is downloaded. Node is a build dependency only; the resulting agent embeds the UI.
 
 ```sh
 make build                    # bin/gateway + bin/picoclaw (Linux, host CPU architecture)
@@ -30,7 +30,7 @@ make test-agent               # retained shell/API/DB/provider/loop tests
 AGENT_GOARCH=amd64 make agent  # Linux amd64 agent, e.g. cross-build on Apple Silicon
 ```
 
-Generated sources/assets live under ignored `bin/agent-source`. To run the real end-to-end test on macOS, build a native test binary separately:
+The build directory `bin/agent-source` is an ignored, synced copy of `agent/shelley` with the platform profile applied; edit `agent/shelley` instead. To run the real end-to-end test on macOS, build a native test binary separately:
 
 ```sh
 AGENT_GOOS=darwin AGENT_GOARCH=arm64 AGENT_OUTPUT=/tmp/picoclaw-test make agent
@@ -59,7 +59,7 @@ Keep a VM snapshot or the recreation archive before deployment. To roll back, st
 
 ## Attribution
 
-The preserved Shelley source is pinned to `a305f7506d34a4783a174edf2d5e8ac97288d476` from [boldsoftware/shelley](https://github.com/boldsoftware/shelley), under Apache-2.0. The runtime uses [sipeed/picoclaw v0.3.1](https://github.com/sipeed/picoclaw/tree/v0.3.1), under MIT. License copies are in `agent/licenses/`.
+The vendored Shelley source under `agent/shelley/` is based on commit `a305f7506d34a4783a174edf2d5e8ac97288d476` of [boldsoftware/shelley](https://github.com/boldsoftware/shelley), under Apache-2.0. The runtime uses [sipeed/picoclaw v0.3.1](https://github.com/sipeed/picoclaw/tree/v0.3.1), under MIT. License copies are in `agent/licenses/`.
 
 ## Local verification (2026-09-09)
 

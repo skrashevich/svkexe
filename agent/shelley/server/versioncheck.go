@@ -93,6 +93,9 @@ type StaticCommitInfo struct {
 	Subject string `json:"subject"`
 }
 
+// Agent artifacts are distributed by the platform, never by Shelley.
+const platformManagedUpdates = true
+
 const (
 	// staticMetadataURL is the base URL for version metadata on GitHub Pages.
 	// This avoids GitHub API rate limits.
@@ -181,7 +184,7 @@ func baseVersionInfo() *VersionInfo {
 
 // Check checks for a new version, using the cache if still valid.
 func (vc *VersionChecker) Check(ctx context.Context, forceRefresh bool) (*VersionInfo, error) {
-	if vc.skipCheck {
+	if platformManagedUpdates || vc.skipCheck {
 		return baseVersionInfo(), nil
 	}
 
@@ -512,6 +515,9 @@ func parseMinorVersion(tag string) int {
 
 // DoUpgrade downloads and applies the update with checksum verification.
 func (vc *VersionChecker) DoUpgrade(ctx context.Context) error {
+	if platformManagedUpdates {
+		return fmt.Errorf("this customized agent is managed externally; replace it with a build from the same agent package")
+	}
 	if vc.skipCheck {
 		return fmt.Errorf("version checking is disabled")
 	}

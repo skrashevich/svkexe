@@ -17,6 +17,7 @@ func vmCommands() []*command {
 	return []*command{
 		{
 			Name:        "ls",
+			Aliases:     []string{"ps"},
 			Group:       groupVM,
 			Usage:       "ls [--json]",
 			Summary:     "List your VMs",

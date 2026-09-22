@@ -7,16 +7,33 @@ description: REST endpoints of the svkexe gateway
 
 ## Authentication
 
-All API endpoints require authentication. The gateway validates the `X-ExeDev-Userid` header injected by the Authelia + Caddy auth chain. Direct API access (bypassing the proxy) requires this header to be set.
+Management endpoints use the `svkexe_session` cookie from `POST /login`.
+Client-supplied `X-ExeDev-*` headers do not authenticate a request, and LLM keys
+stored by `POST /api/keys` are provider credentials, not management API tokens.
 
-For API key authentication, include the key in the `Authorization` header:
+Use your own gateway domain (replace `example.com`):
 
+```bash
+curl -c cookies.txt https://example.com/login \
+  --data-urlencode 'email=admin@example.com' \
+  --data-urlencode 'password=your-password'
+curl -b cookies.txt https://example.com/api/me
 ```
-Authorization: Bearer <api-key>
-```
 
-API keys can be created via `POST /api/keys`.
+Send the cookie on subsequent requests, and `Content-Type: application/json`
+with JSON bodies. Login succeeds with `303 See Other`; an API request without a
+valid session returns `401`. `POST /logout` invalidates the session.
+`GET/POST /register` only creates the first admin while no accounts exist.
 
+Exceptions: `/metrics` and `/api/tls/check` are public. The configured LLM proxy
+at `/api/llm/v1/*` uses its own internal Bearer token, as described
+below. Guest accounts can read assigned VMs and manage their SSH keys but cannot
+manage VM lifecycle or LLM connections; see [ACCESS.md](ACCESS.md).
+
+JSON field names are case-sensitive. Container objects currently serialize Go
+field names (`ID`, `Name`, `OwnerID`, `Status`, `Nesting`, `NestingApplied`,
+`NestingAllowed`, `SharedAccess`, etc.). Request bodies use snake_case. Examples
+below show selected response fields, not an exhaustive schema.
 ---
 
 ## Endpoints
@@ -41,16 +58,17 @@ Returns the authenticated user's profile.
 
 #### `GET /api/containers`
 
-List all containers owned by the authenticated user.
+List all containers owned by or assigned to the authenticated user. Assigned
+VMs have `SharedAccess: true`; this does not grant management rights.
 
 **Response `200 OK`:**
 ```json
 [
   {
-    "id": "container-uuid",
-    "name": "my-vm",
-    "status": "running",
-    "created_at": "2024-01-01T00:00:00Z"
+    "ID": "container-uuid",
+    "Name": "my-vm",
+    "Status": "running",
+    "CreatedAt": "2024-01-01T00:00:00Z"
   }
 ]
 ```
@@ -71,6 +89,11 @@ come up — there is no separate start step.
 }
 ```
 
+Optional creation fields are `image` (default `svkexe-base`), `cpu_limit`
+(default 2), `memory_mb` (2048), `disk_gb` (10), and `initial_task` (up to 4000
+characters, delivered to the agent after startup). Names use lowercase letters,
+digits and hyphens, 2–63 characters; reserved agent/port prefixes are rejected.
+
 `nesting` decides whether the VM may run containers of its own — Docker, buildah,
 a nested Incus. Omitting it enables them, which is the platform default; send
 `false` to opt out. The deployment-wide setting under **System → Nested
@@ -86,9 +109,9 @@ booted with. The two differing on a running VM means a restart is still owed.
 **Response `201 Created`:**
 ```json
 {
-  "id": "container-uuid",
-  "name": "my-vm",
-  "status": "running"
+  "ID": "container-uuid",
+  "Name": "my-vm",
+  "Status": "running"
 }
 ```
 
@@ -96,15 +119,15 @@ booted with. The two differing on a running VM means a restart is still owed.
 
 #### `GET /api/containers/{id}`
 
-Get a specific container. Requires ownership.
+Get a specific container. Owners and named VM members may read it.
 
 **Response `200 OK`:**
 ```json
 {
-  "id": "container-uuid",
-  "name": "my-vm",
-  "status": "running",
-  "created_at": "2024-01-01T00:00:00Z"
+  "ID": "container-uuid",
+  "Name": "my-vm",
+  "Status": "running",
+  "CreatedAt": "2024-01-01T00:00:00Z"
 }
 ```
 
@@ -142,13 +165,16 @@ Stop a running container. Requires ownership.
 
 #### `POST /api/containers/{id}/share`
 
-Create a shared link for the container. Requires ownership.
+Create a workload share link. Requires ownership. Optional JSON body:
+`{"expires_at":"2027-01-01T00:00:00Z"}`. Omitting expiry makes it non-expiring.
+Share links never grant agent or management access.
 
 **Response `201 Created`:**
 ```json
 {
   "token": "share-token",
-  "url": "https://yourdomain.com/shared/share-token"
+  "url": "https://my-vm.example.com/?share=share-token",
+  "expires_at": null
 }
 ```
 
@@ -156,14 +182,16 @@ Create a shared link for the container. Requires ownership.
 
 #### `GET /api/containers/{id}/shares`
 
-List all active shared links for the container. Requires ownership.
+List stored shared links for the container. Requires ownership. Responses use
+`ID`, `Token`, `ContainerID`, `CreatedBy`, `ExpiresAt`, `CreatedAt`; consumers
+should check expiration.
 
 **Response `200 OK`:**
 ```json
 [
   {
-    "token": "share-token",
-    "created_at": "2024-01-01T00:00:00Z"
+    "Token": "share-token",
+    "CreatedAt": "2024-01-01T00:00:00Z"
   }
 ]
 ```
@@ -294,7 +322,7 @@ List all SSH public keys for the authenticated user.
   {
     "id": "sshkey-uuid",
     "name": "laptop",
-    "public_key": "ssh-ed25519 AAAA...",
+    "fingerprint": "SHA256:...",
     "created_at": "2024-01-01T00:00:00Z"
   }
 ]
@@ -319,7 +347,8 @@ Add an SSH public key.
 {
   "id": "sshkey-uuid",
   "name": "laptop",
-  "public_key": "ssh-ed25519 AAAA..."
+  "fingerprint": "SHA256:...",
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
@@ -356,7 +385,8 @@ List all users on the platform.
 
 #### `DELETE /api/admin/users/{id}`
 
-Delete a user and all their containers.
+Delete the user and cascade their gateway database records. This handler does
+not delete their Incus instances; remove owned VMs first to avoid orphaning them.
 
 **Response `204 No Content`**
 
@@ -370,25 +400,74 @@ List all containers across all users.
 ```json
 [
   {
-    "id": "container-uuid",
-    "name": "my-vm",
-    "owner_id": "user-uuid",
-    "status": "running"
+    "ID": "container-uuid",
+    "Name": "my-vm",
+    "OwnerID": "user-uuid",
+    "Status": "running"
   }
 ]
 ```
 
 ---
 
+## Additional routes
+
+### Workload, task and rebuild
+
+These routes require VM ownership:
+
+| Method and path | Request / result |
+|---|---|
+| `POST /api/containers/{id}/recreate` | Start a background rebuild preserving `/data`; returns `202` with an empty body. Poll `GET /api/containers/{id}` |
+| `PUT /api/containers/{id}/publish` | `{"port":3000,"public":true}`; returns the container. Port 9000 is reserved |
+| `POST /api/containers/{id}/task/retry` | Requeue a failed initial task; returns the current container |
+
+### Custom domains
+
+| Method and path | Request / result |
+|---|---|
+| `GET /api/containers/{id}/aliases` | List owner's VM aliases |
+| `POST /api/containers/{id}/aliases` | `{"hostname":"app.example.net"}`; `201` with alias and DNS verification result |
+| `POST /api/containers/{id}/aliases/{aliasID}/verify` | Recheck DNS; `200` with alias |
+| `DELETE /api/containers/{id}/aliases/{aliasID}` | Remove alias; `204` |
+| `GET /api/tls/check?domain=app.example.net` | Public Caddy certificate authorization; succeeds only for an eligible verified hostname |
+| `GET /api/admin/aliases` | Admin list of all aliases |
+| `DELETE /api/admin/aliases/{hostname}` | Admin release of a claimed hostname |
+
+A saved alias whose DNS is wrong is not routed; a successful create response
+alone does not prove verification. See [workload routing](../README.md#workload-routing).
+
+### Versions and updates (admin only)
+
+| Method and path | Result |
+|---|---|
+| `GET /api/admin/version` | Gateway and bundled component build versions |
+| `GET /api/admin/update/check` | Upstream update check |
+| `GET /api/admin/update/status` | Current update progress |
+| `POST /api/admin/update` | Request an update through the installed watcher or configured update command |
+
+See [deployment](DEPLOY.md) for installation of the privileged update watcher.
+
+### LLM proxy
+
+`POST /api/llm/v1/chat/completions` accepts OpenAI-style chat requests and
+streams responses when `stream: true`. `GET /api/llm/v1/models` lists the
+platform fallback models. Routes are registered only when the gateway has an
+`OPENROUTER_API_KEY`. Use `Authorization: Bearer <LLM_INTERNAL_TOKEN>` when that token is configured.
+Session cookies do not authenticate this proxy. An empty internal token disables
+proxy authentication, so set it whenever enabling the platform fallback.
+The token is for the VM-to-gateway LLM path, not general administration.
+
+### Metrics
+
+`GET /metrics` returns Prometheus text without authentication; see
+[monitoring](DEPLOY.md#monitoring) for the metric names.
+
 ## Error Responses
 
-All errors return JSON with an `error` field:
-
-```json
-{
-  "error": "description of what went wrong"
-}
-```
+Most management errors are plain text from `http.Error`, for example
+`unauthorized` or `container not found`, with the corresponding HTTP status.
+Do not assume every error body is JSON. The LLM proxy has a separate error shape.
 
 | Status | Meaning |
 |---|---|

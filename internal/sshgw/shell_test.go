@@ -95,7 +95,7 @@ func newTestServer(t *testing.T, rt runtime.ContainerRuntime) (*Server, *db.DB) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	return &Server{db: database, runtime: rt, domain: "svk.bar"}, database
+	return &Server{db: database, runtime: rt, domain: "example.test"}, database
 }
 
 func newTestUser(t *testing.T, database *db.DB, id, email, role string) *db.User {
@@ -239,7 +239,7 @@ func TestSessionWithoutPTYIsGreetedWithAnAgentBrief(t *testing.T) {
 	s.handleSession(sess)
 
 	output := sess.output.String()
-	for _, want := range []string{"agent@example.test", "help --json", "svk.bar"} {
+	for _, want := range []string{"agent@example.test", "help --json", "example.test"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("the brief does not mention %q: %q", want, output)
 		}
@@ -486,7 +486,7 @@ func TestReadCommandsEmitParsableJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &list); err != nil {
 		t.Fatalf("ls --json is not valid JSON: %v\n%s", err, output)
 	}
-	if len(list) != 1 || list[0].Name != "dev" || list[0].URL != "https://dev.svk.bar" {
+	if len(list) != 1 || list[0].Name != "dev" || list[0].URL != "https://dev.example.test" {
 		t.Fatalf("ls --json does not describe the VM: %+v", list)
 	}
 

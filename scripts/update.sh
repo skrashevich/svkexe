@@ -411,7 +411,7 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
     # and makes the gateway advertise an update it just installed.
     git_repo fetch --tags origin "${SVKEXE_BRANCH}"
     git_repo checkout -q "${SVKEXE_BRANCH}"
-    git_repo reset --hard "origin/${SVKEXE_BRANCH}"
+    git_repo reset --hard FETCH_HEAD
     COMMIT="$(git_repo rev-parse --short HEAD)"
     log "Updated to commit ${COMMIT}."
 else
@@ -498,7 +498,7 @@ elif systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
         log "Service restarted successfully."
     else
-        warn "Service may have failed to start. Check: journalctl -u ${SERVICE_NAME} -n 30"
+        die "Service failed to start. Check: journalctl -u ${SERVICE_NAME} -n 30"
     fi
 elif systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
     log "Service is not running. Starting ${SERVICE_NAME}…"
@@ -509,12 +509,8 @@ fi
 
 # ── Step 5: Rebuild base image if its inputs changed ────────────────────────
 #
-# Deliberately last. scripts/build-image.sh deletes the svkexe-base alias before
-# republishing it, so a failure halfway through (apt, npm, the network) leaves
-# the host unable to create VMs. Running it after the binary is installed and
-# the service is back up bounds the damage to the image: one button click can
-# cost the operator the image rebuild, or the gateway update, but not both.
-
+# Deliberately last: a slow image build must not delay installing the gateway.
+# build-image.sh retains the old image until it publishes the replacement.
 if [[ -d "${REPO_ROOT}/.git" ]]; then
     if [[ -z "${OLD_COMMIT}" ]]; then
         log "No pre-pull commit recorded — skipping base image rebuild check."

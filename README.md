@@ -21,136 +21,86 @@ The PicoClaw runtime with Shelley web UI and HTTP API is available as a [standal
 - **WebSocket/SSE proxy** for real-time PicoClaw interactions
 - **Web Shell** (xterm.js) for browser-based terminal access
 - **SSH Gateway** — a management shell with the dashboard's full surface for any login backed by a known key, direct connect (`ssh vm@host`), one-shot commands and a `help --json` catalogue for LLM agents
+- **Named VM access** — invite users by email and SSH key with use-only guest permissions; see [Access](docs/ACCESS.md)
 - **Shared links** (Discord-style) for temporary container access
 - **LLM reverse proxy** to OpenRouter with automatic model fallback
 - **LLM key management** with AES-GCM encryption, per-container isolation
 - **Built-in web login** — cookie-based sessions, bcrypt password hashing, first-run admin bootstrap via env
 - **Admin panel** for user and container management
 - **Per-user rate limiting** (token bucket)
-- **Prometheus metrics** + Grafana dashboards
-- **Automated backups** — SQLite + Incus snapshots with 7-day retention
+- **Prometheus metrics** + optional Grafana (dashboards configured by the operator)
+- **Backup scripts** — SQLite + running-container Incus snapshots with 7-day retention; scheduling is manual
 - **Nested containers** — Docker, buildah and nested Incus work inside a VM; on by default, switchable per VM by its owner and platform-wide by an admin
-
-## Prerequisites
-
-- **Linux host** — Ubuntu 24.04+ or Debian 12+ (amd64 or arm64)
-- **Root (sudo) access** on the host
-- **Domain with wildcard DNS** — you need an A record for the base domain and a wildcard record pointing to the same server:
-
-  ```
-  example.com      A    → 203.0.113.10
-  *.example.com    A    → 203.0.113.10
-  ```
-
-  If you use Cloudflare, create both records in the DNS dashboard (the wildcard `*` record). Cloudflare proxy (orange cloud) works for the base domain but **not** for wildcard records on free plans — set the `*` record to "DNS only" (grey cloud).
 
 ## Installation
 
-### Option A: One-liner install (bare metal, recommended)
+Use **your own domain**: `example.com` below is a placeholder. Set `DOMAIN` to
+that domain and point its base and wildcard DNS records to your server.
 
-The installer handles everything: system packages, Go, Docker, Incus, base container image, gateway binary, and systemd service.
-
-1. **Run the installer** on a fresh server:
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh | sudo bash
-   ```
-
-   Or with domain pre-filled:
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh \
-     | sudo env DOMAIN=example.com ACME_EMAIL=you@example.com bash
-   ```
-
-   If you already have a local checkout, run `sudo ./scripts/install.sh` directly — it auto-detects and uses the current tree.
-
-2. **Review the generated config:**
-
-   ```bash
-   sudo $EDITOR /etc/svkexe/gateway.env
-   ```
-
-   The installer seeds this file with generated secrets and a random admin password. Key settings to check:
-
-   | Variable | What to set |
-   |---|---|
-   | `DOMAIN` | Your base domain (e.g. `example.com`) |
-   | `BOOTSTRAP_ADMIN_EMAIL` | Admin login email |
-   | `BOOTSTRAP_ADMIN_PASSWORD` | Admin login password (printed during install, rotatable here) |
-   | `GATEWAY_COOKIE_SECURE` | Set to `1` when behind HTTPS (Caddy or external TLS) |
-   | `OPENROUTER_API_KEY` | Your OpenRouter key (enables LLM proxy for PicoClaw) |
-
-3. **Start the service:**
-
-   ```bash
-   sudo systemctl start svkexe-gateway
-   journalctl -u svkexe-gateway -f
-   ```
-
-4. **First login:** Open `http://<your-server>:8080/login` in a browser. Log in with the `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` from the install output (also saved in `/etc/svkexe/gateway.env`). After login you'll see the dashboard where you can create your first VM.
-
-The installer is idempotent — re-running is safe. Skip-flags for partial runs: `SKIP_DOCKER=1`, `SKIP_INCUS=1`, `SKIP_IMAGE_BUILD=1` (long step), `SKIP_GO=1`, `SKIP_BUILD=1`, `SKIP_SERVICE=1`. Override repo source with `SVKEXE_REPO=...`, `SVKEXE_BRANCH=...`, `SVKEXE_SRC_DIR=...`.
-
-### Option B: Docker Compose
-
-Use this if you want the full stack (Caddy for TLS + Authelia + Prometheus + Grafana) managed by Docker Compose. Incus still runs on the host.
-
-1. **Clone and prepare Incus on the host:**
-
-   ```bash
-   git clone https://github.com/skrashevich/svkexe
-   cd svkexe
-   sudo ./scripts/setup-incus.sh
-   sudo ./scripts/build-image.sh   # builds svkexe-base image (takes several minutes)
-   ```
-
-2. **Configure environment:**
-
-   ```bash
-   cd deploy
-   cp docker-compose.yml docker-compose.override.yml
-   ```
-
-   Edit `docker-compose.override.yml` and set:
-
-   | Variable | Service | Description |
-   |---|---|---|
-   | `DOMAIN` | caddy, gateway | Your base domain |
-   | `ACME_EMAIL` | caddy | Email for Let's Encrypt certificates |
-   | `CLOUDFLARE_API_TOKEN` | caddy | Cloudflare API token for DNS-01 challenge (TLS for wildcard domains) |
-   | `AUTHELIA_SESSION_SECRET` | authelia | Random secret (`openssl rand -hex 32`) |
-   | `ENC_KEY` | gateway | AES-256 key (`openssl rand -hex 32`) |
-
-   > **Cloudflare API token:** Go to [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) → Create Token → use the "Edit zone DNS" template → select your zone. This token is required for Caddy to obtain wildcard TLS certificates via DNS-01 challenge.
-
-3. **Launch:**
-
-   ```bash
-   docker compose up -d
-   ```
-
-4. **First login:** Open `https://yourdomain.com` — Authelia will handle authentication. Follow its first-run setup flow.
-
-### Option C: Build from source
-
-For development or custom deployments:
+The installer supports Ubuntu 24.04/26.04 LTS and Debian 12/13 on amd64/arm64,
+with root access and systemd:
 
 ```bash
-git clone https://github.com/skrashevich/svkexe
-cd svkexe
-make build
-
-export GATEWAY_ENC_KEY="$(openssl rand -hex 32)"
-export DOMAIN="yourdomain.com"
-export GATEWAY_DB_PATH="/var/lib/svkexe/gateway.db"
-export BOOTSTRAP_ADMIN_EMAIL="admin@example.com"
-export BOOTSTRAP_ADMIN_PASSWORD="changeme"
-
-./bin/gateway
+curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh \
+  | sudo env DOMAIN=example.com bash
 ```
 
-Requires a running Incus daemon with the `svkexe-base` image (see `scripts/setup-incus.sh` and `scripts/build-image.sh`).
+From a local checkout: `sudo env DOMAIN=example.com ./scripts/install.sh`.
+It installs packages, Go (the highest version required by the gateway and agent
+modules), Docker, Incus, the VM image and both binaries. It enables the systemd
+gateway but leaves it stopped so you can review `/etc/svkexe/gateway.env`.
+
+Set the bootstrap admin credentials and domain in that file, configure TLS,
+then start `sudo systemctl start svkexe-gateway`. Login at
+`https://example.com/login`. For temporary HTTP testing keep
+`GATEWAY_COOKIE_SECURE=0` and use `http://example.com:8080/login`; logging in by
+IP when `DOMAIN` is set gives a mismatched cookie domain.
+
+The [deployment guide](docs/DEPLOY.md) includes the complete bare-metal TLS
+setup, skip flags, Docker Compose alternative, updates, backups, and end-to-end
+verification. TLS and backup scheduling are separate setup steps.
+
+### Docker Compose
+
+Docker packages the gateway and reverse proxy. **Incus runs directly on the Linux
+host and creates the VMs there**, outside Docker. The gateway calls the host's
+Incus API through the mounted `/var/lib/incus/unix.socket`; it creates system
+containers from `svkexe-base` using the `svkexe-default` profile, `svkexe-pool`
+storage and `svkexe-br0` network. These are LXC system containers sharing the host
+kernel, not hardware-virtualized guests.
+
+```text
+Browser → Caddy (Docker) → Gateway (Docker)
+                              │ mounted Unix socket: Incus API
+                              ▼
+                         Incus (Linux host)
+                              ├── VM: systemd + agent + user apps
+                              └── VM: systemd + agent + user apps
+```
+
+Incus images and VM disks stay in host-managed storage; the gateway database has
+its own Docker volume. Restarting/replacing the gateway container does not delete
+VMs, but the gateway's database and encryption key must be preserved to manage
+them. This setup requires host-level Incus preparation; it is not a standalone
+Compose stack that can create VMs on an arbitrary Docker server.
+
+Follow [the Compose instructions](docs/DEPLOY.md#docker-compose-alternative-gateway-deployment)
+and configure `deploy/.env` from `deploy/.env.example`, then run
+`docker compose up -d --build` in `deploy/`. The stack builds Caddy with the
+Cloudflare DNS module and uses the gateway's own login; optional monitoring is
+under the `monitoring` profile. It is an alternative to the systemd gateway.
+
+### Build from source
+
+`make build` builds both the gateway and its Linux agent. Install Go sufficient
+for both modules (currently gateway 1.26.2, agent 1.27.1), Python 3, make and
+Node/npm. `make gateway` builds only the gateway; `make test` tests the gateway
+module; `make test-agent` runs agent compatibility tests.
+
+A runnable Linux deployment also needs Incus with `svkexe-base`, writable data
+and secrets directories, persistent SSH keys, `GATEWAY_ENC_KEY`, and a bootstrap
+admin account. See the [deployment guide](docs/DEPLOY.md), rather than running
+an unconfigured binary as a production service.
 
 ## Update
 
@@ -195,11 +145,12 @@ Or remotely:
 curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/update.sh | sudo bash
 ```
 
-The script pulls the latest code, rebuilds the gateway and PicoClaw agent, rebuilds the base image when agent/build sources change, and restarts the service. Running VM agents are migrated on gateway startup; stopped VMs migrate on their next start. Optional: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (build only).
+The script pulls the latest code, rebuilds the gateway and PicoClaw agent, rebuilds the base image when agent/build sources change, and restarts the service. Running VM agents are migrated on gateway startup; stopped VMs migrate on their next start. Optional: `SVKEXE_BRANCH=...` (default: main), `SKIP_RESTART=1` (install without restarting the gateway; image rebuilds still run).
 
 ### Docker deployments
 
-A container image is updated by pulling a new image, not by rebuilding in place. There is no systemd
+The supplied Compose deployment builds from source: update the checkout and run
+`docker compose up -d --build` in `deploy/`. There is no systemd
 watcher inside the container, so the watcher marker is absent and the **Update now** button reports the
 deployment as unable to self-update — that is enforced by the marker check, not merely assumed. Set
 `SVKEXE_UPDATE_COMMAND` to a command that performs the update for your setup if you want the button to
@@ -283,15 +234,16 @@ on *Auto* to let the gateway pick your most recently configured model. A choice
 that stops being reachable (you edit or delete the connection behind it) is
 dropped rather than left dangling, and the VMs fall back to a model you do have.
 
-The REST API accepts the same settings:
+The REST API accepts the same settings (use your own domain and obtain
+`cookies.txt` through [API login](docs/API.md#authentication)):
 
 ```bash
 # Add a connection
-curl -X POST /api/keys -d '{"provider":"custom-openmodel","base_url":"https://api.openmodel.ai/v1","models":"deepseek-v4-flash,deepseek-v4-pro","protocol":"openai-responses","key":"om-..."}'
+curl -b cookies.txt -H 'Content-Type: application/json' -X POST https://example.com/api/keys -d '{"provider":"custom-openmodel","base_url":"https://api.openmodel.ai/v1","models":"deepseek-v4-flash,deepseek-v4-pro","protocol":"openai-responses","key":"om-..."}'
 
 # See what you can pick, and pick one
-curl /api/llm/models
-curl -X PUT /api/llm/default -d '{"model":"svkexe_user:custom-openmodel:deepseek-v4-pro"}'
+curl -b cookies.txt https://example.com/api/llm/models
+curl -b cookies.txt -H 'Content-Type: application/json' -X PUT https://example.com/api/llm/default -d '{"model":"svkexe_user:custom-openmodel:deepseek-v4-pro"}'
 ```
 
 User endpoints are independent of the gateway-wide `OPENROUTER_API_KEY` fallback.
@@ -325,8 +277,10 @@ conversation — a VM whose task was handed over before the gateway recorded
 conversations — is found again by its opening message, and only reported
 `failed` when the agent has no such conversation. A failure is most often
 no configured model, which you fix by adding an LLM key and pressing Retry; a
-failed task never retries by itself, so nothing fires unexpectedly on a later
-restart. While a task is live the card links straight to its conversation in the
+failed task can be retried explicitly from its VM card. Before declaring failure,
+the gateway may automatically resume an agent-reported transient error up to three
+times. These resumed turns can consume additional model quota. While a task is
+live the card links straight to its conversation in the
 agent's own interface.
 
 The REST API takes the same text as `initial_task` on `POST /api/containers`,
@@ -338,9 +292,9 @@ Each VM exposes two different things, on two separate hosts:
 
 | URL | Serves | Who can reach it |
 |---|---|---|
-| `https://{name}.{domain}/` | your service, on the VM's configured port (default `3000`) | owner, share links, and anyone at all when the VM is public |
-| `https://{port}-{name}.{domain}/` | your service on any other port | owner and share links only |
-| `https://agent-{name}.{domain}/` | the PicoClaw web interface | the owner only |
+| `https://{name}.{domain}/` | your service, on the VM's configured port (default `3000`) | owner, named VM members, share links, and anyone when public |
+| `https://{port}-{name}.{domain}/` | your service on any other port | owner, named VM members, and share links |
+| `https://agent-{name}.{domain}/` | the PicoClaw web interface | owner and named VM members |
 
 Set the port and the Private/Public switch on the VM card in the dashboard, or
 via `PUT /api/containers/{id}/publish` with `{"port":3000,"public":true}`.
@@ -505,9 +459,8 @@ Two host-side pieces, both installed by `scripts/install.sh` and refreshed by
   each VM to the address and MAC it was allocated. This is a prerequisite, not a
   hardening extra: identity here is the source address and a tenant is root
   inside their own VM. The gateway refuses to answer any VM whose NIC is
-  unfiltered, and says so in the log. Incus applies the setting when an instance
-  starts, so **a VM created before this is installed picks it up on its next
-  restart and is refused until then.** A VM that needs a second address of its
+  unfiltered, and says so in the log. Profile filtering changes can apply to
+  running instances immediately; verify their networking after a change. A VM that needs a second address of its
   own — bridged nested networking rather than Docker's default NAT — cannot have
   one while this is on.
 
@@ -545,7 +498,7 @@ it arrives from.
 ```
 ┌─────────────────────────────────────────────────────┐
 │                 Caddy (Reverse Proxy)                │
-│     Wildcard TLS + Header Strip/Inject + Authelia    │
+│     Wildcard TLS + identity-header stripping       │
 ├─────────────────────────────────────────────────────┤
 │              Go API Gateway (:8080)                  │
 │   Ownership enforcement, rate limiting, Prometheus   │
@@ -594,7 +547,7 @@ internal/
   metrics/             Prometheus metrics + middleware
   ratelimit/           Per-user token bucket rate limiter
 ui/templates/          Go HTML templates
-deploy/                Caddy, Authelia, Docker Compose, Prometheus
+deploy/                Caddy, Docker Compose, optional monitoring
 scripts/               Host setup, image build, backup/restore
 docs/                  Deployment guide, API reference
 ```
@@ -641,16 +594,16 @@ shortcut — and offers the same operations as the dashboard.
 
 ```bash
 # Management shell. Any login works; the key says who you are.
-ssh svk.bar
-ssh svkexe@svk.bar               # the reserved login: always the shell
+ssh -p 2222 example.com
+ssh -p 2222 svkexe@example.com               # the reserved login: always the shell
 
 # A login naming one of your own VMs opens a shell inside it.
-ssh dev@svk.bar
+ssh -p 2222 dev@example.com
 
 # One command per connection, for scripts and LLM agents.
-ssh svk.bar "ls --json"
-ssh svk.bar "help --json"        # the whole command catalogue, machine-readable
-ssh dev@svk.bar "uptime"         # runs inside the VM
+ssh -p 2222 example.com "ls --json"
+ssh -p 2222 example.com "help --json"        # the whole command catalogue, machine-readable
+ssh -p 2222 dev@example.com "uptime"         # runs inside the VM
 ```
 
 `help` lists the commands your key may run, grouped by area; `help <command>`
@@ -669,7 +622,9 @@ command needs `--force` in a one-shot, and the exit status is 0, 1 or 127
   relaxes the VM-to-host boundary: a tenant that can create containers reaches more kernel surface
   than one that cannot. Untrusted tenants? Turn it off under **System → Nested containers**, which
   overrides every per-VM switch. VMs pick the change up on their next start.
-- LLM keys encrypted with AES-GCM, materialized as read-only tmpfs mounts
+- LLM keys encrypted with AES-GCM in the gateway DB; provider environment files are
+  mode 0400, endpoint-backed credentials are seeded in the agent DB. The default
+  secrets directory is on disk, not automatically mounted as tmpfs.
 - Shared links scoped to specific containers with optional expiration
 
 ## Docs
@@ -677,8 +632,9 @@ command needs `--force` in a one-shot, and the exit status is 0, 1 or 127
 - [Deployment Guide](docs/DEPLOY.md)
 - [API Reference](docs/API.md)
 - [SSH Interface](docs/SSH.md)
-- [Implementation Plan](PLAN.md)
+- [Named VM access and guest accounts](docs/ACCESS.md)
+- [Historical Implementation Plan](PLAN.md)
 
 ## License
 
-MIT
+Apache-2.0; the bundled agent includes additional notices in [agent/licenses](agent/licenses).

@@ -13,25 +13,28 @@ Authentication is by SSH key only. A key is registered from the dashboard
 (**SSH keys**) or from the shell itself, and it is the key — never the login
 name — that decides who you are.
 
+Guest accounts and named VM members have use-only permissions; see [ACCESS.md](ACCESS.md).
+Use your own `DOMAIN` in place of `example.com` in every example.
+
 ## Connecting
 
 ```bash
 # The management shell. Any login name works; the key identifies you.
-ssh svk.bar
-ssh -p 2222 anything@svk.bar
+ssh -p 2222 example.com
+ssh -p 2222 anything@example.com
 
 # A login that names one of your own VMs goes straight into it.
-ssh dev@svk.bar
+ssh -p 2222 dev@example.com
 
 # One command per connection, for scripts and agents.
-ssh svk.bar "ls --json"
+ssh -p 2222 example.com "ls --json"
 
 # A command with a VM login runs inside that VM.
-ssh dev@svk.bar "systemctl status myapp"
+ssh -p 2222 dev@example.com "systemctl status myapp"
 ```
 
 A login that does not name one of your VMs is not an error: it lands on the
-management shell. This matters because `ssh svk.bar` sends your local username
+management shell. This matters because `ssh -p 2222 example.com` sends your local username
 by default, and that is rarely one of your VM names.
 
 One login is reserved: `svkexe@` always opens the management shell, even when a
@@ -58,14 +61,14 @@ The shell is meant to be driven by programs as well as people.
   not `--ttl`, `share revoke` takes neither.
 - A destructive command — `rm`, `recreate`, `admin rmuser` — has to be told
   `--force` when it arrives as a one-shot. The reason is the login: `ssh
-  dev@svk.bar "rm foo"` deletes a file inside the VM while `dev` exists, and
+  dev@example.com "rm foo"` deletes a file inside the VM while `dev` exists, and
   deletes the VM named `foo` once it does not.
 - An argument that would otherwise be read as an action word is escaped with
   `--`: a VM named `retry` is addressed as `task -- retry`.
 
 ```bash
-ssh svk.bar "help --json" | jq '.commands[] | {name, usage, summary}'
-ssh svk.bar "ls --json"   | jq '.[] | select(.status == "running") | .name'
+ssh -p 2222 example.com "help --json" | jq '.commands[] | {name, usage, summary}'
+ssh -p 2222 example.com "ls --json"   | jq '.[] | select(.status == "running") | .name'
 ```
 
 ## The command surface
@@ -129,6 +132,7 @@ accepted, nor described by an error.
 | `ssh-key list [--json]` | list your keys by name and fingerprint |
 | `ssh-key add <name> <public-key>` | register an OpenSSH public key |
 | `ssh-key remove <name>` | remove the key with that name |
+| `passwd` | Set your web login password interactively (requires a PTY: `ssh -t -p 2222 svkexe@example.com passwd`) |
 | `whoami [--json]` | Show who you are and what this account holds |
 
 ### Session
@@ -157,4 +161,5 @@ All three surfaces act on the same data through the same code paths: a VM
 created over SSH is identical to one created from the dashboard, a published
 port set here refreshes the agent's guide inside the VM exactly as the web form
 does, and a custom domain added here goes through the same DNS verification.
-Ownership is enforced per command, so a VM you do not own is simply not found.
+Management commands require ownership. Use commands also allow named VM
+members; a VM outside both scopes is not accessible.

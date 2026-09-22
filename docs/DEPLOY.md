@@ -3,180 +3,225 @@ title: Deployment guide
 description: Install, configure and update a svkexe host
 ---
 
-# Deployment Guide
+# Deployment guide
+
+Use your own domain throughout. `example.com` is a placeholder, not a service
+provided by this project. The gateway derives VM and agent URLs from `DOMAIN`;
+base-domain and wildcard DNS records must point to your host.
 
 ## Prerequisites
 
-- Linux host (Ubuntu 24.04 LTS or Debian 12 recommended)
-- [Incus](https://linuxcontainers.org/incus/docs/main/) v6.0+ installed and running
-- Go 1.22+ (for building from source)
-- [Caddy](https://caddyserver.com/) v2.8+ for TLS termination and reverse proxying
-- [Authelia](https://www.authelia.com/) v4.38+ for authentication
-- A domain name with DNS wildcard support (`*.yourdomain.com`)
-- SQLite (included via Go driver — no separate install needed)
+- A Linux host with systemd: Ubuntu 24.04/26.04 LTS or Debian 12/13, amd64 or arm64.
+- Root access, outbound HTTPS for APT, Go/npm modules and image downloads, and
+  enough RAM/disk for the agent UI build and your VMs.
+- Base and wildcard DNS (`example.com`, `*.example.com`). Use DNS-only records
+  for direct access; a CDN needs separate consideration for SSH and custom-domain
+  DNS verification (`GATEWAY_PUBLIC_IPS`).
+- Inbound TCP 80/443 for Caddy and 2222 for the SSH gateway. Keep the host's own
+  administrative SSH port accessible. The Incus subnet `10.100.0.0/24` must not
+  overlap another network on the host.
 
-## Quick Start
+The installer uses [Zabbly's Incus packages](https://github.com/zabbly/incus).
+For manual builds, install Go sufficient for **both** `go.mod` and
+`agent/shelley/go.mod` (currently 1.26.2 and 1.27.1), make, Python 3 and Node/npm.
+The agent build bootstraps its pinned Node/pnpm versions; see [PICOCLAW.md](PICOCLAW.md).
+
+## Bare metal (recommended)
 
 ```bash
-# 1. Clone the repository
+curl -fsSL https://raw.githubusercontent.com/skrashevich/svkexe/main/scripts/install.sh \
+  | sudo env DOMAIN=example.com bash
+```
+
+From a checkout, use `sudo env DOMAIN=example.com ./scripts/install.sh`.
+The installer installs packages/toolchains, configures Incus, builds the base
+image and both binaries, creates `/etc/svkexe/gateway.env`, and enables the
+systemd gateway and update units. **The gateway is not started automatically.**
+TLS, backup scheduling and monitoring require the steps below.
+
+Review the generated config with `sudoedit /etc/svkexe/gateway.env`:
+
+- `DOMAIN`: your real base domain. Login through this hostname, since the
+  session cookie is scoped to it; an IP-address login does not work with a
+  different configured cookie domain.
+- `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`: the initial account.
+  The password is reapplied on startup; change this value to rotate it.
+- `GATEWAY_ENC_KEY`: generated AES key. Preserve it across reinstalls and backups.
+- `GATEWAY_COOKIE_SECURE=1` for HTTPS. Keep `0` only during HTTP testing.
+- `OPENROUTER_API_KEY`: optional platform fallback; users can instead add their
+  own provider connections after login.
+- `METADATA_ADDR`: defaults to `10.100.0.1:8081`. If changing the port, run
+  `sudo env SVKEXE_METADATA_PORT=NEW_PORT ./scripts/install-metadata-units.sh`
+  and use that same override on future installation/update runs.
+
+```bash
+sudo systemctl start svkexe-gateway
+sudo systemctl status svkexe-gateway --no-pager
+sudo journalctl -u svkexe-gateway -n 50 --no-pager
+curl -f -H 'Host: example.com' http://127.0.0.1:8080/login
+```
+
+For temporary HTTP access use `http://example.com:8080/login`. Production uses
+`https://example.com/login` after configuring TLS below.
+
+Re-running preserves an existing `gateway.env` and base image, but refreshes
+packages, profile settings, binaries and units. It can affect live networking;
+use a dedicated checkout and review changes before running on an existing host.
+Skip flags: `SKIP_DOCKER`, `SKIP_INCUS`, `SKIP_IMAGE_BUILD`, `SKIP_GO`,
+`SKIP_BUILD`, `SKIP_SERVICE` (set to `1`). `SKIP_INCUS` also skips host setup,
+metadata and image creation. `SKIP_BUILD` still allows the image step to build
+an agent. Source overrides: `SVKEXE_REPO`, `SVKEXE_BRANCH` (branch or tag),
+`SVKEXE_SRC_DIR` (default `/opt/svkexe` for piped installation).
+
+## TLS for the bare-metal gateway
+
+Authentication is the gateway's own login and session cookie. Authelia is not
+required. The supplied Caddyfile uses the Cloudflare DNS plugin for wildcard
+certificates and gateway-approved on-demand certificates for custom domains.
+For another DNS provider, change the Caddy module and `tls dns` configuration.
+[Caddy's build documentation](https://caddyserver.com/docs/build) describes plugins.
+
+One way to run this Caddyfile with the bare-metal gateway is a host-networked
+Caddy container. Do not start the full Compose gateway alongside the systemd one.
+From the source checkout:
+
+```bash
+sudo install -d -m 0750 /etc/svkexe
+sudo install -m 0644 deploy/Caddyfile /etc/svkexe/Caddyfile
+sudoedit /etc/svkexe/caddy.env
+```
+
+Save these values (replace the examples), then protect the file:
+
+```dotenv
+DOMAIN=example.com
+ACME_EMAIL=admin@example.com
+CLOUDFLARE_API_TOKEN=your-zone-dns-token
+GATEWAY_UPSTREAM=127.0.0.1:8080
+```
+
+```bash
+sudo chmod 600 /etc/svkexe/caddy.env
+sudo docker build -f deploy/Caddy.Dockerfile -t svkexe-caddy deploy
+sudo docker run -d --name svkexe-caddy --restart unless-stopped \
+  --network host --env-file /etc/svkexe/caddy.env \
+  -v /etc/svkexe/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v svkexe-caddy-data:/data -v svkexe-caddy-config:/config svkexe-caddy
+```
+
+Set `GATEWAY_COOKIE_SECURE=1` in `gateway.env` and restart `svkexe-gateway`.
+Restrict external access to port 8080 with the host firewall; keep the gateway
+reachable from Caddy and, if using a direct internal LLM URL, from the VM bridge.
+Caddy strips incoming identity headers. Do not inject identity as an alternative
+to logging in: the gateway authenticates the session itself.
+
+## Docker Compose (alternative gateway deployment)
+
+Incus still runs on the **Linux host**. A create-VM request goes from the Docker
+gateway through its mounted Incus socket to the host daemon. Incus creates an
+LXC system container from `svkexe-base`, with `svkexe-default`, storage in
+`svkexe-pool` and networking on `svkexe-br0`. VM disks belong to Incus on the host;
+only the gateway database and keys belong to the `gateway_data` Docker volume.
+The gateway must also be able to reach VM IPs on `10.100.0.0/24` for HTTP/SSE.
+
+Prepare the host using the installer but omit
+the systemd gateway and host binary installation:
+
+```bash
 git clone https://github.com/skrashevich/svkexe
-cd platform
-
-# 2. Build the gateway binary
-go build -o bin/gateway ./cmd/gateway
-
-# 3. Create the data directory
-sudo mkdir -p /var/lib/svkexe
-sudo chown $(whoami) /var/lib/svkexe
-
-# 4. Set required environment variables (see below)
-export GATEWAY_ENC_KEY="$(openssl rand -hex 32)"
-export DOMAIN="yourdomain.com"
-
-# 5. Run the gateway
-./bin/gateway
+cd svkexe
+sudo env DOMAIN=example.com SKIP_BUILD=1 SKIP_SERVICE=1 ./scripts/install.sh
+cd deploy
+cp .env.example .env
+chmod 600 .env
 ```
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `GATEWAY_ADDR` | `:8080` | HTTP listen address for the API gateway |
-| `GATEWAY_DB_PATH` | `/var/lib/svkexe/gateway.db` | Path to the SQLite database file |
-| `GATEWAY_ENC_KEY` | *(empty — dev mode only)* | 32-byte hex key for AES-256 encryption of secrets at rest. **Required in production.** |
-| `DOMAIN` | *(empty)* | Base domain for subdomain-based container routing (e.g. `example.com`). Required for container proxy. |
-| `INCUS_SOCKET` | `/var/lib/incus/unix.socket` | Path to the Incus Unix socket |
-| `SECRETS_BASE_PATH` | `/var/lib/svkexe/secrets` | Base path for materialized secret files |
-| `SSH_ADDR` | `:2222` | SSH gateway listen address |
-| `SSH_HOST_KEY_PATH` | `/var/lib/svkexe/ssh_host_key` | Path to persist the SSH host key (auto-generated if missing) |
-| `RATE_LIMIT_RPS` | `10` | Per-user rate limit in requests per second |
-| `RATE_LIMIT_BURST` | `20` | Per-user burst size (max tokens in bucket) |
-
-## Security Checklist
-
-- [ ] **GATEWAY_ENC_KEY** is set to a cryptographically random 32-byte hex value (`openssl rand -hex 32`)
-- [ ] Caddy is configured to strip all `X-ExeDev-*` headers from incoming client requests (`request_header -X-ExeDev-*`)
-- [ ] Authelia `forward_auth` is configured — unauthenticated requests must never reach the gateway
-- [ ] Gateway is not exposed directly to the internet (sits behind Caddy)
-- [ ] Incus socket permissions: gateway process user has read/write access to the Unix socket
-- [ ] SSH host key is stored at `SSH_HOST_KEY_PATH` with mode `0600`
-- [ ] SQLite database file has restrictive permissions (`0600`, owned by gateway user)
-- [ ] `GATEWAY_ENC_KEY` is not committed to source control
-- [ ] Rate limiting is tuned for your expected load (`RATE_LIMIT_RPS`, `RATE_LIMIT_BURST`)
-
-## Caddy Configuration Example
-
-```caddyfile
-{
-    email admin@yourdomain.com
-}
-
-*.yourdomain.com {
-    # Strip client-supplied trust headers (Security Invariant S1)
-    request_header -X-ExeDev-*
-
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
-        copy_headers X-ExeDev-Userid X-ExeDev-Email
-    }
-
-    reverse_proxy gateway:8080
-}
-```
-
-## Backup and Restore
-
-### Backup
+Edit `.env`: use your own domain, ACME email, Cloudflare zone DNS token, admin
+email/password, and independently generated `GATEWAY_ENC_KEY` and
+`LLM_INTERNAL_TOKEN` (`openssl rand -hex 32`). Keep these secrets for updates.
+Compose refuses to start with empty required values.
 
 ```bash
-#!/bin/bash
-# backup.sh — run daily via cron
-BACKUP_DIR="/backups/$(date +%Y%m%d)"
-mkdir -p "$BACKUP_DIR"
-
-# 1. Backup gateway SQLite (WAL mode — safe to copy with .wal and .shm)
-sqlite3 /var/lib/svkexe/gateway.db ".backup '$BACKUP_DIR/gateway.db'"
-
-# 2. Snapshot all containers
-for container in $(incus list --format csv -c n); do
-    incus snapshot create "$container" "backup-$(date +%Y%m%d)"
-done
-
-echo "Backup complete: $BACKUP_DIR"
+sudo docker compose config --quiet
+sudo docker compose up -d --build
+sudo docker compose ps
+sudo docker compose logs --tail=50 gateway caddy
 ```
 
-### Restore
+Login at `https://example.com/login` using the configured bootstrap account.
+The gateway mounts the Incus socket, persists SQLite/SSH keys in `gateway_data`,
+and exposes SSH on 2222 (`SSH_PORT` changes the host mapping). HTTP is internal
+to Compose. Do not use `docker compose down -v` unless deliberately deleting data.
 
-```bash
-#!/bin/bash
-# restore.sh
-BACKUP_DIR="/backups/20240101"
+Instance metadata is disabled (`METADATA_ADDR=off`) because this gateway has a
+separate network namespace. Systemd self-update is unavailable in Compose;
+update the source and run `docker compose up -d --build`. New base-image inputs
+also require `sudo ./scripts/build-image.sh` from the repository root.
+If `SSH_PORT` changes, use that external port in client commands; gateway-generated
+examples still reflect its internal `SSH_ADDR` port.
 
-# 1. Restore gateway database
-cp "$BACKUP_DIR/gateway.db" /var/lib/svkexe/gateway.db
+## Verify the complete installation
 
-# 2. Restore container snapshots
-for container in $(incus list --format csv -c n); do
-    incus restore "$container" "backup-20240101"
-done
+1. Check the gateway log for Incus, metadata and agent setup errors. Confirm
+   `sudo incus image info svkexe-base` and `sudo incus profile show svkexe-default`.
+2. Open `https://example.com/login`, log in, add an SSH key and an LLM connection.
+3. Create a VM. Open its terminal and PicoClaw interface; send a prompt and check
+   streamed output and a tool call with your configured model.
+4. Connect with `ssh -p 2222 svkexe@example.com 'help --json'`, then directly to
+   the created VM using the command shown in the dashboard.
+5. Run a service on the VM's configured port (default 3000), open its workload
+   URL, and check Private/Public access from a signed-out browser.
+6. On bare metal, from the VM run
+   `curl -f http://169.254.169.254/latest/meta-data/instance-id`.
+   Confirm `svkexe-metadata.service` and the configured listener if this fails.
+
+A successful build or `docker compose config` does not prove VM networking,
+TLS issuance or a live model works. These checks require the target host and DNS.
+
+## Updates and backups
+
+Bare metal: `sudo /opt/svkexe/scripts/update.sh`, or **System → Update now**.
+Use the actual checkout path if installed elsewhere. The updater resets its
+checkout to the selected upstream branch/tag; keep local edits elsewhere.
+`SKIP_RESTART=1` installs binaries and may rebuild the image, but leaves the
+current gateway process running. It is not a build-only mode.
+
+The update installs the new gateway and agent; existing running agents migrate
+at gateway startup, stopped VMs on their next start. Image rebuilds keep the
+previous image until publication of the replacement. Unaliased old images may
+remain; inspect them before manually removing any.
+
+Backups are **not scheduled by the installer**. Install a cron entry if wanted:
+
+```cron
+0 3 * * * root /opt/svkexe/scripts/backup.sh >> /var/log/svkexe-backup.log 2>&1
 ```
 
-### RPO / RTO
+This uses SQLite's online backup and snapshots running Incus containers, with
+7-day retention by default (`BACKUP_DIR`, `RETENTION_DAYS`, `GATEWAY_DB_PATH`).
+Snapshots remain on the same host and are not disaster recovery. Back up the
+configuration/encryption key separately and export/copy data off-host. The script
+currently selects all running Incus containers, including ones outside svkexe.
 
-| Metric | Value |
-|---|---|
-| RPO (Recovery Point Objective) | 24 hours (daily snapshots) |
-| RTO (Recovery Time Objective) | < 30 minutes |
+Use `scripts/restore.sh --db-backup PATH` and/or
+`--container INCUS_NAME --snapshot SNAPSHOT_NAME`. It asks for confirmation and
+stops/restarts an active systemd gateway for DB restore. For Compose, stop the
+gateway yourself and restore the database in its volume; the script does not
+manage Docker services. No RPO/RTO guarantee is implied by these scripts.
 
 ## Monitoring
 
-The gateway exposes Prometheus-compatible metrics. A basic monitoring setup:
+`GET /metrics` is unauthenticated. Actual metric names include
+`svkexe_http_requests_total`, `svkexe_http_request_duration_seconds`,
+`svkexe_containers_total`, `svkexe_proxy_requests_total`, and
+`svkexe_ssh_sessions_active`, alongside Go/process metrics.
 
-```yaml
-# prometheus.yml scrape config
-scrape_configs:
-  - job_name: svkexe-gateway
-    static_configs:
-      - targets: ['gateway:8080']
-    metrics_path: /metrics
-```
+Compose monitoring is optional: set `GRAFANA_ADMIN_PASSWORD` and run
+`docker compose --profile monitoring up -d`. Grafana is bound to
+`127.0.0.1:3001`; use an SSH tunnel for remote access. Add the Prometheus data
+source `http://prometheus:9090` and create/import dashboards yourself; no Grafana
+dashboards are provisioned by this repository.
 
-Key metrics to alert on:
-- `http_requests_total` — request rate and error rate
-- `http_request_duration_seconds` — latency (alert on p95 > 5s)
-- Container create/delete errors
-- SQLite write failures
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────┐
-│                 Caddy (Reverse Proxy)                │
-│     Wildcard TLS + Header Strip/Inject + Authelia    │
-├─────────────────────────────────────────────────────┤
-│              Go API Gateway (:8080)                  │
-│   Auth middleware → Rate limiter → Route handlers    │
-│   ContainerRuntime interface (Incus v1)              │
-│   SQLite WAL (PRAGMA busy_timeout=5000)              │
-├─────────────────────────────────────────────────────┤
-│              Incus (LXC Containers)                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-│  │ VM 1     │  │ VM 2     │  │ VM N     │           │
-│  │ PicoClaw │  │ PicoClaw │  │ PicoClaw │           │
-│  │ :9000    │  │ :9000    │  │ :9000    │           │
-│  └──────────┘  └──────────┘  └──────────┘           │
-└─────────────────────────────────────────────────────┘
-```
-
-Auth chain:
-```
-Client → Caddy (strip X-ExeDev-*) → Authelia (forward_auth)
-       → Caddy (inject verified headers) → Gateway (ownership check)
-       → Rate limiter → Container:PicoClaw
-```
-
-See [PLAN.md](https://github.com/skrashevich/svkexe/blob/main/PLAN.md) for full architecture decisions and phase roadmap.
-
-## Agent updates
-
-The installer/update script builds both the gateway and the pinned PicoClaw agent. See [PicoClaw migration](https://github.com/skrashevich/svkexe/blob/main/docs/PICOCLAW.md) for data compatibility, build prerequisites, and rollback.
+See [README configuration](../README.md#configuration), [API](API.md),
+[SSH](SSH.md), [named VM access](ACCESS.md), and [agent migration](PICOCLAW.md).
+`PLAN.md` and dated deployment reports are historical records, not install guides.

@@ -54,7 +54,7 @@ else
     SNAPSHOT_ERRORS=0
     while IFS= read -r container; do
         log "  Snapshotting container: ${container}"
-        if incus snapshot "${container}" "${SNAPSHOT_NAME}" 2>&1; then
+        if incus snapshot create "${container}" "${SNAPSHOT_NAME}" 2>&1; then
             log "  Snapshot created: ${container}/${SNAPSHOT_NAME}"
             # Record snapshot reference for pruning
             echo "${container}:${SNAPSHOT_NAME}" >> "${BACKUP_DIR}/snapshots/manifest-${TIMESTAMP}.txt"

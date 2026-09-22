@@ -87,3 +87,24 @@ jobs:
           make -C "$package_dir/agent" smoke
       - name: Test agent compatibility
         run: make test-agent
+
+  installation:
+    name: Installation script contracts and Compose configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          for script in scripts/*.sh agent/*.sh; do bash -n "$script"; done
+      - name: Exercise installation failure paths without changing the host
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -v
+      - name: Validate Compose with a custom domain
+        env:
+          DOMAIN: gateway.example.test
+          ACME_EMAIL: admin@example.test
+          CLOUDFLARE_API_TOKEN: test-placeholder
+          GATEWAY_ENC_KEY: test-placeholder
+          BOOTSTRAP_ADMIN_EMAIL: admin@example.test
+          BOOTSTRAP_ADMIN_PASSWORD: test-placeholder
+          LLM_INTERNAL_TOKEN: test-placeholder
+        run: docker compose -f deploy/docker-compose.yml config --quiet

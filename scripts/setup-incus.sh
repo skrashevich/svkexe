@@ -35,22 +35,28 @@ require_root
 # ── Install Incus if missing ──────────────────────────────────────────────────
 
 if ! command -v incus &>/dev/null; then
-    log "Incus not found. Installing via snap…"
-    if command -v snap &>/dev/null; then
-        snap install incus
-    else
-        # Fallback: use the upstream APT repository (Ubuntu/Debian)
-        log "snap not available; trying APT…"
-        DISTRO_ID="$(. /etc/os-release && echo "${ID}")"
-        DISTRO_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
-        curl -fsSL "https://pkgs.zabbly.com/key.asc" \
-            | gpg --dearmor -o /etc/apt/keyrings/zabbly.gpg
-        cat > /etc/apt/sources.list.d/zabbly-incus-stable.list <<EOF
-deb [signed-by=/etc/apt/keyrings/zabbly.gpg] https://pkgs.zabbly.com/incus/stable ${DISTRO_CODENAME} main
+    log "Incus not found. Installing from the Zabbly stable APT repository…"
+    . /etc/os-release
+    case "${ID}:${VERSION_ID}" in
+        ubuntu:24.04|ubuntu:26.04|debian:12|debian:13) ;;
+        *) echo "Use Ubuntu 24.04/26.04 LTS or Debian 12/13, or install Incus manually." >&2; exit 1 ;;
+    esac
+    apt-get update -q
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://pkgs.zabbly.com/key.asc \
+        | gpg --dearmor --yes -o /etc/apt/keyrings/zabbly.gpg
+    chmod 0644 /etc/apt/keyrings/zabbly.gpg
+    cat > /etc/apt/sources.list.d/zabbly-incus-stable.sources <<EOF
+Types: deb
+URIs: https://pkgs.zabbly.com/incus/stable
+Suites: ${VERSION_CODENAME}
+Components: main
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/zabbly.gpg
 EOF
-        apt-get update -q
-        apt-get install -y incus
-    fi
+    apt-get update -q
+    apt-get install -y incus
 else
     log "Incus already installed: $(incus --version)"
 fi
@@ -82,10 +88,10 @@ else
         incus storage create "${POOL_NAME}" zfs
     else
         # Incus refuses to adopt a pre-existing directory. If one is left over
-        # from a prior failed run (not registered as a pool), remove it first.
+        # from a prior failed run, remove it only if it is empty.
         if [[ -d "${POOL_DIR}" ]]; then
-            log "Removing stale pool directory '${POOL_DIR}' from prior run…"
-            rm -rf "${POOL_DIR}"
+            # Never recursively delete storage merely because it is not registered.
+            rmdir "${POOL_DIR}" || { echo "Refusing to remove non-empty ${POOL_DIR}; inspect it manually." >&2; exit 1; }
         fi
         # Let Incus create the directory itself under its standard layout —
         # passing source= with a non-existent path is more reliable across
@@ -145,8 +151,8 @@ devices:
     # was allocated. The gateway refuses to answer metadata for a VM whose NIC
     # is unfiltered, so this is a prerequisite rather than a hardening extra.
     #
-    # Applied when the instance starts, so an existing VM picks it up on its
-    # next restart. A VM that legitimately needs a second address of its own —
+    # Changes can apply to running NICs immediately; check their networking.
+    # A VM that legitimately needs a second address of its own —
     # bridged nested networking rather than Docker's default NAT — cannot have
     # one while this is on.
     security.ipv4_filtering: "true"

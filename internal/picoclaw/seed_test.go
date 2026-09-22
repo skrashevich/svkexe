@@ -23,7 +23,7 @@ func TestSQLQuote(t *testing.T) {
 func TestBuildSeedSQL(t *testing.T) {
 	sql := buildSeedSQL(
 		[]string{"openai/gpt-oss-120b:free", "z-ai/glm-4.5-air:free"},
-		"https://svk.bar/api/llm/v1",
+		"https://example.test/api/llm/v1",
 		"secret-token",
 	)
 	if !strings.Contains(sql, "BEGIN IMMEDIATE;") {
@@ -35,7 +35,7 @@ func TestBuildSeedSQL(t *testing.T) {
 	if !strings.Contains(sql, "svkexe-openai/gpt-oss-120b:free") {
 		t.Fatalf("missing first model id: %s", sql)
 	}
-	if !strings.Contains(sql, "'https://svk.bar/api/llm/v1'") {
+	if !strings.Contains(sql, "'https://example.test/api/llm/v1'") {
 		t.Fatalf("missing quoted base URL: %s", sql)
 	}
 	if !strings.Contains(sql, "'secret-token'") {

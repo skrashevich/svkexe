@@ -1,12 +1,9 @@
-version: "3.9"
-
-networks:
-  svkexe:
-    driver: bridge
-
+# Linux host with Incus. Configure .env before starting; see docs/DEPLOY.md.
 services:
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: .
+      dockerfile: Caddy.Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"
@@ -16,46 +13,44 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      DOMAIN: ${DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-    networks:
-      - svkexe
-
-  authelia:
-    image: authelia/authelia:latest
-    restart: unless-stopped
-    volumes:
-      - ./authelia:/config
-    environment:
-      AUTHELIA_SESSION_DOMAIN: ${DOMAIN}
-      AUTHELIA_SESSION_SECRET: ${AUTHELIA_SESSION_SECRET}
-    networks:
-      - svkexe
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in deploy/.env}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?Set CLOUDFLARE_API_TOKEN in deploy/.env}
 
   gateway:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      INCUS_ENDPOINT: ${INCUS_ENDPOINT}
-      ENC_KEY: ${ENC_KEY}
-      # The gateway has its own network namespace here, so a listener it opens
-      # can never receive a VM's metadata request — and IP_FREEBIND means the
-      # bind succeeds anyway, which would leave a healthy-looking log line in
-      # front of a service nothing can reach.
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env}
+      GATEWAY_ENC_KEY: ${GATEWAY_ENC_KEY:?Set GATEWAY_ENC_KEY in deploy/.env}
+      GATEWAY_DB_PATH: /var/lib/svkexe/gateway.db
+      GATEWAY_COOKIE_SECURE: "1"
+      GATEWAY_PUBLIC_IPS: ${GATEWAY_PUBLIC_IPS:-}
+      INCUS_SOCKET: /var/lib/incus/unix.socket
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?Set BOOTSTRAP_ADMIN_EMAIL in deploy/.env}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in deploy/.env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODELS: ${OPENROUTER_MODELS:-anthropic/claude-sonnet-4,openai/gpt-4o,google/gemini-2.5-flash}
+      LLM_INTERNAL_TOKEN: ${LLM_INTERNAL_TOKEN:?Set LLM_INTERNAL_TOKEN in deploy/.env}
+      LLM_PROXY_URL: ${LLM_PROXY_URL:-}
+      # Metadata redirects on the host cannot reach this network namespace.
       METADATA_ADDR: "off"
-    depends_on:
-      - caddy
-      - authelia
-    networks:
-      - svkexe
+    volumes:
+      - gateway_data:/var/lib/svkexe
+      - type: bind
+        source: /var/lib/incus/unix.socket
+        target: /var/lib/incus/unix.socket
+        bind:
+          create_host_path: false
+    ports:
+      - "${SSH_PORT:-2222}:2222"
 
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
+    profiles: [monitoring]
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -63,22 +58,22 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
-    networks:
-      - svkexe
 
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
+    profiles: [monitoring]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
     depends_on:
       - prometheus
-    networks:
-      - svkexe
 
 volumes:
+  gateway_data:
   caddy_data:
   caddy_config:
   prometheus_data:

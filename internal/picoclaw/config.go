@@ -41,7 +41,7 @@ const (
 
 // LLMProxyConfig holds the gateway-level LLM proxy settings to pass to PicoClaw.
 type LLMProxyConfig struct {
-	// BaseURL is the LLM gateway URL (e.g. "https://svk.bar/api/llm/v1").
+	// BaseURL is the LLM gateway URL (e.g. "https://example.test/api/llm/v1").
 	BaseURL string
 	// Token is the Bearer token PicoClaw uses to authenticate to the proxy.
 	Token string

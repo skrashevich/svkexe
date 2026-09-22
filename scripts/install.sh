@@ -13,7 +13,7 @@
 #   SVKEXE_REPO         Git repo URL (default: https://github.com/skrashevich/svkexe)
 #   SVKEXE_BRANCH       Branch/tag to check out (default: main)
 #   SVKEXE_SRC_DIR      Clone target when running piped (default: /opt/svkexe)
-#   GO_VERSION          Go version (default: parsed from go.mod, fallback 1.23.4)
+#   GO_VERSION          Go version (default: maximum required by gateway and agent go.mod)
 #   DOMAIN              Base domain written to /etc/svkexe/gateway.env
 #   ACME_EMAIL          ACME email for Caddy
 #   GATEWAY_ENC_KEY     Pre-existing hex key; generated if empty
@@ -34,7 +34,8 @@
 #   7. Installs and enables the svkexe-gateway.service systemd unit.
 #   8. Runs scripts/install-update-units.sh so the web UI can self-update.
 #
-# Idempotent: re-running is safe; completed steps are skipped.
+# Re-runs preserve gateway.env and an existing base image, but refresh packages,
+# the Incus profile, binaries and units. Use a dedicated source checkout.
 
 set -euo pipefail
 
@@ -53,12 +54,12 @@ die()  { printf '\033[1;31m[install ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 . /etc/os-release
 
 case "${ID:-}:${VERSION_ID:-}" in
-    ubuntu:24.04|ubuntu:24.10|ubuntu:25.04|ubuntu:25.10|ubuntu:26.04)
+    ubuntu:24.04|ubuntu:26.04)
         log "Detected ${PRETTY_NAME}." ;;
     debian:12|debian:13)
         log "Detected ${PRETTY_NAME} (supported)." ;;
     ubuntu:*|debian:*)
-        warn "Detected ${PRETTY_NAME} — not explicitly tested, proceeding anyway." ;;
+        die "Unsupported release ${PRETTY_NAME}. Use Ubuntu 24.04/26.04 LTS or Debian 12/13." ;;
     *)
         die "Unsupported distribution '${ID:-unknown} ${VERSION_ID:-}'. Requires Ubuntu 24.04+ or Debian 12+." ;;
 esac
@@ -114,15 +115,14 @@ else
     if [[ -d "${SVKEXE_SRC_DIR}/.git" ]]; then
         log "Updating existing clone at ${SVKEXE_SRC_DIR}…"
         git -C "${SVKEXE_SRC_DIR}" fetch --depth 1 --tags origin "${SVKEXE_BRANCH}"
-        git -C "${SVKEXE_SRC_DIR}" checkout -q "${SVKEXE_BRANCH}"
-        git -C "${SVKEXE_SRC_DIR}" reset --hard "origin/${SVKEXE_BRANCH}"
+        git -C "${SVKEXE_SRC_DIR}" checkout --detach FETCH_HEAD
     else
         log "Cloning ${SVKEXE_REPO} → ${SVKEXE_SRC_DIR}…"
         # A shallow clone only brings the tag that points at the cloned HEAD,
         # so pull the rest of the tag refs in afterwards — that is what makes
         # `git describe --tags` name a release once the checkout lands on one.
         # Not fatal: missing tags only degrade the version string.
-        git clone --depth 1 --branch "${SVKEXE_BRANCH}" "${SVKEXE_REPO}.git" "${SVKEXE_SRC_DIR}"
+        git clone --depth 1 --branch "${SVKEXE_BRANCH}" "${SVKEXE_REPO}" "${SVKEXE_SRC_DIR}"
         git -C "${SVKEXE_SRC_DIR}" fetch --depth 1 --tags origin \
             || warn "Could not fetch tags — the build will report a commit-only version."
     fi
@@ -170,19 +170,14 @@ UPDATE_STATUS_FILE="${DATA_DIR}/update-status.json"
 UPDATE_LOG_FILE="${DATA_DIR}/update.log"
 UPDATE_WATCHER_FILE="${DATA_DIR}/update-watcher"
 
-GO_FALLBACK_VERSION="1.23.4"
 GO_INSTALL_DIR="/usr/local/go"
 
 # ── Detect Go version from go.mod ────────────────────────────────────────────
 
 detect_go_version() {
-    local declared
-    declared="$(awk '/^go [0-9]/ {print $2; exit}' "${REPO_ROOT}/go.mod" 2>/dev/null || true)"
-    if [[ -z "${declared}" ]]; then
-        echo "${GO_FALLBACK_VERSION}"
-    else
-        echo "${declared}"
-    fi
+    # The standalone agent has its own module and may need a newer toolchain.
+    awk '/^go [0-9]/ {print $2}' "${REPO_ROOT}/go.mod" \
+        "${REPO_ROOT}/agent/shelley/go.mod" | sort -V | tail -n 1
 }
 
 GO_VERSION="${GO_VERSION:-$(detect_go_version)}"
@@ -209,7 +204,8 @@ apt-get install -y --no-install-recommends \
     python3 \
     pkg-config \
     uidmap \
-    rsync
+    rsync \
+    iptables
 
 install -d -m 0755 /etc/apt/keyrings
 
@@ -228,17 +224,20 @@ install_go() {
 
     local url="https://go.dev/dl/go${want}.linux-${ARCH}.tar.gz"
     log "Downloading Go ${want} (${ARCH})…"
-    if ! curl -fsSL -o /tmp/go.tar.gz "${url}"; then
-        warn "Go ${want} not published yet at go.dev; falling back to ${GO_FALLBACK_VERSION}."
-        want="${GO_FALLBACK_VERSION}"
-        url="https://go.dev/dl/go${want}.linux-${ARCH}.tar.gz"
-        curl -fsSL -o /tmp/go.tar.gz "${url}" || die "Failed to download Go ${want}."
+    local archive
+    archive="$(mktemp /tmp/svkexe-go.XXXXXX)"
+    if ! curl -fsSL -o "${archive}" "${url}"; then
+        rm -f "${archive}"
+        die "Failed to download required Go ${want}; existing toolchain was left intact."
     fi
-
+    if ! tar -tzf "${archive}" >/dev/null; then
+        rm -f "${archive}"
+        die "Invalid Go archive; existing toolchain was left intact."
+    fi
     log "Installing Go ${want} to ${GO_INSTALL_DIR}…"
     rm -rf "${GO_INSTALL_DIR}"
-    tar -C /usr/local -xzf /tmp/go.tar.gz
-    rm -f /tmp/go.tar.gz
+    tar -C /usr/local -xzf "${archive}"
+    rm -f "${archive}"
 
     cat >/etc/profile.d/go.sh <<'EOF'
 export PATH="$PATH:/usr/local/go/bin"
@@ -415,8 +414,8 @@ fi
 # ── Step 6: Build svkexe-base Incus image ────────────────────────────────────
 
 if [[ "${SKIP_INCUS:-0}" != "1" && "${SKIP_IMAGE_BUILD:-0}" != "1" && -x "${SCRIPT_DIR}/build-image.sh" ]]; then
-    if incus image list --format csv 2>/dev/null | grep -q "^svkexe-base,"; then
-        log "Incus image 'svkexe-base' already exists — skipping. Delete it and re-run to rebuild."
+    if incus image alias list --format csv | cut -d, -f1 | grep -qx "svkexe-base"; then
+        log "Incus image 'svkexe-base' already exists — skipping. Run scripts/build-image.sh to rebuild."
     else
         log "Running scripts/build-image.sh (this can take several minutes)…"
         "${SCRIPT_DIR}/build-image.sh"
@@ -503,6 +502,7 @@ GATEWAY_COOKIE_SECURE=0
 
 # Incus API socket.
 INCUS_SOCKET=/var/lib/incus/unix.socket
+METADATA_ADDR=10.100.0.1:${SVKEXE_METADATA_PORT:-8081}
 
 # Secrets, SSH, rate limiting.
 SECRETS_BASE_PATH=${DATA_DIR}/secrets
@@ -524,7 +524,7 @@ EOF
     # stdout; it is also inside the (root-readable) env file.
     log "Initial admin account: ${BOOTSTRAP_ADMIN_EMAIL}"
     log "Initial admin password: ${BOOTSTRAP_ADMIN_PASSWORD}"
-    log "Login at http://<host>:8080/login — rotate BOOTSTRAP_ADMIN_PASSWORD in ${ENV_FILE} to change."
+    log "Login at http://${DOMAIN:-<host>}:8080/login — rotate BOOTSTRAP_ADMIN_PASSWORD in ${ENV_FILE} to change."
 else
     log "${ENV_FILE} exists — leaving untouched."
 fi
@@ -611,8 +611,8 @@ cat <<EOF
  Binary     : ${INSTALL_PREFIX}/bin/${BIN_NAME}
  Data dir   : ${DATA_DIR}
  Config     : ${ENV_FILE}
- Service    : ${BIN_NAME}.service (enabled, not started)
- Self-update: svkexe-update.path → svkexe-update.service (enabled, active)
+ Service    : ${BIN_NAME}.service (enabled unless SKIP_SERVICE=1; not started)
+ Self-update: svkexe-update.path → svkexe-update.service (unless SKIP_SERVICE=1)
               trigger  ${UPDATE_TRIGGER}
               status   ${UPDATE_STATUS_FILE}
               log      ${UPDATE_LOG_FILE}
@@ -621,8 +621,8 @@ cat <<EOF
  Next steps:
    1. Review and edit: sudo \$EDITOR ${ENV_FILE}
       - set DOMAIN and ACME_EMAIL for production
-   2. (Optional) Deploy Caddy + Authelia + Prometheus/Grafana:
-        cd ${REPO_ROOT}/deploy && docker compose up -d
+   2. Configure TLS reverse proxy as described in docs/DEPLOY.md.
+      The full Docker Compose stack is a separate deployment option.
    3. Start the gateway:
         sudo systemctl start ${BIN_NAME}
         sudo systemctl status ${BIN_NAME}

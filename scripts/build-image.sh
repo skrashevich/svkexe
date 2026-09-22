@@ -43,15 +43,7 @@ trap cleanup EXIT
 
 command -v incus &>/dev/null || die "'incus' is not installed. Run scripts/setup-incus.sh first."
 
-# ── Remove existing image if present ────────────────────────────────────────
-
-# Match the alias by name rather than by line prefix: an image carrying extra
-# aliases is listed as "svkexe-base (1 more)", which a prefix match misses,
-# leaving the old image in place until publishing fails on the taken alias.
-if incus image alias list --format csv | cut -d, -f1 | grep -qx "${IMAGE_NAME}"; then
-    log "Removing existing image '${IMAGE_NAME}'…"
-    incus image delete "${IMAGE_NAME}"
-fi
+# Keep the previous image available until the replacement is published.
 
 # ── Launch a fresh Ubuntu 24.04 container ───────────────────────────────────
 
@@ -60,7 +52,7 @@ incus launch images:ubuntu/24.04 "${CONTAINER_NAME}" --profile svkexe-default
 
 log "Waiting for container networking…"
 sleep 5
-run_in "for i in {1..30}; do ip route show default &>/dev/null && break; sleep 1; done"
+run_in "for i in {1..30}; do ip route show default | grep -q . && exit 0; sleep 1; done; exit 1"
 
 # ── DNS ─────────────────────────────────────────────────────────────────────
 
@@ -133,9 +125,9 @@ run_in "
 
 # ── Install Node.js ─────────────────────────────────────────────────────────
 
-log "Installing Node.js 20.x…"
+log "Installing Node.js 22.x…"
 run_in "
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y --no-install-recommends nodejs
     corepack enable
     corepack prepare pnpm@latest --activate
@@ -373,7 +365,7 @@ log "Stopping container before publishing…"
 incus stop "${CONTAINER_NAME}"
 
 log "Publishing Incus image as '${IMAGE_NAME}'…"
-incus publish "${CONTAINER_NAME}" --alias "${IMAGE_NAME}" \
+incus publish "${CONTAINER_NAME}" --reuse --alias "${IMAGE_NAME}" \
     --compression bzip2 \
     description="svkexe base image — Ubuntu 24.04 with PicoClaw, dev tools, Claude Code, Codex"
 

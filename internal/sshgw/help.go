@@ -270,7 +270,7 @@ func newHelpDoc(s *Server, user *db.User) helpDoc {
 func helpArgs(args []argSpec) []helpArg {
 	var out []helpArg
 	for _, a := range args {
-		out = append(out, helpArg{Name: a.Name, Desc: a.Desc, Optional: a.Optional, Repeated: a.Repeated})
+		out = append(out, helpArg(a))
 	}
 	return out
 }
@@ -278,7 +278,7 @@ func helpArgs(args []argSpec) []helpArg {
 func helpFlags(flags []flagSpec) []helpFlag {
 	var out []helpFlag
 	for _, f := range flags {
-		out = append(out, helpFlag{Name: f.Name, Desc: f.Desc, Value: f.Value})
+		out = append(out, helpFlag(f))
 	}
 	return out
 }

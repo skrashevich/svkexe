@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -45,7 +46,7 @@ func (d *Dashboard) getShell(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if c.OwnerID != user.ID {
+	if !d.db.CanUseContainer(c.ID, user.ID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -77,7 +78,7 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if c.OwnerID != user.ID {
+	if !d.db.CanUseContainer(c.ID, user.ID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -98,6 +99,11 @@ func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	accessCtx, cancel := d.db.ContainerAccessContext(r.Context(), c, user.ID)
+	defer cancel()
+	stopClose := context.AfterFunc(accessCtx, func() { _ = conn.Close() })
+	defer stopClose()
+	r = r.WithContext(accessCtx)
 
 	// Pipes: browser WS → container stdin, container stdout → browser WS.
 	stdinR, stdinW := io.Pipe()

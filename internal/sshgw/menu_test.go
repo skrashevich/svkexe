@@ -9,17 +9,27 @@ import (
 	"strings"
 	"testing"
 
-	gssh "github.com/gliderlabs/ssh"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/runtime"
 )
 
-type testSession struct {
-	gssh.Session
-	output bytes.Buffer
+// run executes one command line the way a one-shot "ssh host <command>"
+// invocation would, and returns what the caller would have seen.
+func run(t *testing.T, s *Server, user *db.User, line string) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	err := s.exec(t.Context(), nil, newOut(&buf, false), user, line, false, false)
+	return buf.String(), err
 }
 
-func (s *testSession) Write(p []byte) (int, error) { return s.output.Write(p) }
+// runInteractive executes one command line as if it had been typed at the
+// menu's prompt, which some commands treat differently from a one-shot.
+func runInteractive(t *testing.T, s *Server, user *db.User, line string) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	err := s.exec(t.Context(), nil, newOut(&buf, false), user, line, true, false)
+	return buf.String(), err
+}
 
 type recreateRuntime struct {
 	runtime.ContainerRuntime
@@ -97,8 +107,7 @@ func TestSSHRecreatePreservesDataBeforeStartingAgent(t *testing.T) {
 			t.Setenv("SVKEXE_AGENT_BINARY", binary)
 			rt := &recreateRuntime{failBackup: failBackup}
 			s := &Server{db: database, runtime: rt}
-			sess := &testSession{}
-			s.cmdRecreate(t.Context(), sess, user, []string{"dev"})
+			output, _ := run(t, s, user, "recreate dev --force")
 			steps := strings.Join(rt.steps, "\n")
 			c, err := database.GetContainerByID("vm")
 			if err != nil {
@@ -112,7 +121,7 @@ func TestSSHRecreatePreservesDataBeforeStartingAgent(t *testing.T) {
 			}
 			restore, agent := strings.Index(steps, "tar -xzf"), strings.Index(steps, "enable picoclaw.service")
 			if restore < 0 || agent < 0 || restore > agent || c.Status != "running" {
-				t.Fatalf("bad restore/start order or status %s: %s\n%s", c.Status, steps, sess.output.String())
+				t.Fatalf("bad restore/start order or status %s: %s\n%s", c.Status, steps, output)
 			}
 		})
 	}
@@ -150,7 +159,7 @@ func TestSSHRecreateAppliesNestingBeforeTheBackupBoot(t *testing.T) {
 
 	rt := &recreateRuntime{}
 	s := &Server{db: database, runtime: rt}
-	s.cmdRecreate(t.Context(), &testSession{}, user, []string{"dev"})
+	run(t, s, user, "recreate dev --force")
 
 	first := -1
 	for i, step := range rt.steps {

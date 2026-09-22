@@ -47,7 +47,7 @@ func (d *Dashboard) getVMs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containers, err := d.db.ListContainersByOwner(user.ID)
+	containers, err := d.db.ListAccessibleContainers(user.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -74,7 +74,7 @@ func (d *Dashboard) getVMList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containers, err := d.db.ListContainersByOwner(user.ID)
+	containers, err := d.db.ListAccessibleContainers(user.ID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

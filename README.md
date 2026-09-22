@@ -20,7 +20,7 @@ The PicoClaw runtime with Shelley web UI and HTTP API is available as a [standal
 - **Dynamic subdomain routing** — your workload at `https://{name}.yourdomain.com`, the agent at `https://agent-{name}.yourdomain.com`
 - **WebSocket/SSE proxy** for real-time PicoClaw interactions
 - **Web Shell** (xterm.js) for browser-based terminal access
-- **SSH Gateway** with interactive VM menu and direct connect (`ssh vm@host`)
+- **SSH Gateway** — a management shell with the dashboard's full surface for any login backed by a known key, direct connect (`ssh vm@host`), one-shot commands and a `help --json` catalogue for LLM agents
 - **Shared links** (Discord-style) for temporary container access
 - **LLM reverse proxy** to OpenRouter with automatic model fallback
 - **LLM key management** with AES-GCM encryption, per-container isolation
@@ -590,7 +590,7 @@ internal/
   secrets/             LLM key materialization (encrypted DB -> env file)
   metadata/            EC2-compatible instance metadata service for the VMs
   picoclaw/            Agent setup, migration, gateway models and backups
-  sshgw/               SSH gateway with interactive menu
+  sshgw/               SSH gateway: management shell + direct VM access
   metrics/             Prometheus metrics + middleware
   ratelimit/           Per-user token bucket rate limiter
 ui/templates/          Go HTML templates
@@ -633,6 +633,33 @@ GET    /api/llm/v1/models           List available models
 GET    /metrics                     Prometheus metrics (unauthenticated)
 ```
 
+## SSH
+
+The gateway's SSH port (2222 by default) is a management shell as well as a way
+into your VMs. It authenticates by SSH key alone — the login name is only a
+shortcut — and offers the same operations as the dashboard.
+
+```bash
+# Management shell. Any login works; the key says who you are.
+ssh svk.bar
+ssh svkexe@svk.bar               # the reserved login: always the shell
+
+# A login naming one of your own VMs opens a shell inside it.
+ssh dev@svk.bar
+
+# One command per connection, for scripts and LLM agents.
+ssh svk.bar "ls --json"
+ssh svk.bar "help --json"        # the whole command catalogue, machine-readable
+ssh dev@svk.bar "uptime"         # runs inside the VM
+```
+
+`help` lists the commands your key may run, grouped by area; `help <command>`
+explains one; `help --json` describes all of them — arguments, flags,
+subcommands and examples — in a single JSON document meant for programs. Read
+commands accept `--json`, an unknown flag is refused by name, a destructive
+command needs `--force` in a one-shot, and the exit status is 0, 1 or 127
+(unknown command). See [docs/SSH.md](docs/SSH.md) for the full reference.
+
 ## Security
 
 - All incoming `X-ExeDev-*` headers stripped by Caddy before auth
@@ -649,6 +676,7 @@ GET    /metrics                     Prometheus metrics (unauthenticated)
 
 - [Deployment Guide](docs/DEPLOY.md)
 - [API Reference](docs/API.md)
+- [SSH Interface](docs/SSH.md)
 - [Implementation Plan](PLAN.md)
 
 ## License

@@ -62,6 +62,30 @@ func TestEnvironmentGuideWithoutDomain(t *testing.T) {
 	}
 }
 
+// An agent that does not know the platform can be driven asks its owner to
+// press buttons for it. Naming the management shell is only useful if it also
+// says what the agent cannot do: it holds no key of the owner's.
+func TestEnvironmentGuideNamesTheManagementShell(t *testing.T) {
+	SSHPort = 2022
+	t.Cleanup(func() { SSHPort = 2222 })
+
+	guide := string(environmentGuide(&db.Container{Name: "demo", AppPort: 3000}, "example.com"))
+	for _, want := range []string{
+		"example.com port 2022",
+		"help --json",
+		"no private key of the owner's is installed here",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("guide never mentions %q:\n%s", want, guide)
+		}
+	}
+
+	// Without a domain there is no address to send the agent to.
+	if bare := string(environmentGuide(&db.Container{Name: "demo", AppPort: 3000}, "")); strings.Contains(bare, "help --json") {
+		t.Errorf("guide promises a management shell the deployment has no address for:\n%s", bare)
+	}
+}
+
 // The owner's own domain is the address they will share, so the agent has to
 // name it when it reports where the work is.
 func TestEnvironmentGuideNamesVerifiedAliases(t *testing.T) {

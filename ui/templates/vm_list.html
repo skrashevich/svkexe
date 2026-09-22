@@ -2,19 +2,19 @@
 {{if .Containers}}
 <div class="grid">
     {{range .Containers}}
-        {{template "vm_card" .}}
+        {{if .SharedAccess}}{{template "shared_vm_card" .}}{{else}}{{template "vm_card" .}}{{end}}
     {{end}}
 </div>
 {{else}}
 <div class="empty-state">
     <h3>No VMs yet</h3>
-    <p>Create your first virtual machine to get started.</p>
+    {{if ne .User.Role "guest"}}<p>Create your first virtual machine to get started.</p>
     <button class="btn btn-primary"
         hx-get="/dashboard/vms/create"
         hx-target="#create-modal"
         hx-swap="innerHTML">
         + New VM
-    </button>
+    </button>{{else}}<p>No VM access has been granted to your account.</p>{{end}}
 </div>
 {{end}}
 {{end}}

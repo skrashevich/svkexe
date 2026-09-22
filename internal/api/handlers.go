@@ -35,7 +35,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // listContainers handles GET /api/containers
 func (s *Server) listContainers(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r.Context())
-	containers, err := s.db.ListContainersByOwner(userID)
+	containers, err := s.db.ListAccessibleContainers(userID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

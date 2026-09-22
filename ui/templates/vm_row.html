@@ -4,6 +4,7 @@
         <span class="vm-busy-spinner"></span>
         <span class="vm-busy-msg"></span>
     </div>
+    <a class="vm-link" href="/dashboard/vms/{{.ID}}/access">Access</a>
     <div class="vm-card-head">
         <div>
             <div class="vm-card-name">{{.Name}}</div>
@@ -216,5 +217,17 @@
             Delete
         </button>
     </div>
+</div>
+{{end}}
+
+{{define "shared_vm_card"}}
+<div class="card vm-card" id="vm-{{.ID}}">
+ <div class="vm-card-head"><div><div class="vm-card-name">{{.Name}}</div><span class="badge badge-{{statusClass .Status}}">{{.Status}}</span></div><span>Shared access</span></div>
+ <p>SSH: <code>ssh -p 2222 {{.IncusName}}@{{if domain}}{{domain}}{{else}}GATEWAY_HOST{{end}}</code></p>
+ {{if eq .Status "running"}}<div class="vm-card-links">
+ <a class="vm-link" href="/dashboard/vms/{{.ID}}/shell">Terminal</a>
+ <a class="vm-link vm-link-accent" href="https://agent-{{.Name}}.{{domain}}/" target="_blank">PicoClaw</a>
+ <a class="vm-link" href="https://{{.Name}}.{{domain}}/" target="_blank">Open &rarr;</a>
+ </div>{{end}}
 </div>
 {{end}}

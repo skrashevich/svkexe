@@ -44,6 +44,10 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if user.Role == dbpkg.GuestRole && !guestRequestAllowed(r) {
+			http.Error(w, "guest accounts may only use assigned VMs and manage their SSH keys", http.StatusForbidden)
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxkeys.UserID, user.ID)
 		ctx = context.WithValue(ctx, ctxkeys.UserEmail, user.Email)
 		ctx = context.WithValue(ctx, ctxkeys.User, user)
@@ -112,7 +116,8 @@ func (s *Server) AdminMiddleware(next http.Handler) http.Handler {
 }
 
 // OwnershipMiddleware verifies that the container identified by {id} in the
-// URL belongs to the authenticated user. Must be used inside a chi route that
+// URL belongs to the authenticated user. A direct GET also permits named members.
+// Must be used inside a chi route that
 // has the {id} parameter.
 func (s *Server) OwnershipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,10 +133,34 @@ func (s *Server) OwnershipMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if c.OwnerID != userID {
+		if c.OwnerID != userID && !(r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/containers/"+containerID && s.db.CanUseContainer(c.ID, userID)) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Use an allowlist so future management endpoints cannot accidentally grant
+// platform capabilities to restricted accounts.
+func guestRequestAllowed(r *http.Request) bool {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path == "/api/ssh-keys" || strings.HasPrefix(path, "/api/ssh-keys/") || path == "/dashboard/ssh-keys" || strings.HasPrefix(path, "/dashboard/ssh-keys/") {
+		return true
+	}
+	if r.Method != http.MethodGet {
+		return false
+	}
+	switch path {
+	case "/api/me", "/api/containers", "/dashboard", "/dashboard/vms", "/dashboard/vms/list":
+		return true
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/containers/"); ok {
+		return rest != "" && !strings.Contains(rest, "/")
+	}
+	if rest, ok := strings.CutPrefix(path, "/dashboard/vms/"); ok {
+		parts := strings.Split(rest, "/")
+		return len(parts) == 2 && (parts[1] == "shell" || parts[1] == "ws")
+	}
+	return false
 }

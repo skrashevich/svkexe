@@ -47,6 +47,9 @@ func TaskInProgress(state string) bool {
 
 // Container represents a managed Incus container.
 type Container struct {
+	// SharedAccess is presentation-only; authorization always reads the database.
+	SharedAccess bool
+
 	ID        string
 	Name      string
 	OwnerID   string
@@ -390,6 +393,9 @@ func (db *DB) DeleteContainer(id string) error {
 	}
 	defer tx.Rollback()
 
+	if _, err := tx.Exec(`DELETE FROM container_access WHERE container_id = ?`, id); err != nil {
+		return fmt.Errorf("delete container access: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM container_aliases WHERE container_id = ?`, id); err != nil {
 		return fmt.Errorf("delete container aliases: %w", err)
 	}

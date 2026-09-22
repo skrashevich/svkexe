@@ -66,6 +66,13 @@ func main() {
 	picoclaw.Domain = domain
 	secretsBasePath := getenv("SECRETS_BASE_PATH", "/var/lib/svkexe/secrets")
 	sshAddr := getenv("SSH_ADDR", ":2222")
+	// The agent's guide names the management shell's port, so it has to be the
+	// one this gateway actually listens on rather than the default.
+	if _, port, err := net.SplitHostPort(sshAddr); err == nil {
+		if parsed, err := strconv.Atoi(port); err == nil && parsed > 0 {
+			picoclaw.SSHPort = parsed
+		}
+	}
 	sshHostKeyPath := getenv("SSH_HOST_KEY_PATH", "/var/lib/svkexe/ssh_host_key")
 	rateLimitRPS := getenv("RATE_LIMIT_RPS", "10")
 	rateLimitBurst := getenv("RATE_LIMIT_BURST", "20")
@@ -198,14 +205,6 @@ func main() {
 		}
 	}
 
-	// Build and start SSH gateway.
-	sshGateway := sshgw.New(sshAddr, hostKey, database, rt, materializer, picoclawLLM)
-	go func() {
-		if err := sshGateway.ListenAndServe(); err != nil {
-			log.Printf("SSH gateway stopped: %v", err)
-		}
-	}()
-
 	// Self-update: the GitHub source and the local trigger paths are entirely
 	// environment-driven, so a deployment that cannot self-update simply ends
 	// up with a service that reports itself unavailable.
@@ -214,6 +213,27 @@ func main() {
 	// Build API server and container proxy.
 	aliasVerifier := dnscheck.New(domain, strings.Split(gatewayPublicIPs, ","))
 	apiSrv := api.NewServer(database, rt, encKey, domain, materializer, rl, llmCfg, picoclawLLM, updateSvc, aliasVerifier)
+
+	// Build and start the SSH gateway. It offers the same management surface
+	// as the dashboard, so it is given the same dependencies — including its
+	// own alias manager over the shared verifier.
+	sshGateway := sshgw.New(sshgw.Config{
+		Addr:         sshAddr,
+		HostKey:      hostKey,
+		DB:           database,
+		Runtime:      rt,
+		Materializer: materializer,
+		PicoclawLLM:  picoclawLLM,
+		EncKey:       encKey,
+		Domain:       domain,
+		Aliases:      aliases.New(database, rt, aliasVerifier, domain),
+		Updater:      updateSvc,
+	})
+	go func() {
+		if err := sshGateway.ListenAndServe(); err != nil {
+			log.Printf("SSH gateway stopped: %v", err)
+		}
+	}()
 	containerProxy := proxy.New(database, rt, domain)
 
 	// Top-level handler: route by Host header.

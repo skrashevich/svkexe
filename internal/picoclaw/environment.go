@@ -23,6 +23,12 @@ const GuideFilePath = ConfigDir + "/AGENTS.md"
 // configured and the agent is told only about the local ports.
 var Domain string
 
+// SSHPort is where the gateway's own management shell listens, mirroring the
+// gateway's SSH_ADDR the way Domain mirrors DOMAIN. It is named in the agent's
+// guide so an agent knows the platform can be driven at all; the default
+// matches the gateway's own.
+var SSHPort = 2222
+
 // environmentGuide describes, in the agent's own terms, where the VM's work
 // becomes reachable. Without it an agent configures services blind: it binds
 // to localhost, picks whatever port the upstream README suggests, and the
@@ -91,6 +97,19 @@ func environmentGuide(c *db.Container, domain string) []byte {
 			metadata.Address, metadata.Address)
 		b.WriteString("- Useful ones: `instance-id`, `local-ipv4`, `public-hostname`, `public-keys/0/openssh-key`, and the platform's own tree under `svkexe/` — `svkexe/app-port`, `svkexe/app-public`, `svkexe/nesting`, `svkexe/aliases`.\n")
 		b.WriteString("- Read it instead of asking the owner for something it already answers. A value is plain text with no trailing newline; a path ending in `/` lists what is under it.\n")
+	}
+
+	// An agent that does not know the platform can be driven at all asks its
+	// owner to press buttons for it — publish a port, add a domain, build a
+	// second VM — or silently works around what it could simply have changed.
+	// The key is the honest part: none is installed here, so the sentence has
+	// to say what is possible only if the owner hands one over, rather than
+	// sending the agent off to debug a refused connection.
+	if domain != "" {
+		b.WriteString("\n## The platform that runs this VM\n\n")
+		fmt.Fprintf(&b, "- The gateway has an SSH management shell on **%s port %d**, covering the same ground as the owner's dashboard: creating, starting, stopping and rebuilding VMs, published ports, nested containers, custom domains, LLM connections and SSH keys.\n", domain, SSHPort)
+		b.WriteString("- It authenticates by SSH key alone, and no private key of the owner's is installed here. You can use it only with a key they give you — ask before assuming you have one.\n")
+		fmt.Fprintf(&b, "- With such a key, `ssh -p %d <anything>@%s \"help --json\"` prints the whole command catalogue as JSON: every command, argument and flag that key is allowed to use. The login name is ignored; the key decides who you are.\n", SSHPort, domain)
 	}
 
 	b.WriteString("\n## Making a service reachable\n\n")

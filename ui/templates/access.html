@@ -1,0 +1,19 @@
+{{template "layout.html" .}}
+{{define "content"}}
+<div class="page-header"><h1>Access to {{.Container.Name}}</h1><a href="/dashboard/vms">Back to VMs</a></div>
+<p>Members can use SSH, the terminal, applications and PicoClaw. VM management and access permissions remain with the owner.</p>
+{{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
+<form class="card" method="post" action="/dashboard/vms/{{.Container.ID}}/access">
+ <label>Email <input type="email" name="email" required maxlength="254"></label>
+ <label>SSH public key <textarea name="public_key" required rows="3" placeholder="ssh-ed25519 AAAA…"></textarea></label>
+ <p>For an existing account, use a key already registered on that account.</p>
+ <button class="btn btn-primary" type="submit">Grant access</button>
+</form>
+<div class="card">
+{{range .Members}}<form method="post" action="/dashboard/vms/{{$.Container.ID}}/access/{{.ID}}/revoke"><span>{{.Email}}</span> <button class="btn btn-secondary" type="submit">Revoke access</button></form>
+{{else}}<p>No invited users.</p>{{end}}
+</div>
+<p>SSH: <code>ssh -p 2222 {{.Container.IncusName}}@{{if .Domain}}{{.Domain}}{{else}}GATEWAY_HOST{{end}}</code></p>
+<p>To set a password for web login, the invited user runs <code>ssh -t -p 2222 svkexe@{{if .Domain}}{{.Domain}}{{else}}GATEWAY_HOST{{end}} passwd</code>, then signs in with their email and password.</p>
+<p>Revoking access blocks new connections and closes active guest connections within a few seconds. Processes already started inside the VM are not undone.</p>
+{{end}}

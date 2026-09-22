@@ -121,3 +121,12 @@ CREATE TABLE IF NOT EXISTS ssh_keys (
     name TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Named users may use a VM without acquiring ownership or management rights.
+CREATE TABLE IF NOT EXISTS container_access (
+    container_id TEXT NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(container_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS container_access_user_idx ON container_access(user_id);

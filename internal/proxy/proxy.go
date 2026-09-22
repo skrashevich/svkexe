@@ -118,7 +118,7 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		p.acceptShareCookie(w, r, shareToken)
 	} else if userID != "" {
-		container, err = p.db.GetContainerByName(info.ContainerName, userID)
+		container, err = p.db.GetAccessibleContainerByName(info.ContainerName, userID)
 		if err == sql.ErrNoRows {
 			http.Error(w, "container not found", http.StatusNotFound)
 			return
@@ -142,10 +142,23 @@ func (p *ContainerProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if info.Kind == routeAgent && (r.URL.Path == "/version-check" || r.URL.Path == "/upgrade") {
+		if container.OwnerID != userID && r.URL.Path == "/upgrade" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		p.agentUpdate(w, r, container)
 		return
 	}
 
+	if userID != "" && container.OwnerID != userID && shareToken == "" {
+		ctx, cancel := p.db.ContainerAccessContext(r.Context(), container, userID)
+		defer cancel()
+		if ctx.Err() != nil {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		r = r.WithContext(ctx)
+	}
 	port := agentPort
 	if info.Kind == routeApp {
 		port = container.AppPort

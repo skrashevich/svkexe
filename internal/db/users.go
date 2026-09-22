@@ -121,6 +121,9 @@ func (db *DB) DeleteUser(id string) error {
 	}
 	defer tx.Rollback()
 
+	if _, err := tx.Exec(`DELETE FROM container_access WHERE user_id = ? OR container_id IN (SELECT id FROM containers WHERE owner_id = ?)`, id, id); err != nil {
+		return fmt.Errorf("delete user access: %w", err)
+	}
 	// Remove shared_links referencing this user's containers (or created by the user).
 	if _, err := tx.Exec(
 		`DELETE FROM shared_links WHERE created_by = ? OR container_id IN (SELECT id FROM containers WHERE owner_id = ?)`,

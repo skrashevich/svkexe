@@ -9,6 +9,34 @@ Self-hosted platform for persistent Linux VMs with integrated [PicoClaw](https:/
 
 See [agent architecture, build and migration](docs/PICOCLAW.md) for the preserved contracts and existing-VM upgrade procedure.
 
+## See it in action
+
+The web dashboard puts VM status, resources, published ports, custom domains and
+nested-container settings in one place.
+
+![Web dashboard with running and stopped VMs](docs/media/webui-vms.png)
+
+<details>
+<summary>Create a VM and give its agent the first task</summary>
+
+Choose CPU, RAM and disk, then describe what the agent should build at first boot.
+
+![New VM form with an initial coding task](docs/media/webui-create.png)
+
+</details>
+
+Manage the same VMs over SSH: open the management shell, run `ls` and `stat`,
+or request JSON from a one-shot command.
+
+![VHS recording of the SSH management shell and JSON output](docs/media/ssh-session.gif)
+
+[Read the console transcript](docs/media/ssh-session.txt) ·
+[Replay the VHS tape](docs/demo/ssh.tape) ·
+[Regenerate the screenshots and recording](docs/demo/README.md)
+
+*Captured from the actual dashboard and SSH gateway using local sample data.
+The demo does not start Incus containers or call an LLM.*
+
 ## Reuse the LLM agent
 
 The PicoClaw runtime with Shelley web UI and HTTP API is available as a [standalone package in `agent/`](agent/README.md). Build it with `make -C agent build`, or export it with `make -C agent package` for use in another project. It does not require the svkexe gateway or Incus.

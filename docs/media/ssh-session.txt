@@ -1,0 +1,45 @@
+
+$ ssh svkexe-demo "ls"
+
+  NAME                 STATUS     CPU    MEMORY   DISK  
+  ----                 ------     ---    ------   ----  
+  dev                  [+] running 4      4GB      20GB  
+  sandbox              [-] stopped 2      2GB      10GB  
+  staging              [+] running 2      2GB      10GB  
+
+
+$ ssh svkexe-demo "stat dev"
+
+  Name:       dev
+  Status:     [+] running
+  CPU:        4 cores
+  Memory:     4GB
+  Disk:       20GB
+  IP:         10.100.0.10
+  URL:        https://dev.example.com
+  Port:       3000 (public)
+  Nesting:    on
+  Created:    2026-09-22 10:00
+
+
+$ ssh svkexe-demo "help new"
+
+  new <name> [--cpu=N] [--memory=MB] [--disk=GB] [--task="..."]
+  Creates a VM from the platform base image, starts it and installs the agent. Without the resource flags it gets 2 cores, 2048 MB of RAM and 10 GB of disk. A task given here is handed to the agent once the VM is up.
+
+  Arguments:
+    name           VM name: 2-63 lowercase letters, digits and hyphens; it becomes the VM's hostname
+
+  Flags:
+    --cpu=...      CPU cores
+    --memory=...   memory in MB
+    --disk=...     disk in GB
+    --task=...     task handed to the agent on first boot
+
+  Examples:
+    new dev
+    new dev --cpu=4 --memory=4096 --task="set up a Go project"
+
+
+$ ssh svkexe-demo "stat dev --json"
+{"name":"dev","status":"running","cpu":4,"memory_mb":4096,"disk_gb":20,"ip":"10.100.0.10","url":"https://dev.example.com","app_port":3000,"app_public":true,"nesting":true,"nesting_effective":true,"nesting_pending":false,"created_at":"2026-09-22T10:00:00Z"}

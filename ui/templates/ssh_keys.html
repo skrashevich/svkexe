@@ -1,81 +1,73 @@
 {{define "content"}}
-<div class="page-header">
-    <h1>SSH Keys</h1>
-</div>
-
-{{if .Error}}
-<div class="alert-error">{{.Error}}</div>
-{{end}}
-
-<div class="card" style="margin-bottom:20px;">
-    <div class="card-title">Add SSH Key</div>
-    <form method="POST" action="/dashboard/ssh-keys">
-        <div class="form-group">
-            <label>Key Name</label>
-            <input type="text" name="name" placeholder="e.g. My Laptop" required>
-        </div>
-        <div class="form-group">
-            <label>Public Key</label>
-            <textarea name="public_key"
-                placeholder="ssh-ed25519 AAAA... or ssh-rsa AAAA..."
-                required></textarea>
-        </div>
-        <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Add Key</button>
-        </div>
-    </form>
-</div>
-
-<div class="card" style="padding:0; overflow:hidden; margin-bottom:20px;">
-    <div style="padding:20px 24px 0;">
-        <div class="card-title">Registered Keys</div>
+<header class="page-head">
+    <div>
+        <h1>SSH keys</h1>
+        <p class="sub">Your key is your identity on the SSH gateway — no password needed.</p>
     </div>
-    {{if .SSHKeys}}
-    <table class="data-table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Fingerprint</th>
-                <th>Added</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody id="ssh-keys-list">
-        {{range .SSHKeys}}
-        <tr id="ssh-key-{{.ID}}">
-            <td class="cell-name">{{.Name}}</td>
-            <td class="cell-mono">{{.Fingerprint}}</td>
-            <td class="cell-muted">{{formatTime .CreatedAt}}</td>
-            <td class="cell-actions">
-                <button class="btn btn-danger btn-sm"
-                    hx-delete="/dashboard/ssh-keys/{{.ID}}"
-                    hx-target="#ssh-key-{{.ID}}"
-                    hx-swap="outerHTML"
-                    hx-confirm="Delete this SSH key?">
-                    Delete
-                </button>
-            </td>
-        </tr>
-        {{end}}
-        </tbody>
-    </table>
+    <button type="button" class="btn btn-primary btn-lg" id="ssh-add"{{if .Error}} hidden{{end}}
+            onclick="this.hidden=true; var f=document.getElementById('ssh-form'); f.hidden=false; f.elements.name.focus();"><span class="plus">+</span>Add key</button>
+</header>
+
+<form class="panel panel-focus" id="ssh-form" method="POST" action="/dashboard/ssh-keys" style="gap:14px;"{{if not .Error}} hidden{{end}}>
+    {{if .Error}}<div class="alert-error" role="alert">{{.Error}}</div>{{end}}
+    <label class="field" style="max-width:360px;">Name
+        <input class="input" type="text" name="name" placeholder="e.g. MacBook Pro" required>
+    </label>
+    <label class="field">Public key
+        <textarea class="input mono" name="public_key" rows="3" required
+            placeholder="ssh-ed25519 AAAA… — the contents of ~/.ssh/id_ed25519.pub"></textarea>
+    </label>
+    <div class="form-actions">
+        <button type="button" class="btn"
+                onclick="var f=this.form; f.reset(); f.hidden=true; document.getElementById('ssh-add').hidden=false;">Cancel</button>
+        <button type="submit" class="btn btn-primary" style="padding:0 16px;">Add key</button>
+    </div>
+</form>
+
+<section class="list" id="ssh-keys-list">
+    {{range .SSHKeys}}
+    <div class="list-row" id="ssh-key-{{.ID}}">
+        <div style="flex:1 1 200px; display:flex; flex-direction:column; gap:2px;">
+            <span style="font-weight:600;">{{.Name}}</span>
+            <span style="font-size:12.5px; color:var(--fg-mute);" title="{{formatTime .CreatedAt}}">Added {{shortDate .CreatedAt}}</span>
+        </div>
+        <span class="mono" style="flex:1 1 260px; font-size:12px; color:var(--fg-dim); overflow-wrap:anywhere;">{{.Fingerprint}}</span>
+        <button class="btn btn-2xs btn-danger"
+            hx-delete="/dashboard/ssh-keys/{{.ID}}"
+            hx-target="#ssh-key-{{.ID}}"
+            hx-swap="outerHTML"
+            hx-confirm="This key can no longer sign in to the SSH gateway."
+            data-confirm-title="Delete key “{{.Name}}”?"
+            data-confirm-cta="Delete"
+            data-confirm-danger>Delete</button>
+    </div>
     {{else}}
-    <div class="empty-state">
-        <h3>No SSH keys yet</h3>
-        <p>Add an SSH key above to connect to your VMs via SSH.</p>
-    </div>
+    <div class="list-empty">No keys yet. Add one to reach your VMs over SSH.</div>
     {{end}}
-</div>
+</section>
 
-<div class="card">
-    <div class="card-title">SSH Connection</div>
-    <p style="font-size:0.85rem; color:var(--fg-mute); margin-bottom:16px;">Connect via SSH to manage your VMs interactively:</p>
-    <div class="code-block">
-        <div class="comment"># Interactive menu (pick a VM):</div>
-        <div class="cmd">ssh svkexe@&lt;gateway-host&gt;</div>
-        <br>
-        <div class="comment"># Connect directly to a VM by name:</div>
-        <div class="cmd">ssh &lt;vm-name&gt;@&lt;gateway-host&gt;</div>
+<section class="panel" style="gap:12px;">
+    <h3>Connect</h3>
+    <div class="inset" style="display:flex; align-items:center; gap:14px;">
+        <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+            <span style="font-size:12px; color:var(--fg-mute);">Management shell — same actions as this dashboard</span>
+            <span class="mono" style="font-size:13px; overflow-wrap:anywhere;">ssh -p 2222 svkexe@{{host}}</span>
+        </div>
+        <button type="button" class="btn btn-2xs" data-copy="ssh -p 2222 svkexe@{{host}}">Copy</button>
     </div>
-</div>
+    <div class="inset" style="display:flex; align-items:center; gap:14px;">
+        <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+            <span style="font-size:12px; color:var(--fg-mute);">Straight into a VM</span>
+            <span class="mono" style="font-size:13px; overflow-wrap:anywhere;">ssh -p 2222 &lt;vm-name&gt;@{{host}}</span>
+        </div>
+        <button type="button" class="btn btn-2xs" data-copy="ssh -p 2222 <vm-name>@{{host}}">Copy</button>
+    </div>
+    <div class="inset" style="display:flex; align-items:center; gap:14px;">
+        <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+            <span style="font-size:12px; color:var(--fg-mute);">One-shot, machine-readable</span>
+            <span class="mono" style="font-size:13px; overflow-wrap:anywhere;">ssh -p 2222 svkexe@{{host}} ls --json</span>
+        </div>
+        <button type="button" class="btn btn-2xs" data-copy="ssh -p 2222 svkexe@{{host}} ls --json">Copy</button>
+    </div>
+</section>
 {{end}}

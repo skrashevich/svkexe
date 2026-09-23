@@ -49,7 +49,7 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 				return "running"
 			case "stopped":
 				return "stopped"
-			case "starting", "pending", "creating", "recreating":
+			case "starting", "stopping", "restarting", "pending", "creating", "recreating":
 				return "starting"
 			default:
 				return "error"
@@ -58,6 +58,20 @@ func NewDashboard(database *db.DB, rt runtime.ContainerRuntime, materializer *se
 		"domain": func() string {
 			return domain
 		},
+		"host": func() string {
+			if domain == "" {
+				return "GATEWAY_HOST"
+			}
+			return domain
+		},
+		"statusLabel":   statusLabel,
+		"task":          vmTask,
+		"memSize":       memSize,
+		"shortDate":     shortDate,
+		"initial":       initial,
+		"roleLabel":     roleLabel,
+		"providerLabel": providerLabel,
+		"maxAliases":    func() int { return db.MaxAliasesPerContainer },
 		"maskKey": func(key string) string {
 			if len(key) <= 8 {
 				return "••••••••"
@@ -91,6 +105,8 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Get("/vms", d.getVMs)
 	r.Get("/vms/list", d.getVMList)
 	r.Get("/vms/create", d.getVMCreate)
+	r.Get("/vms/{id}", d.getVMDetail)
+	r.Get("/vms/{id}/card", d.getVMCard)
 	r.Post("/vms", d.postCreateVM)
 	r.Post("/vms/{id}/start", d.postStartVM)
 	r.Post("/vms/{id}/stop", d.postStopVM)
@@ -146,9 +162,48 @@ type templateData struct {
 	// the create form needs so it does not offer a capability this deployment
 	// forbids.
 	NestingAllowed bool
+	// Nav holds the counts the sidebar shows beside each section.
+	Nav navCounts
 }
 
+// navCounts are the sidebar badges, and double as the onboarding checklist's
+// answer to "has this account connected an LLM / added a key yet".
+type navCounts struct {
+	VMs     int
+	LLM     int
+	SSHKeys int
+}
+
+func (d *Dashboard) navCounts(user *db.User) navCounts {
+	var n navCounts
+	if user == nil {
+		return n
+	}
+	// The counts are decoration: a failed read shows zero rather than failing
+	// the page it sits on.
+	if cs, err := d.db.ListAccessibleContainers(user.ID); err == nil {
+		n.VMs = len(cs)
+	}
+	if ks, err := d.db.ListAPIKeysByOwner(user.ID); err == nil {
+		n.LLM = len(ks)
+	}
+	if ks, err := d.db.ListSSHKeysByUser(user.ID); err == nil {
+		n.SSHKeys = len(ks)
+	}
+	return n
+}
+
+// newData is the data behind a full page, sidebar counts included.
 func (d *Dashboard) newData(r *http.Request) templateData {
+	data := d.fragmentData(r)
+	data.Nav = d.navCounts(data.User)
+	return data
+}
+
+// fragmentData is newData without the sidebar counts, for htmx fragments that
+// never render the sidebar — the VM list is polled every few seconds, and
+// would otherwise pay three extra queries per tab per poll for nothing.
+func (d *Dashboard) fragmentData(r *http.Request) templateData {
 	user, _ := r.Context().Value(ctxkeys.User).(*db.User)
 	// An unreadable ceiling is treated as allowing, matching AttachNestingPolicy
 	// so the create form and the VM cards cannot disagree. This decides only what
@@ -174,10 +229,15 @@ func (d *Dashboard) render(w http.ResponseWriter, tmplName string, data interfac
 	}
 }
 
-// renderCard renders a single VM card with its custom domains attached. A
-// failure to look up the aliases is logged, not returned: the VM itself is
-// still there and its card must still render, just without a DNS section.
+// renderCard renders the VM detail fragment — header, tabs and every panel —
+// which is what each owner action on a VM swaps back in. Failures to look up
+// the extras are logged, not returned: the VM itself is still there and its
+// page must still render, just without that section.
 func (d *Dashboard) renderCard(w http.ResponseWriter, c *db.Container) {
+	d.render(w, "vm_card", d.cardData(c, ""))
+}
+
+func (d *Dashboard) cardData(c *db.Container, accessError string) vmCardData {
 	if err := d.db.AttachAliases(c); err != nil {
 		log.Printf("render card for %s: attach aliases: %v", c.IncusName, err)
 	}
@@ -187,7 +247,17 @@ func (d *Dashboard) renderCard(w http.ResponseWriter, c *db.Container) {
 	if err := d.db.AttachNestingPolicy(c); err != nil {
 		log.Printf("render card for %s: attach nesting policy: %v", c.IncusName, err)
 	}
-	d.render(w, "vm_card", c)
+	data := vmCardData{Container: c, AccessError: accessError}
+	// Members are the owner's business; someone the VM was shared with sees
+	// only the Overview tab and never this list.
+	if !c.SharedAccess {
+		members, err := d.db.ListContainerAccess(c.ID)
+		if err != nil {
+			log.Printf("render card for %s: list members: %v", c.IncusName, err)
+		}
+		data.Members = members
+	}
+	return data
 }
 
 // partialPatterns lists glob patterns for template files that only define
@@ -203,6 +273,7 @@ var partialPatterns = []string{
 	"templates/vm_list.html",
 	"templates/vm_row.html",
 	"templates/vm_create.html",
+	"templates/vm_detail.html",
 	"templates/key_row.html",
 	"templates/llm_body.html",
 }

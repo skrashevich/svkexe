@@ -97,14 +97,18 @@ func (d *Dashboard) getVMList(w http.ResponseWriter, r *http.Request) {
 		log.Printf("get VM list for %s: attach nesting policy: %v", user.ID, err)
 	}
 
-	data := d.newData(r)
+	data := d.fragmentData(r)
 	data.Containers = containers
+	// Only the empty list's onboarding checklist reads the counts.
+	if len(containers) == 0 {
+		data.Nav = d.navCounts(user)
+	}
 	d.render(w, "vm_list_content", data)
 }
 
 // getVMCreate handles GET /dashboard/vms/create — returns create form partial.
 func (d *Dashboard) getVMCreate(w http.ResponseWriter, r *http.Request) {
-	data := d.newData(r)
+	data := d.fragmentData(r)
 	d.render(w, "vm_create_form", data)
 }
 
@@ -248,7 +252,7 @@ func (d *Dashboard) postCreateVM(w http.ResponseWriter, r *http.Request) {
 	if err := d.db.AttachNestingPolicy(containers...); err != nil {
 		log.Printf("create VM for %s: attach nesting policy: %v", user.ID, err)
 	}
-	data := d.newData(r)
+	data := d.fragmentData(r)
 	data.Containers = containers
 	d.render(w, "vm_list_content", data)
 }

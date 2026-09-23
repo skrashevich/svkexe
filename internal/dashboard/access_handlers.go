@@ -8,12 +8,6 @@ import (
 	"github.com/skrashevich/svkexe/internal/db"
 )
 
-type accessData struct {
-	templateData
-	Members []*db.User
-	Error   string
-}
-
 func (d *Dashboard) accessOwner(w http.ResponseWriter, r *http.Request) *db.Container {
 	user := userFromCtx(r.Context())
 	c, err := d.db.GetContainerByID(chi.URLParam(r, "id"))
@@ -23,19 +17,17 @@ func (d *Dashboard) accessOwner(w http.ResponseWriter, r *http.Request) *db.Cont
 	}
 	return c
 }
-func (d *Dashboard) renderAccess(w http.ResponseWriter, r *http.Request, c *db.Container, message string) {
-	members, err := d.db.ListContainerAccess(c.ID)
-	if err != nil {
-		http.Error(w, "could not load access", http.StatusInternalServerError)
-		return
-	}
-	data := accessData{templateData: d.newData(r), Members: members, Error: message}
-	data.Container = c
-	d.renderPage(w, "access.html", data)
+
+// accessTab is where every access action lands: the Access tab of the VM page.
+func accessTab(c *db.Container) string {
+	return "/dashboard/vms/" + c.ID + "#access"
 }
+
+// getAccess handles GET /dashboard/vms/{id}/access. Access moved into a tab of
+// the VM page; the old address keeps working for bookmarks and links.
 func (d *Dashboard) getAccess(w http.ResponseWriter, r *http.Request) {
 	if c := d.accessOwner(w, r); c != nil {
-		d.renderAccess(w, r, c, "")
+		http.Redirect(w, r, accessTab(c), http.StatusFound)
 	}
 }
 func (d *Dashboard) postAccess(w http.ResponseWriter, r *http.Request) {
@@ -54,10 +46,10 @@ func (d *Dashboard) postAccess(w http.ResponseWriter, r *http.Request) {
 	if err := d.db.GrantContainerAccess(c.OwnerID, c.ID, r.PostFormValue("email"), r.PostFormValue("public_key")); err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
-		d.renderAccess(w, r, c, err.Error())
+		d.renderVMPage(w, r, c, err.Error(), r.PostFormValue("email"))
 		return
 	}
-	http.Redirect(w, r, "/dashboard/vms/"+c.ID+"/access", http.StatusSeeOther)
+	http.Redirect(w, r, accessTab(c), http.StatusSeeOther)
 }
 func (d *Dashboard) postRevokeAccess(w http.ResponseWriter, r *http.Request) {
 	if !accessSameOrigin(w, r) {
@@ -71,7 +63,7 @@ func (d *Dashboard) postRevokeAccess(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not revoke access", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/dashboard/vms/"+c.ID+"/access", http.StatusSeeOther)
+	http.Redirect(w, r, accessTab(c), http.StatusSeeOther)
 }
 
 func accessSameOrigin(w http.ResponseWriter, r *http.Request) bool {

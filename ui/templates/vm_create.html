@@ -1,87 +1,94 @@
 {{define "vm_create_form"}}
-<div class="modal-overlay" id="create-modal-inner"
-     hx-on:click="if(event.target===this){document.getElementById('create-modal').innerHTML=''}">
-    <div class="card modal">
-        <div class="modal-header">
-            <h2>New Virtual Machine</h2>
-            <button class="modal-close" onclick="document.getElementById('create-modal').innerHTML=''">&times;</button>
+<div class="overlay" id="create-modal-inner"
+     hx-on:click="if(event.target===this){closeModal()}">
+    <form class="modal" data-create-form data-host="{{domain}}"
+          hx-post="/dashboard/vms"
+          hx-target="#vm-list"
+          hx-swap="innerHTML"
+          hx-disabled-elt="find [data-create-submit]"
+          hx-on::after-request="if(event.detail.successful && event.detail.elt===this){closeModal(); svkToast('Creating ' + this.elements.name.value + '…', 'warn')}">
+        <div class="modal-head">
+            <h2>New virtual machine</h2>
+            <button type="button" class="btn btn-icon" onclick="closeModal()" aria-label="Close">&times;</button>
         </div>
-        <form hx-post="/dashboard/vms"
-              hx-target="#vm-list"
-              hx-swap="innerHTML"
-              hx-disabled-elt="find .btn"
-              hx-indicator="find .htmx-indicator"
-              hx-on::after-request="document.getElementById('create-modal').innerHTML=''">
-            <div class="form-group">
-                <label for="vm-name">Name</label>
-                <input type="text" id="vm-name" name="name" placeholder="my-vm" required
-                       pattern="(?!agent-)(?![0-9]{1,5}-)[a-z0-9][a-z0-9\-]{0,61}[a-z0-9]"
-                       title="Lowercase letters, numbers and hyphens (2-63 chars). Cannot start with &quot;agent-&quot; or a port prefix like &quot;3000-&quot;, which are reserved for VM URLs.">
-                <div class="form-hint">
-                    Becomes your VM's address: your service at <code>name.{{domain}}</code>,
-                    PicoClaw at <code>agent-name.{{domain}}</code>.
-                </div>
+
+        <label class="modal-label">Name
+            <input class="input mono" type="text" id="vm-name" name="name" placeholder="my-vm" required autofocus autocomplete="off"
+                   pattern="(?!agent-)(?![0-9]{1,5}-)[a-z0-9][a-z0-9\-]{0,61}[a-z0-9]"
+                   title="Lowercase letters, numbers and hyphens (2-63 chars). Cannot start with &quot;agent-&quot; or a port prefix like &quot;3000-&quot;, which are reserved for VM URLs.">
+            <span class="field-hint" data-name-hint>Service at name.{{domain}} · agent at agent-name.{{domain}}</span>
+        </label>
+
+        <div class="modal-label">
+            <label for="vm-task">What should the agent build? <span class="field-hint">— optional</span></label>
+            <textarea class="input mono" id="vm-task" name="initial_task" rows="3" maxlength="4000"
+                      placeholder="e.g. a Node.js API on port 3000 that returns the current time"></textarea>
+            <div class="chips">
+                <button type="button" class="chip" data-example="A Node.js API on port 3000 that returns the current time.">Node.js API</button>
+                <button type="button" class="chip" data-example="Postgres with Adminer via Docker Compose; Adminer on port 3000.">Postgres + Adminer</button>
+                <button type="button" class="chip" data-example="Clone github.com/me/site, build it and serve it on port 3000.">Static site from repo</button>
             </div>
-            <div class="form-group">
-                <label for="vm-task">What should be on this VM?</label>
-                <textarea id="vm-task" name="initial_task" rows="3" maxlength="4000"
-                          placeholder="e.g. a Node.js API on port 3000 that returns the current time"></textarea>
-                <div class="form-hint">
-                    Optional. Sent to the agent as its first instruction once the VM is up,
-                    using your LLM key. Leave empty to start with an idle VM.
-                </div>
+            <span class="field-hint">Sent to the agent as its first message once the VM is up, using your LLM key. Leave it empty to start with an idle VM.</span>
+        </div>
+
+        <fieldset class="modal-label" style="border:none;">
+            <legend style="margin-bottom:8px;">Size</legend>
+            <div class="choice-grid">
+                <label class="choice"><input class="sr-only" type="radio" name="size" value="small" data-cpu="1" data-ram="1024" data-disk="5">
+                    <span class="choice-title">Small</span><span class="choice-sub">1 vCPU
+1 GB · 5 GB</span></label>
+                <label class="choice on"><input class="sr-only" type="radio" name="size" value="standard" data-cpu="2" data-ram="2048" data-disk="10" checked>
+                    <span class="choice-title">Standard</span><span class="choice-sub">2 vCPU
+2 GB · 10 GB</span></label>
+                <label class="choice"><input class="sr-only" type="radio" name="size" value="large" data-cpu="4" data-ram="4096" data-disk="25">
+                    <span class="choice-title">Large</span><span class="choice-sub">4 vCPU
+4 GB · 25 GB</span></label>
+                <label class="choice"><input class="sr-only" type="radio" name="size" value="custom">
+                    <span class="choice-title">Custom</span><span class="choice-sub">Pick CPU,
+RAM &amp; disk</span></label>
             </div>
-            <div class="form-group">
-                <label for="vm-cpu">CPU</label>
-                <select id="vm-cpu" name="cpu_limit">
-                    <option value="1">1 vCPU</option>
-                    <option value="2" selected>2 vCPU</option>
-                    <option value="4">4 vCPU</option>
-                </select>
+            {{/* The presets only move these radios, so the form always submits
+                 the three values the handler reads, whichever card is picked. */}}
+            <div class="opt-rows" data-custom hidden>
+                <div class="opt-row"><span>CPU</span><div>
+                    <label class="opt"><input type="radio" name="cpu_limit" value="1"><span>1 vCPU</span></label>
+                    <label class="opt"><input type="radio" name="cpu_limit" value="2" checked><span>2 vCPU</span></label>
+                    <label class="opt"><input type="radio" name="cpu_limit" value="4"><span>4 vCPU</span></label>
+                </div></div>
+                <div class="opt-row"><span>RAM</span><div>
+                    <label class="opt"><input type="radio" name="memory_mb" value="512"><span>512 MB</span></label>
+                    <label class="opt"><input type="radio" name="memory_mb" value="1024"><span>1 GB</span></label>
+                    <label class="opt"><input type="radio" name="memory_mb" value="2048" checked><span>2 GB</span></label>
+                    <label class="opt"><input type="radio" name="memory_mb" value="4096"><span>4 GB</span></label>
+                    <label class="opt"><input type="radio" name="memory_mb" value="8192"><span>8 GB</span></label>
+                </div></div>
+                <div class="opt-row"><span>Disk</span><div>
+                    <label class="opt"><input type="radio" name="disk_gb" value="5"><span>5 GB</span></label>
+                    <label class="opt"><input type="radio" name="disk_gb" value="10" checked><span>10 GB</span></label>
+                    <label class="opt"><input type="radio" name="disk_gb" value="25"><span>25 GB</span></label>
+                    <label class="opt"><input type="radio" name="disk_gb" value="50"><span>50 GB</span></label>
+                </div></div>
             </div>
-            <div class="form-group">
-                <label for="vm-ram">RAM</label>
-                <select id="vm-ram" name="memory_mb">
-                    <option value="512">512 MB</option>
-                    <option value="1024">1024 MB</option>
-                    <option value="2048" selected>2048 MB</option>
-                    <option value="4096">4096 MB</option>
-                    <option value="8192">8192 MB</option>
-                </select>
+        </fieldset>
+
+        {{if .NestingAllowed}}
+        <div class="soft-box">
+            <div>
+                <label for="vm-nesting" style="font-size:13px; font-weight:600;">Nested containers</label>
+                <span class="field-hint" style="font-size:12.5px;">Lets Docker, buildah and nested Incus run inside the VM. Without it the agent builds everything from source.</span>
             </div>
-            <div class="form-group">
-                <label for="vm-disk">Disk</label>
-                <select id="vm-disk" name="disk_gb">
-                    <option value="5">5 GB</option>
-                    <option value="10" selected>10 GB</option>
-                    <option value="25">25 GB</option>
-                    <option value="50">50 GB</option>
-                </select>
-            </div>
-            {{if .NestingAllowed}}
-            <div class="form-group">
-                <label class="vm-publish-toggle" for="vm-nesting">
-                    <input type="checkbox" id="vm-nesting" name="nesting" value="1" checked>
-                    <span>Nested containers</span>
-                </label>
-                <div class="form-hint">
-                    Lets Docker, buildah and nested Incus create containers inside the VM.
-                    Without it the agent has to build everything from source.
-                </div>
-            </div>
-            {{end}}
-            <div class="form-actions">
-                <button type="button" class="btn btn-secondary"
-                        onclick="document.getElementById('create-modal').innerHTML=''">Cancel</button>
-                <button type="submit" class="btn btn-primary">
-                    <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:6px;">
-                        <svg width="14" height="14" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
-                        Creating...
-                    </span>
-                    <span class="btn-label">Create VM</span>
-                </button>
-            </div>
-        </form>
-    </div>
+            <span class="switch"><input type="checkbox" id="vm-nesting" name="nesting" value="1" checked><span class="switch-track"></span></span>
+        </div>
+        {{end}}
+
+        <div class="modal-foot">
+            <span class="summary" data-summary>2 vCPU · 2 GB · 10 GB</span>
+            <button type="button" class="btn btn-lg" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-lg btn-quiet" data-create-submit>
+                <span class="htmx-indicator" style="align-items:center; gap:8px;"><span class="spin"></span>Creating…</span>
+                <span class="btn-label">Create VM</span>
+            </button>
+        </div>
+    </form>
 </div>
 {{end}}

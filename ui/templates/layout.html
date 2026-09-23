@@ -7,7 +7,7 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         /* ── Tokens ─────────────────────────────────────────────────────── */
         :root {
@@ -15,839 +15,895 @@
             --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 
             --bg: oklch(0.17 0.006 60);
+            --bg-side: oklch(0.15 0.006 60);
             --bg-raised: oklch(0.21 0.007 60);
+            --bg-list: oklch(0.195 0.007 60);
+            --bg-head: oklch(0.175 0.006 60);
+            --bg-hover: oklch(0.215 0.008 60);
             --bg-inset: oklch(0.14 0.005 60);
+            --bg-chip: oklch(0.26 0.008 60);
+            --bg-modal: oklch(0.20 0.007 60);
             --line: oklch(0.28 0.008 60);
             --line-soft: oklch(0.23 0.007 60);
+            --line-row: oklch(0.24 0.007 60);
+            --line-strong: oklch(0.45 0.01 60);
 
             --fg: oklch(0.96 0.006 80);
+            --fg-soft: oklch(0.85 0.008 70);
             --fg-dim: oklch(0.72 0.008 70);
-            --fg-mute: oklch(0.52 0.008 70);
+            --fg-mute: oklch(0.60 0.008 70);
 
             --accent: oklch(0.76 0.18 45);
             --accent-fg: oklch(0.18 0.04 45);
-            --accent-hover: oklch(0.72 0.17 45);
+            --accent-hover: oklch(0.80 0.16 45);
+            --accent-text: oklch(0.82 0.14 45);
+            --accent-soft: oklch(0.76 0.18 45 / 0.14);
 
             --ok: oklch(0.78 0.14 150);
-            --ok-dim: oklch(0.78 0.14 150 / 0.15);
+            --ok-soft: oklch(0.78 0.14 150 / 0.16);
             --warn: oklch(0.80 0.15 85);
-            --warn-dim: oklch(0.80 0.15 85 / 0.15);
-            --danger: oklch(0.65 0.22 25);
-            --danger-dim: oklch(0.65 0.22 25 / 0.15);
-            --stopped: oklch(0.60 0.02 250);
-            --stopped-dim: oklch(0.60 0.02 250 / 0.15);
-
-            --radius: 8px;
-            --radius-lg: 12px;
+            --warn-text: oklch(0.88 0.1 85);
+            --warn-soft: oklch(0.80 0.15 85 / 0.1);
+            --danger: oklch(0.70 0.19 25);
+            --danger-text: oklch(0.75 0.16 25);
+            --danger-soft: oklch(0.68 0.2 25 / 0.12);
+            --danger-line: oklch(0.68 0.2 25 / 0.3);
+            --stopped: oklch(0.66 0.02 250);
+            --stopped-soft: oklch(0.66 0.02 250 / 0.16);
+            --off: oklch(0.32 0.01 60);
         }
 
-        /* ── Reset ──────────────────────────────────────────────────────── */
+        /* ── Base ───────────────────────────────────────────────────────── */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        html { scroll-behavior: smooth; }
         body {
             font-family: var(--sans);
+            font-size: 14px;
             background: var(--bg);
             color: var(--fg);
-            min-height: 100vh;
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
         }
-        a { color: inherit; text-decoration: none; }
-
-        /* ── Nav ─────────────────────────────────────────────────────────── */
-        .dash-nav {
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            background: oklch(0.17 0.006 60 / 0.85);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-bottom: 1px solid var(--line-soft);
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { color: var(--accent-hover); }
+        input, textarea, select, button { font: inherit; color: inherit; }
+        button { white-space: nowrap; flex-shrink: 0; cursor: pointer; }
+        code, .mono { font-family: var(--mono); }
+        code { font-size: 0.92em; }
+        [hidden] { display: none !important; }
+        .sr-only {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
         }
-        .dash-nav-inner {
-            display: flex;
-            align-items: center;
-            height: 56px;
-            padding: 0 32px;
-            max-width: 1200px;
-            margin: 0 auto;
-            gap: 32px;
-        }
-        .mark {
-            font-family: var(--mono);
-            font-weight: 700;
-            font-size: 1rem;
-            letter-spacing: -0.02em;
-            color: var(--fg);
-            text-decoration: none;
-            flex-shrink: 0;
-        }
-        .mark .bracket { color: var(--accent); }
-
-        .dash-nav-links {
-            display: flex;
-            gap: 2px;
-        }
-        .dash-nav-links a {
-            font-size: 0.84rem;
-            font-weight: 500;
-            color: var(--fg-mute);
-            padding: 6px 14px;
-            border-radius: 6px;
-            transition: color 0.15s, background 0.15s;
-        }
-        .dash-nav-links a:hover {
-            color: var(--fg);
-            background: var(--bg-raised);
-        }
-        .dash-nav-links a.active {
-            color: var(--fg);
-            background: var(--line-soft);
-        }
-        .dash-nav-user {
-            margin-left: auto;
-            font-family: var(--mono);
-            font-size: 0.75rem;
-            color: var(--fg-mute);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .dash-nav-user::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--ok);
-            flex-shrink: 0;
-        }
-
-        /* ── Main ────────────────────────────────────────────────────────── */
-        .dash-main {
-            padding: 40px 32px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        /* ── Page header ─────────────────────────────────────────────────── */
-        .page-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 32px;
-        }
-        .page-header h1 {
-            font-size: 1.4rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-
-        /* ── Cards ───────────────────────────────────────────────────────── */
-        .card {
-            background: var(--bg-raised);
-            border: 1px solid var(--line-soft);
-            border-radius: var(--radius-lg);
-            padding: 24px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .card:hover {
-            border-color: var(--line);
-        }
-        .card-title {
-            font-size: 0.88rem;
-            font-weight: 600;
-            margin-bottom: 16px;
-            letter-spacing: -0.01em;
-        }
-
-        /* ── Buttons ─────────────────────────────────────────────────────── */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            font-family: var(--mono);
-            font-size: 0.78rem;
-            font-weight: 600;
-            padding: 8px 16px;
-            border-radius: var(--radius);
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            transition: opacity 0.15s, transform 0.1s, background 0.15s, border-color 0.15s;
-            letter-spacing: 0.01em;
-            white-space: nowrap;
-            line-height: 1.4;
-        }
-        .btn:hover { transform: translateY(-1px); }
-        .btn:active { transform: translateY(0); }
-        .btn-primary {
-            background: var(--accent);
-            color: var(--accent-fg);
-        }
-        .btn-primary:hover { background: var(--accent-hover); }
-        .btn-secondary {
-            background: var(--bg-inset);
-            color: var(--fg-dim);
-            border: 1px solid var(--line);
-        }
-        .btn-secondary:hover { border-color: var(--accent); color: var(--fg); }
-        .btn-danger {
-            background: var(--danger-dim);
-            color: var(--danger);
-            border: 1px solid oklch(0.65 0.22 25 / 0.25);
-        }
-        .btn-danger:hover { background: oklch(0.65 0.22 25 / 0.25); }
-        .btn-sm { padding: 5px 12px; font-size: 0.72rem; }
-        .btn-outline {
-            background: transparent;
-            color: var(--fg-dim);
-            border: 1px solid var(--line);
-        }
-        .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
-
-        /* ── Status badges ───────────────────────────────────────────────── */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-family: var(--mono);
-            font-size: 0.68rem;
-            font-weight: 600;
-            padding: 3px 10px;
-            border-radius: 100px;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }
-        .badge::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-        .badge-running {
-            background: var(--ok-dim);
-            color: var(--ok);
-        }
-        .badge-running::before { background: var(--ok); }
-        .badge-stopped {
-            background: var(--stopped-dim);
-            color: var(--stopped);
-        }
-        .badge-stopped::before { background: var(--stopped); }
-        .badge-starting, .badge-pending {
-            background: var(--warn-dim);
-            color: var(--warn);
-        }
-        .badge-starting::before, .badge-pending::before {
-            background: var(--warn);
-            animation: pulse-dot 1.5s ease-in-out infinite;
-        }
-        .badge-error {
-            background: var(--danger-dim);
-            color: var(--danger);
-        }
-        .badge-error::before { background: var(--danger); }
-
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        /* ── Grid ────────────────────────────────────────────────────────── */
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 16px;
-        }
-
-        /* ── VM card specifics ───────────────────────────────────────────── */
-        .vm-card-head {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            margin-bottom: 16px;
-        }
-        .vm-card-name {
-            font-family: var(--mono);
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--fg);
-            margin-bottom: 6px;
-            letter-spacing: -0.01em;
-        }
-        .vm-card-links {
-            display: flex;
-            gap: 6px;
-        }
-        .vm-link {
-            font-family: var(--mono);
-            font-size: 0.7rem;
-            font-weight: 500;
-            color: var(--fg-mute);
-            padding: 4px 10px;
-            border: 1px solid var(--line);
-            border-radius: 6px;
-            transition: color 0.15s, border-color 0.15s;
-            white-space: nowrap;
-        }
-        .vm-link:hover { color: var(--fg); border-color: var(--fg-dim); }
-        .vm-link-accent { color: var(--accent); border-color: oklch(0.76 0.18 45 / 0.3); }
-        .vm-link-accent:hover { border-color: var(--accent); }
-
-        .vm-task {
-            margin-bottom: 12px;
-            padding: 10px 14px;
-            background: var(--bg-inset);
-            border: 1px solid var(--line-soft);
-            border-left-width: 3px;
-            border-radius: var(--radius);
-        }
-        .vm-task-sent { border-left-color: var(--ok); }
-        .vm-task-pending { border-left-color: var(--fg-mute); }
-        .vm-task-working { border-left-color: var(--accent); }
-        .vm-task-done { border-left-color: var(--ok); }
-        .vm-task-failed { border-left-color: var(--danger); }
-        /* The agent works for minutes, so the card says so without the
-           full-card busy overlay, which would hide the VM's own controls. */
-        .vm-task-spinner {
-            width: 11px;
-            height: 11px;
-            flex: none;
-            border-radius: 50%;
-            border: 2px solid var(--line);
-            border-top-color: var(--accent);
-            animation: spin 0.7s linear infinite;
-        }
-        .vm-task-head {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-        .vm-task-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            color: var(--fg-dim);
-        }
-        .vm-task-state {
-            flex: 1;
-            font-size: 0.7rem;
-            color: var(--fg-mute);
-        }
-        .vm-task-text {
-            font-size: 0.78rem;
-            color: var(--fg-dim);
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-        }
-        .vm-task-error {
-            margin-top: 6px;
-            font-size: 0.7rem;
-            color: var(--danger);
-        }
-
-        .vm-publish {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-bottom: 12px;
-            padding: 10px 14px;
-            background: var(--bg-inset);
-            border: 1px solid var(--line-soft);
-            border-radius: var(--radius);
-        }
-        .vm-publish-field {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.75rem;
-            color: var(--fg-mute);
-        }
-        .vm-publish-field input[type="number"] {
-            width: 84px;
-            font-family: var(--mono);
-            font-size: 0.75rem;
-            padding: 4px 8px;
-            color: var(--fg);
-            background: var(--bg);
-            border: 1px solid var(--line);
-            border-radius: 6px;
-        }
-        .vm-publish-toggle { cursor: pointer; }
-        /* A switch the deployment forbids stays visible but is plainly out of
-           reach, so the answer "no Docker here" is not mistaken for a choice
-           the owner made. */
-        .vm-publish-toggle:has(input:disabled) {
-            cursor: not-allowed;
-            opacity: 0.55;
-        }
-        .vm-publish-hint {
-            flex: 1 1 100%;
-            font-size: 0.7rem;
-            color: var(--fg-mute);
-        }
-        /* The setting is stored but not live until the VM boots again; this is
-           the only thing on the card that says so. */
-        .vm-nesting-pending {
-            flex: 1 1 100%;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.7rem;
-            color: var(--warn);
-        }
-
-        .vm-aliases {
-            margin-bottom: 12px;
-            padding: 10px 14px;
-            background: var(--bg-inset);
-            border: 1px solid var(--line-soft);
-            border-radius: var(--radius);
-        }
-        .vm-aliases-head { margin-bottom: 6px; }
-        .vm-aliases-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            color: var(--fg-dim);
-        }
-        .vm-alias-list {
-            list-style: none;
-            margin: 0 0 8px;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .vm-alias-row {
-            padding: 8px 10px;
-            background: var(--bg);
-            border: 1px solid var(--line-soft);
-            border-radius: 6px;
-        }
-        .vm-alias-main {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .vm-alias-host {
-            font-family: var(--mono);
-            font-size: 0.78rem;
-            color: var(--fg);
-            overflow-wrap: anywhere;
-        }
-        .vm-alias-error {
-            margin-top: 4px;
-            font-size: 0.7rem;
-            color: var(--danger);
-        }
-        .vm-alias-actions {
-            display: flex;
-            gap: 6px;
-            margin-top: 6px;
-        }
-        .vm-alias-warning {
-            margin: 0 0 8px;
-            font-size: 0.7rem;
-            color: var(--danger);
-        }
-        .vm-alias-add {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-        .vm-alias-add input[type="text"] {
-            flex: 1;
-            font-family: var(--mono);
-            font-size: 0.75rem;
-            padding: 4px 8px;
-            color: var(--fg);
-            background: var(--bg);
-            border: 1px solid var(--line);
-            border-radius: 6px;
-        }
-        .vm-alias-hint {
-            margin: 0;
-            font-size: 0.7rem;
-            color: var(--fg-mute);
-        }
-
-        .vm-card-specs {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 6px 16px;
-            margin-bottom: 16px;
-            padding: 12px 14px;
-            background: var(--bg-inset);
-            border: 1px solid var(--line-soft);
-            border-radius: var(--radius);
-        }
-        .vm-spec {
-            font-size: 0.75rem;
-            color: var(--fg-mute);
-        }
-        .vm-spec-val {
-            font-family: var(--mono);
-            font-weight: 500;
-            color: var(--fg-dim);
-        }
-
-        .vm-card-actions {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-
-        /* ── Tables ──────────────────────────────────────────────────────── */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-        }
-        .data-table thead th {
-            text-align: left;
-            padding: 10px 16px;
-            font-family: var(--mono);
-            font-size: 0.68rem;
-            font-weight: 700;
-            color: var(--fg-mute);
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            border-bottom: 1px solid var(--line);
-        }
-        .data-table tbody tr {
-            border-bottom: 1px solid var(--line-soft);
-            transition: background 0.15s;
-        }
-        .data-table tbody tr:last-child { border-bottom: none; }
-        .data-table tbody tr:hover { background: var(--bg-inset); }
-        .data-table tbody td {
-            padding: 14px 16px;
-        }
-        .data-table .cell-mono {
-            font-family: var(--mono);
-            font-size: 0.78rem;
-            color: var(--fg-mute);
-        }
-        .data-table .cell-name {
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        .data-table .cell-muted {
-            color: var(--fg-mute);
-            font-size: 0.8rem;
-        }
-        .data-table .cell-actions { text-align: right; }
-
-        /* ── Forms ───────────────────────────────────────────────────────── */
-        .form-group { margin-bottom: 20px; }
-        .form-group label {
-            display: block;
-            font-family: var(--mono);
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: var(--fg-mute);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin-bottom: 8px;
-        }
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            background: var(--bg-inset);
-            border: 1px solid var(--line);
-            color: var(--fg);
-            padding: 10px 14px;
-            border-radius: var(--radius);
-            font-family: var(--sans);
-            font-size: 0.88rem;
-            transition: border-color 0.2s, box-shadow 0.2s;
-            outline: none;
-        }
-        .form-group input::placeholder,
-        .form-group textarea::placeholder {
-            color: var(--fg-mute);
-        }
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px oklch(0.76 0.18 45 / 0.12);
-        }
-        .form-group textarea {
-            font-family: var(--mono);
-            font-size: 0.82rem;
-            resize: vertical;
-            min-height: 80px;
-        }
-        .form-actions {
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-            margin-top: 24px;
-        }
-        .form-hint {
-            font-size: 0.78rem;
-            color: var(--fg-mute);
-            margin-bottom: 20px;
-        }
-        .form-inline {
-            display: flex;
-            gap: 12px;
-            align-items: flex-end;
-        }
-        .form-inline .form-group { margin-bottom: 0; }
-
-        /* ── Modal ───────────────────────────────────────────────────────── */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: oklch(0 0 0 / 0.65);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 200;
-            animation: fade-in 0.15s ease-out;
-        }
-        .modal {
-            width: 480px;
-            max-width: calc(100vw - 48px);
-            animation: slide-up 0.2s ease-out;
-        }
-        .modal-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 24px;
-        }
-        .modal-header h2 {
-            font-size: 1.05rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-        .modal-close {
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-inset);
-            border: 1px solid var(--line);
-            border-radius: 6px;
-            color: var(--fg-mute);
-            font-size: 14px;
-            cursor: pointer;
-            transition: color 0.15s, border-color 0.15s;
-        }
-        .modal-close:hover { color: var(--fg); border-color: var(--fg-dim); }
-
-        @keyframes fade-in {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        @keyframes slide-up {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* ── Empty state ─────────────────────────────────────────────────── */
-        .empty-state {
-            text-align: center;
-            padding: 72px 24px;
-            color: var(--fg-mute);
-        }
-        .empty-state h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: var(--fg-dim);
-        }
-        .empty-state p {
-            font-size: 0.88rem;
-            margin-bottom: 24px;
-            color: var(--fg-mute);
-        }
-
-        /* ── Alert ───────────────────────────────────────────────────────── */
-        .alert-error {
-            background: var(--danger-dim);
-            border: 1px solid oklch(0.65 0.22 25 / 0.25);
-            color: var(--danger);
-            padding: 12px 18px;
-            border-radius: var(--radius);
-            font-size: 0.85rem;
-            margin-bottom: 24px;
-        }
-
-        /* ── Code block ──────────────────────────────────────────────────── */
-        .code-block {
-            background: var(--bg-inset);
-            border: 1px solid var(--line-soft);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            font-family: var(--mono);
-            font-size: 0.8rem;
-            color: var(--fg-dim);
-            line-height: 1.8;
-        }
-        .code-block .comment { color: var(--fg-mute); }
-        .code-block .cmd { color: var(--fg); }
-
-        /* ── Toast ───────────────────────────────────────────────────────── */
-        #toast {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 999;
-            display: none;
-            background: var(--danger);
-            color: var(--accent-fg);
-            padding: 12px 20px;
-            border-radius: var(--radius);
-            font-family: var(--mono);
-            font-size: 0.8rem;
-            max-width: 420px;
-            box-shadow: 0 8px 32px oklch(0 0 0 / 0.4);
-            animation: slide-in-right 0.25s ease-out;
-        }
-        @keyframes slide-in-right {
-            from { opacity: 0; transform: translateX(20px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-
-        /* ── HTMX ───────────────────────────────────────────────────────── */
-        .htmx-indicator { opacity: 0; transition: opacity 200ms; }
-        .htmx-request .htmx-indicator { opacity: 1; }
-        .htmx-request .btn-label { display: none; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
-        /* ── VM busy overlay ─────────────────────────────────────────────── */
-        .vm-card { position: relative; }
-        .vm-busy {
-            display: none;
-            position: absolute;
-            inset: 0;
-            z-index: 5;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            border-radius: var(--radius-lg);
-            background: oklch(0.17 0.006 60 / 0.78);
-            backdrop-filter: blur(2px);
-            -webkit-backdrop-filter: blur(2px);
-            animation: fade-in 0.12s ease-out;
+        /* ── Shell ──────────────────────────────────────────────────────── */
+        .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+        .side {
+            position: sticky; top: 0; height: 100vh;
+            display: flex; flex-direction: column; gap: 24px;
+            padding: 20px 14px;
+            background: var(--bg-side);
+            border-right: 1px solid var(--line-soft);
         }
-        .card.is-busy .vm-busy { display: flex; }
-        .card.is-busy { border-color: var(--accent); }
-        .vm-busy-spinner {
-            width: 26px;
-            height: 26px;
-            border-radius: 50%;
-            border: 2px solid var(--line);
-            border-top-color: var(--accent);
-            animation: spin 0.7s linear infinite;
+        .side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; }
+        .mark { font-family: var(--mono); font-weight: 700; font-size: 16px; letter-spacing: -0.02em; color: var(--fg); }
+        .mark:hover { color: var(--fg); }
+        .mark .bracket { color: var(--accent); }
+        .side-domain { font-family: var(--mono); font-size: 11px; color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .side-nav { display: flex; flex-direction: column; gap: 2px; }
+        .side-nav a {
+            display: flex; align-items: center; gap: 10px;
+            height: 36px; padding: 0 10px; border-radius: 8px;
+            font-size: 13.5px; font-weight: 500; color: var(--fg-dim);
         }
-        .vm-busy-msg {
-            font-family: var(--mono);
-            font-size: 0.78rem;
-            font-weight: 600;
-            color: var(--fg-dim);
-            letter-spacing: 0.02em;
+        .side-nav a:hover { color: var(--fg); }
+        .side-nav a.active { background: oklch(0.23 0.008 60); color: var(--fg); }
+        .nav-mark { width: 6px; height: 6px; border-radius: 2px; background: transparent; }
+        .side-nav a.active .nav-mark { background: var(--accent); }
+        .nav-label { flex: 1; }
+        .nav-count { font-family: var(--mono); font-size: 11px; color: var(--fg-mute); }
+        .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
+        .ssh-hint {
+            display: flex; flex-direction: column; gap: 4px; padding: 12px;
+            border-radius: 10px; background: oklch(0.19 0.007 60);
+            border: 1px solid var(--line-soft); text-align: left; white-space: normal;
+        }
+        .ssh-hint:hover { border-color: oklch(0.32 0.01 60); }
+        .ssh-hint-label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); }
+        .ssh-hint-cmd { font-family: var(--mono); font-size: 12px; color: var(--fg-soft); overflow-wrap: anywhere; }
+        .ssh-hint-note { font-size: 11px; color: var(--fg-mute); }
+        .me { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+        .avatar {
+            width: 28px; height: 28px; flex: none; border-radius: 50%;
+            display: grid; place-items: center;
+            background: oklch(0.28 0.04 45); color: oklch(0.9 0.08 45);
+            font-weight: 600; font-size: 12px;
+        }
+        .avatar-member { background: oklch(0.28 0.02 250); color: var(--fg); }
+        .me-text { min-width: 0; flex: 1; }
+        .me-email { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .me-role { font-size: 11px; color: var(--fg-mute); }
+
+        .main { min-width: 0; padding: 32px 40px 64px; }
+        .main-inner { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; animation: rise .25s ease-out; }
+
+        @media (max-width: 820px) {
+            .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+            .side { position: static; height: auto; gap: 12px; padding: 14px 16px; border-right: none; border-bottom: 1px solid var(--line-soft); }
+            .side-nav { flex-direction: row; overflow-x: auto; }
+            .side-nav a { flex: none; }
+            .side-foot { display: none; }
+            .main { padding: 24px 16px 48px; }
         }
 
-        /* ── Responsive ──────────────────────────────────────────────────── */
-        @media (max-width: 768px) {
-            .dash-nav-inner { padding: 0 16px; gap: 16px; }
-            .dash-main { padding: 24px 16px; }
-            .grid { grid-template-columns: 1fr; }
-            .form-inline { flex-direction: column; align-items: stretch; }
-            .modal { width: calc(100vw - 32px); }
+        /* ── Page header ────────────────────────────────────────────────── */
+        .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+        .page-head > div { display: flex; flex-direction: column; gap: 4px; max-width: 640px; }
+        .page-head h1, .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+        .sub { color: var(--fg-dim); text-wrap: pretty; }
+        .plus { font-size: 17px; line-height: 1; }
+
+        /* ── Buttons ────────────────────────────────────────────────────── */
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            height: 36px; padding: 0 14px; border-radius: 9px;
+            background: transparent; border: 1px solid var(--line);
+            color: var(--fg); font-weight: 500; font-size: 14px;
+            transition: background .15s, border-color .15s, color .15s;
+        }
+        .btn:hover { border-color: var(--line-strong); color: var(--fg); }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+        .btn-primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; }
+        .btn-primary:hover { background: var(--accent-hover); border-color: transparent; color: var(--accent-fg); }
+        .btn-raised { background: var(--bg-raised); }
+        .btn-quiet { background: var(--bg-chip); border-color: oklch(0.30 0.01 60); }
+        .btn-quiet:hover { background: oklch(0.30 0.01 60); }
+        .btn-lg { height: 38px; padding: 0 16px; }
+        .btn-sm { height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
+        .btn-xs { height: 30px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: var(--fg-soft); }
+        .btn-2xs { height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--fg-soft); }
+        .btn-accent-soft { background: oklch(0.76 0.18 45 / 0.1); border-color: oklch(0.76 0.18 45 / 0.35); color: var(--accent-hover); }
+        .btn-accent-soft:hover { background: oklch(0.76 0.18 45 / 0.18); border-color: oklch(0.76 0.18 45 / 0.35); color: var(--accent-hover); }
+        .btn-ok { background: oklch(0.78 0.14 150 / 0.12); border-color: oklch(0.78 0.14 150 / 0.35); color: oklch(0.82 0.13 150); }
+        .btn-ok:hover { background: oklch(0.78 0.14 150 / 0.2); border-color: oklch(0.78 0.14 150 / 0.35); color: oklch(0.82 0.13 150); }
+        .btn-danger { border-color: var(--danger-line); color: var(--danger-text); }
+        .btn-danger:hover { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger-text); }
+        .btn-danger-solid { background: oklch(0.68 0.2 25 / 0.15); border-color: oklch(0.68 0.2 25 / 0.4); color: oklch(0.78 0.14 25); }
+        .btn-link { border: none; background: none; padding: 0; color: var(--accent); font-weight: 600; font-size: inherit; }
+        .btn-icon { width: 32px; height: 32px; padding: 0; border-radius: 8px; color: var(--fg-dim); font-size: 16px; }
+
+        .spin {
+            width: 12px; height: 12px; flex: none; display: inline-block; border-radius: 50%;
+            border: 2px solid oklch(0.35 0.01 60); border-top-color: currentColor;
+            animation: spin .7s linear infinite;
+        }
+        .busy-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--warn); }
+
+        /* ── Panels & lists ─────────────────────────────────────────────── */
+        .panel {
+            display: flex; flex-direction: column; gap: 16px; padding: 22px;
+            border-radius: 14px; background: var(--bg-raised); border: 1px solid var(--line-soft);
+        }
+        .panel-focus { border-color: oklch(0.76 0.18 45 / 0.4); animation: rise .2s ease-out; }
+        .panel h3, .panel-title { font-size: 15px; font-weight: 600; }
+        .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+        .panel-head > div { display: flex; flex-direction: column; gap: 4px; }
+        .panel-sub { font-size: 13px; color: var(--fg-dim); text-wrap: pretty; }
+        .panel-note { font-size: 12.5px; color: var(--fg-mute); text-wrap: pretty; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+        .stack { display: flex; flex-direction: column; gap: 16px; }
+        .narrow { max-width: 760px; }
+
+        .list { border-radius: 14px; border: 1px solid var(--line-soft); background: var(--bg-list); overflow: hidden; }
+        .list-row {
+            display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+            padding: 16px 20px; border-bottom: 1px solid var(--line-soft);
+        }
+        .list-row:last-child { border-bottom: none; }
+        .list-empty { padding: 40px 20px; text-align: center; color: var(--fg-mute); }
+        .inset {
+            padding: 12px 14px; border-radius: 10px;
+            background: var(--bg-inset); border: 1px solid var(--line-soft);
+        }
+        .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+        .kv > :first-child { color: var(--fg-mute); }
+        .kv > :last-child { text-align: right; }
+        .kv-rows > .kv { padding: 9px 0; border-bottom: 1px solid var(--line-row); }
+        .kv-rows > .kv:last-child { border-bottom: none; }
+
+        .pill {
+            display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
+            border-radius: 6px; font-size: 12px; font-weight: 500;
+            background: var(--bg-chip); color: var(--fg-dim); white-space: nowrap;
+        }
+        .pill-accent { background: var(--accent-soft); color: var(--accent-text); }
+        .pill-mono { font-family: var(--mono); font-size: 11.5px; color: oklch(0.80 0.008 70); }
+
+        .badge {
+            display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
+            border-radius: 6px; font-size: 11.5px; font-weight: 600;
+        }
+        .badge-running { background: var(--ok-soft); color: var(--ok); }
+        .badge-stopped { background: var(--stopped-soft); color: var(--stopped); }
+        .badge-starting, .badge-pending { background: oklch(0.80 0.15 85 / 0.16); color: var(--warn); }
+        .badge-error { background: var(--danger-soft); color: var(--danger); }
+
+        .tone-ok { color: var(--ok); }
+        .tone-accent { color: var(--accent); }
+        .tone-danger { color: var(--danger); }
+        .tone-warn { color: var(--warn); }
+        .tone-mute { color: var(--fg-mute); }
+
+        .dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--stopped); box-shadow: 0 0 0 4px var(--stopped-soft); }
+        .dot-running { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-soft); }
+        .dot-starting { background: var(--warn); box-shadow: 0 0 0 4px oklch(0.80 0.15 85 / 0.16); }
+        .dot-error { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
+        .st-running { color: var(--ok); }
+        .st-stopped { color: var(--stopped); }
+        .st-starting { color: var(--warn); }
+        .st-error { color: var(--danger); }
+        .tdot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: oklch(0.35 0.01 60); }
+        .tdot-accent { background: var(--accent); }
+        .tdot-ok { background: var(--ok); }
+        .tdot-danger { background: var(--danger); }
+        .tdot-mute { background: var(--fg-mute); }
+
+        .note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; font-size: 13px; text-wrap: pretty; }
+        .note-warn { background: var(--warn-soft); color: var(--warn-text); }
+        .note-accent { background: oklch(0.76 0.18 45 / 0.08); color: var(--fg-soft); }
+        .note-plain { background: var(--bg); color: var(--fg-soft); }
+        .alert-error { padding: 12px 14px; border-radius: 10px; background: var(--danger-soft); color: var(--danger-text); font-size: 13px; }
+
+        /* ── Forms ──────────────────────────────────────────────────────── */
+        .field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 500; color: var(--fg-dim); }
+        .field-hint { font-weight: 400; color: var(--fg-mute); }
+        .input {
+            height: 38px; padding: 0 12px; border-radius: 9px;
+            background: var(--bg-inset); border: 1px solid var(--line);
+            color: var(--fg); font-size: 14px; outline: none; width: 100%;
+        }
+        textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.6; }
+        .input.mono { font-size: 13px; }
+        textarea.input.mono { font-size: 12.5px; }
+        .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px oklch(0.76 0.18 45 / 0.12); }
+        select.input { padding-right: 8px; }
+        .form-row { display: flex; gap: 8px; }
+        .form-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+        .step-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); }
+
+        .seg {
+            display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; flex-wrap: wrap;
+            background: var(--bg-inset); border: 1px solid oklch(0.26 0.008 60); align-self: flex-start;
+        }
+        .seg > button, .seg > label {
+            display: inline-flex; align-items: center; gap: 6px;
+            height: 30px; padding: 0 14px; border: none; border-radius: 7px;
+            background: transparent; color: var(--fg-dim); font-size: 13px; font-weight: 500; cursor: pointer;
+        }
+        .seg > .on, .seg > label:has(input:checked) { background: oklch(0.28 0.008 60); color: var(--fg); }
+        .seg-accent > label:has(input[value="1"]:checked) { background: var(--accent); color: var(--accent-fg); }
+        .seg input { position: absolute; opacity: 0; pointer-events: none; }
+        .seg .count { font-family: var(--mono); font-size: 11px; color: var(--fg-mute); }
+        .seg-sm > button { height: 28px; padding: 0 12px; border-radius: 6px; }
+        .seg-sm > .on { background: oklch(0.25 0.008 60); }
+
+        .switch { position: relative; flex: none; display: inline-flex; cursor: pointer; }
+        .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: inherit; }
+        .switch-track {
+            width: 42px; height: 24px; padding: 2px; border-radius: 100px;
+            display: flex; justify-content: flex-start; background: var(--off); transition: background .15s;
+        }
+        .switch-track::after { content: ""; width: 20px; height: 20px; border-radius: 50%; background: oklch(0.97 0.004 80); }
+        .switch input:checked + .switch-track { background: var(--accent); justify-content: flex-end; }
+        .switch input:focus-visible + .switch-track { box-shadow: 0 0 0 3px oklch(0.76 0.18 45 / 0.3); }
+        .switch input:disabled + .switch-track { opacity: .45; }
+        .switch:has(input:disabled) { cursor: not-allowed; }
+        .toggle-row { display: flex; align-items: flex-start; gap: 16px; }
+        .toggle-row > div { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+
+        /* ── VM list ────────────────────────────────────────────────────── */
+        .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .search { flex: 1 1 220px; max-width: 320px; height: 36px; }
+        #vm-list { container-type: inline-size; }
+        .vm-table { border-radius: 14px; border: 1px solid var(--line-soft); background: var(--bg-list); overflow: hidden; }
+        .vm-cols { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 150px 72px 270px; gap: 20px; align-items: center; }
+        .vm-thead {
+            padding: 10px 20px; font-family: var(--mono); font-size: 11px; font-weight: 600;
+            letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+            color: var(--fg-mute); background: var(--bg-head);
+        }
+        .vm-thead .r { text-align: right; }
+        .vm-row { padding: 16px 20px; border-top: 1px solid var(--line-soft); cursor: pointer; transition: background .15s; }
+        .vm-thead + .vm-row { border-top: none; }
+        .vm-row:hover { background: var(--bg-hover); }
+        .vm-machine { min-width: 0; display: flex; align-items: center; gap: 14px; }
+        .vm-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .vm-name-line { display: flex; align-items: center; gap: 8px; }
+        .vm-name { font-family: var(--mono); font-size: 14.5px; font-weight: 600; color: var(--fg); }
+        .vm-name:hover { color: var(--fg); }
+        .vm-state { font-size: 12px; font-weight: 500; }
+        .vm-url { font-family: var(--mono); font-size: 12px; color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vm-compact { display: none; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--fg-dim); }
+        .vm-compact > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .vm-task-cell { min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-dim); }
+        .vm-task-cell span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vm-specs { font-family: var(--mono); font-size: 12px; white-space: nowrap; color: var(--fg-dim); }
+        .vm-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .chev { width: 20px; text-align: center; color: oklch(0.50 0.008 70); font-size: 16px; }
+        .vm-nomatch { padding: 40px 20px; text-align: center; border-top: 1px solid var(--line-soft); color: var(--fg-mute); }
+        @container (max-width: 900px) {
+            .vm-cols { grid-template-columns: minmax(0, 1fr) auto; }
+            .vm-thead, .vm-col-wide { display: none; }
+            .vm-compact { display: flex; }
+            .vm-row { border-top: 1px solid var(--line-soft); }
+        }
+
+        .onboard {
+            display: flex; flex-direction: column; gap: 20px; padding: 36px;
+            border: 1px dashed oklch(0.30 0.01 60); border-radius: 16px; background: oklch(0.185 0.007 60);
+        }
+        .onboard-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+        .onboard-step {
+            display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 12px;
+            background: var(--bg-raised); border: 1px solid oklch(0.25 0.008 60);
+            text-align: left; color: var(--fg); white-space: normal;
+        }
+        .onboard-step:hover { border-color: oklch(0.76 0.18 45 / 0.5); color: var(--fg); }
+        .onboard-step-top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+        .onboard-num {
+            width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+            font-family: var(--mono); font-size: 12px; font-weight: 700;
+            background: oklch(0.76 0.18 45 / 0.16); color: var(--accent);
+        }
+        .onboard-step.done .onboard-num { background: oklch(0.78 0.14 150 / 0.18); color: var(--ok); }
+        .onboard-state { font-size: 12px; color: var(--fg-mute); }
+        .onboard-step.done .onboard-state { color: var(--ok); }
+        .onboard-title { font-weight: 600; }
+        .onboard-body { font-size: 13px; color: var(--fg-dim); text-wrap: pretty; }
+
+        /* ── VM detail ──────────────────────────────────────────────────── */
+        .vm-detail { position: relative; display: flex; flex-direction: column; gap: 22px; }
+        .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-mute); }
+        .crumbs a { color: var(--fg-dim); }
+        .crumbs a:hover { color: var(--fg); }
+        .crumbs .mono { color: var(--fg); }
+        .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+        .detail-head > div:first-child { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        .title-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .title-line h1 { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+        .status-pill {
+            display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px;
+            border-radius: 100px; font-size: 12.5px; font-weight: 600;
+            background: var(--stopped-soft); color: var(--stopped);
+        }
+        .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+        .status-pill.st-running { background: var(--ok-soft); }
+        .status-pill.st-starting { background: oklch(0.80 0.15 85 / 0.16); }
+        .status-pill.st-error { background: var(--danger-soft); }
+        .round { border-radius: 100px; height: 26px; padding: 0 10px; font-size: 12.5px; }
+        .detail-meta { font-family: var(--mono); font-size: 12.5px; color: var(--fg-mute); }
+        .head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .head-busy {
+            display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px;
+            border-radius: 9px; background: var(--warn-soft); color: var(--warn); font-weight: 500;
+        }
+
+        .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line-soft); overflow-x: auto; }
+        .tabs a {
+            display: inline-flex; align-items: center; height: 40px; padding: 0 14px; margin-bottom: -1px;
+            font-weight: 500; color: var(--fg-dim); border-bottom: 2px solid transparent; white-space: nowrap;
+        }
+        .tabs a:hover { color: var(--fg); }
+        .tabs a.on { color: var(--fg); border-bottom-color: var(--accent); }
+        .tab-panel { display: none; }
+        .tab-panel.on { display: block; }
+
+        .task-track { display: flex; align-items: center; }
+        .task-step { display: flex; align-items: center; flex: 1; }
+        .task-step:last-child { flex: none; }
+        .task-node { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 56px; }
+        .task-dot { width: 12px; height: 12px; border-radius: 50%; background: oklch(0.30 0.01 60); }
+        .task-name { font-size: 11.5px; color: var(--fg-mute); }
+        .task-bar { flex: 1; height: 2px; margin: 0 2px 20px; border-radius: 2px; background: var(--line); }
+        .task-step.done .task-dot, .task-step.current .task-dot { background: var(--task-tone); box-shadow: 0 0 0 4px color-mix(in oklch, var(--task-tone) 18%, transparent); }
+        .task-step.done .task-name, .task-step.current .task-name, .task-step.failed .task-name { color: var(--fg); }
+        .task-step.done .task-bar { background: var(--task-tone); }
+        .task-step.failed .task-dot { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
+        .task-tone-accent { --task-tone: var(--accent); }
+        .task-tone-ok { --task-tone: var(--ok); }
+        .task-tone-danger { --task-tone: var(--danger); }
+        .task-tone-mute { --task-tone: var(--fg-mute); }
+        .task-state { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+        .vm-task-spinner {
+            width: 12px; height: 12px; flex: none; display: inline-block; border-radius: 50%;
+            border: 2px solid oklch(0.35 0.01 60); border-top-color: currentColor;
+            animation: spin .7s linear infinite;
+        }
+        .task-text {
+            padding: 14px 16px; border-radius: 10px; background: var(--bg-inset); border: 1px solid var(--line-soft);
+            font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--fg-soft);
+            white-space: pre-wrap; overflow-wrap: anywhere;
+        }
+        .endpoints { padding: 8px 22px; gap: 0; }
+        .endpoint { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line-row); }
+        .endpoint:last-child { border-bottom: none; }
+        .endpoint-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .endpoint-label { font-size: 12px; color: var(--fg-mute); }
+        .endpoint-value { font-family: var(--mono); font-size: 13px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        a.endpoint-value:hover { color: var(--accent-hover); }
+        .endpoint-who { font-size: 12px; color: var(--fg-mute); white-space: nowrap; }
+        .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .res { display: flex; flex-direction: column; gap: 2px; }
+        .res-label { font-size: 12px; color: var(--fg-mute); }
+        .res-value { font-family: var(--mono); font-size: 16px; font-weight: 600; }
+        .facts { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line-row); }
+
+        .alias-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .alias-main { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 2px; }
+        .alias-host { font-family: var(--mono); font-size: 13px; color: var(--fg); }
+        .alias-note { font-size: 12px; color: var(--fg-mute); }
+        .alias-note.ok { color: var(--ok); }
+        .alias-note.warn { color: oklch(0.85 0.12 85); }
+        .alias-steps { display: flex; flex-direction: column; gap: 6px; padding-left: 18px; font-size: 12.5px; color: var(--fg-dim); }
+
+        .member-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-row); }
+        .member-row span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+        .danger-zone { display: flex; flex-direction: column; border-radius: 14px; border: 1px solid var(--danger-line); overflow: hidden; }
+        .danger-zone-head { padding: 14px 22px; background: oklch(0.68 0.2 25 / 0.08); font-size: 13px; font-weight: 600; color: oklch(0.78 0.14 25); }
+        .danger-zone-row { display: flex; align-items: center; gap: 16px; padding: 16px 22px; border-top: 1px solid oklch(0.68 0.2 25 / 0.2); }
+        .danger-zone-row > div { flex: 1; }
+        .danger-zone-row .panel-sub { margin-top: 2px; }
+
+        /* A VM action blocks until it finishes, so the page is masked with a
+           spinner the moment the request leaves the browser. */
+        .busy-mask {
+            display: none; position: absolute; inset: -8px; z-index: 5;
+            align-items: flex-start; justify-content: center; padding-top: 120px;
+            border-radius: 16px; background: oklch(0.17 0.006 60 / 0.72); backdrop-filter: blur(2px);
+        }
+        .is-busy > .busy-mask { display: flex; }
+        .busy-mask > div {
+            display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 10px;
+            background: var(--bg-chip); border: 1px solid oklch(0.32 0.01 60); color: var(--warn); font-weight: 500;
+        }
+
+        /* ── Modals, toast ──────────────────────────────────────────────── */
+        .overlay {
+            position: fixed; inset: 0; z-index: 200; display: flex; align-items: flex-start; justify-content: center;
+            padding: 48px 20px; overflow: auto; background: oklch(0 0 0 / 0.6); backdrop-filter: blur(4px);
+            animation: fade .15s ease-out;
+        }
+        .overlay-center { align-items: center; z-index: 250; }
+        .modal {
+            width: 560px; max-width: 100%; display: flex; flex-direction: column; gap: 22px; padding: 26px;
+            border-radius: 16px; background: var(--bg-modal); border: 1px solid var(--line);
+            box-shadow: 0 24px 64px oklch(0 0 0 / 0.5); animation: rise .2s ease-out;
+        }
+        .modal-sm { width: 420px; gap: 14px; padding: 24px; }
+        .modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .modal-head h2 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+        .modal-sm h2 { font-size: 17px; font-weight: 700; }
+        .modal-body { font-size: 13.5px; color: oklch(0.76 0.008 70); text-wrap: pretty; }
+        .modal-label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 600; }
+        .modal-label .field-hint { font-size: 12.5px; }
+        .modal-label .input { height: 42px; border-radius: 10px; padding: 0 14px; font-size: 14.5px; font-weight: 400; }
+        .modal-label textarea.input { height: auto; padding: 12px 14px; font-size: 13px; }
+        .modal-label .input.bad { border-color: var(--danger); }
+        .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+        .chip {
+            height: 26px; padding: 0 10px; border-radius: 100px; background: oklch(0.24 0.008 60);
+            border: 1px solid var(--line); font-size: 12px; color: oklch(0.80 0.008 70);
+        }
+        .chip:hover { border-color: oklch(0.76 0.18 45 / 0.6); }
+        .choice-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+        .choice {
+            display: flex; flex-direction: column; gap: 3px; padding: 12px; border-radius: 10px;
+            text-align: left; background: var(--bg); border: 1px solid oklch(0.26 0.008 60); white-space: normal;
+        }
+        .choice:hover { border-color: oklch(0.76 0.18 45 / 0.6); }
+        .choice.on { background: oklch(0.76 0.18 45 / 0.1); border-color: var(--accent); }
+        .choice-title { font-weight: 600; font-size: 13.5px; }
+        .choice-sub { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: oklch(0.66 0.008 70); white-space: pre-line; }
+        .opt-rows { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 10px; background: var(--bg-inset); border: 1px solid var(--line-soft); }
+        .opt-row { display: flex; align-items: center; gap: 12px; }
+        .opt-row > span { width: 40px; font-size: 12px; color: oklch(0.66 0.008 70); }
+        .opt-row > div { display: flex; gap: 4px; flex-wrap: wrap; }
+        .opt { position: relative; }
+        .opt input { position: absolute; opacity: 0; pointer-events: none; }
+        .opt span {
+            display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 7px; cursor: pointer;
+            font-family: var(--mono); font-size: 12px; color: var(--fg-dim); border: 1px solid var(--line);
+        }
+        .opt input:checked + span { background: oklch(0.76 0.18 45 / 0.16); color: oklch(0.85 0.12 45); border-color: oklch(0.76 0.18 45 / 0.5); }
+        .opt input:focus-visible + span { box-shadow: 0 0 0 3px oklch(0.76 0.18 45 / 0.3); }
+        .soft-box { display: flex; align-items: flex-start; gap: 14px; padding: 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-soft); }
+        .soft-box > div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+        .modal-foot { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+        .modal-foot .summary { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--fg-mute); }
+        @media (max-width: 560px) { .choice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+        #toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 300;
+            display: none; align-items: center; gap: 10px; max-width: calc(100vw - 32px);
+            padding: 10px 16px; border-radius: 10px; background: var(--bg-chip); border: 1px solid oklch(0.32 0.01 60);
+            box-shadow: 0 12px 32px oklch(0 0 0 / 0.4); font-size: 13px; animation: rise .2s ease-out;
+        }
+        #toast.on { display: flex; }
+        #toast::before { content: ""; width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--toast-tone, var(--ok)); }
+
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-flex; }
+        .htmx-request .btn-label { display: none; }
+        .code-block {
+            padding: 14px 16px; border-radius: 10px; background: oklch(0.13 0.005 60); border: 1px solid var(--line-soft);
+            font-family: var(--mono); font-size: 12px; line-height: 1.7; color: oklch(0.78 0.008 70);
         }
     </style>
 </head>
 <body>
-    <nav class="dash-nav">
-        <div class="dash-nav-inner">
+<div class="app">
+    <aside class="side">
+        <div class="side-head">
             <a href="/dashboard/vms" class="mark"><span class="bracket">[</span>svkexe<span class="bracket">]</span></a>
-            <div class="dash-nav-links">
-                <a href="/dashboard/vms">VMs</a>
-                {{if ne .User.Role "guest"}}<a href="/dashboard/keys">LLM</a>{{end}}
-                <a href="/dashboard/ssh-keys">SSH</a>
-                {{if .IsAdmin}}<a href="/dashboard/system">System</a>{{end}}
-            </div>
+            {{if .Domain}}<span class="side-domain">{{.Domain}}</span>{{end}}
+        </div>
+        <nav class="side-nav">
+            <a href="/dashboard/vms"><span class="nav-mark"></span><span class="nav-label">Virtual machines</span><span class="nav-count">{{.Nav.VMs}}</span></a>
+            {{if ne .User.Role "guest"}}<a href="/dashboard/keys"><span class="nav-mark"></span><span class="nav-label">LLM</span><span class="nav-count">{{.Nav.LLM}}</span></a>{{end}}
+            <a href="/dashboard/ssh-keys"><span class="nav-mark"></span><span class="nav-label">SSH keys</span><span class="nav-count">{{.Nav.SSHKeys}}</span></a>
+            {{if .IsAdmin}}<a href="/dashboard/system"><span class="nav-mark"></span><span class="nav-label">System</span></a>{{end}}
+        </nav>
+        <div class="side-foot">
+            <button type="button" class="ssh-hint" data-copy="ssh -p 2222 svkexe@{{host}}">
+                <span class="ssh-hint-label">Manage over SSH</span>
+                <span class="ssh-hint-cmd">ssh -p 2222 svkexe@{{host}}</span>
+                <span class="ssh-hint-note">Click to copy</span>
+            </button>
             {{if .User}}
-            <div class="dash-nav-user">{{.User.Email}}</div>
+            <div class="me">
+                <span class="avatar">{{initial .User.Email}}</span>
+                <div class="me-text">
+                    <div class="me-email">{{.User.Email}}</div>
+                    <div class="me-role">{{roleLabel .User.Role}}</div>
+                </div>
+            </div>
             {{end}}
         </div>
-    </nav>
-    <div id="toast"></div>
-    <main class="dash-main">
-        {{template "content" .}}
+    </aside>
+    <main class="main">
+        <div class="main-inner">
+            {{template "content" .}}
+        </div>
     </main>
-    <script>
-        document.body.addEventListener('htmx:responseError', function(e) {
-            var toast = document.getElementById('toast');
-            toast.textContent = e.detail.xhr.responseText || 'Something went wrong';
-            toast.style.display = 'block';
-            toast.style.animation = 'none';
-            toast.offsetHeight;
-            toast.style.animation = '';
-            setTimeout(function() { toast.style.display = 'none'; }, 5000);
-        });
+</div>
 
-        // Optimistic "busy" state for VM start/stop/delete. The handlers block
-        // for the whole operation, so the card is masked with a spinner the
-        // moment the request leaves the browser.
-        function omcBusy(el, msg) {
-            var card = el.closest('.card');
-            if (!card) return;
-            card.classList.add('is-busy');
-            var m = card.querySelector('.vm-busy-msg');
-            if (m) m.textContent = msg;
+<div id="confirm" class="overlay overlay-center" hidden>
+    <div class="modal modal-sm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h2 id="confirm-title"></h2>
+        <p class="modal-body" id="confirm-body"></p>
+        <div class="form-actions" style="margin-top:6px;">
+            <button type="button" class="btn" data-confirm-answer="no">Cancel</button>
+            <button type="button" class="btn btn-primary" id="confirm-cta" data-confirm-answer="yes"></button>
+        </div>
+    </div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+    // ── Toast ──────────────────────────────────────────────────────────
+    var toastTimer;
+    window.svkToast = function (msg, tone) {
+        var t = document.getElementById('toast');
+        t.textContent = msg;
+        t.style.setProperty('--toast-tone', 'var(--' + (tone || 'ok') + ')');
+        t.classList.remove('on');
+        void t.offsetWidth;
+        t.classList.add('on');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { t.classList.remove('on'); }, tone === 'danger' ? 5000 : 2600);
+    };
+
+    // A failed htmx request explains itself. A form that owns an error slot
+    // gets the message there, next to the fields it is about.
+    document.body.addEventListener('htmx:responseError', function (e) {
+        var msg = (e.detail.xhr.responseText || '').trim() || 'Something went wrong';
+        var elt = e.detail.elt;
+        // A page polling a VM that was deleted, or whose access was revoked,
+        // would otherwise raise the same error every few seconds forever.
+        var status = e.detail.xhr.status;
+        if (elt && elt.hasAttribute && elt.hasAttribute('data-poll') && (status === 403 || status === 404)) {
+            window.location.href = '/dashboard/vms';
+            return;
         }
+        var slot = elt && elt.closest && elt.closest('[data-error-slot]');
+        slot = slot && document.getElementById(slot.getAttribute('data-error-slot'));
+        if (slot) { slot.textContent = msg; slot.hidden = false; return; }
+        svkToast(msg, 'danger');
+    });
+    document.body.addEventListener('htmx:sendError', function () {
+        svkToast('The gateway did not answer. Check your connection and try again.', 'danger');
+    });
 
-        // A successful start/stop swaps the whole card (busy state gone with it)
-        // and a successful delete removes it. Only failures need manual cleanup.
-        document.body.addEventListener('htmx:afterRequest', function(e) {
-            if (e.detail.successful) return;
-            var el = e.detail.elt;
-            var card = el && el.closest ? el.closest('.card.is-busy') : null;
-            if (card) card.classList.remove('is-busy');
+    // ── Copy ───────────────────────────────────────────────────────────
+    document.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-copy]');
+        if (!b) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var text = b.getAttribute('data-copy');
+        var done = function () { svkToast('Copied ' + text); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, function () { svkToast('Copy failed — select the text instead', 'danger'); });
+        } else {
+            done();
+        }
+    }, true);
+
+    // ── Confirm ────────────────────────────────────────────────────────
+    // The in-page dialog replaces window.confirm for both htmx (hx-confirm)
+    // and plain forms (data-confirm). data-confirm-title / -cta / -danger on
+    // the element shape it.
+    var pending = null;
+    function askConfirm(elt, body, run) {
+        var box = document.getElementById('confirm');
+        document.getElementById('confirm-title').textContent = elt.getAttribute('data-confirm-title') || 'Are you sure?';
+        document.getElementById('confirm-body').textContent = body;
+        var cta = document.getElementById('confirm-cta');
+        cta.textContent = elt.getAttribute('data-confirm-cta') || 'Confirm';
+        cta.className = 'btn ' + (elt.hasAttribute('data-confirm-danger') ? 'btn-danger-solid' : 'btn-primary');
+        pending = run;
+        box.hidden = false;
+        cta.focus();
+    }
+    function closeConfirm(answer) {
+        var box = document.getElementById('confirm');
+        box.hidden = true;
+        var run = pending;
+        pending = null;
+        if (answer && run) run();
+    }
+    document.getElementById('confirm').addEventListener('click', function (e) {
+        var b = e.target.closest('[data-confirm-answer]');
+        if (b) closeConfirm(b.getAttribute('data-confirm-answer') === 'yes');
+        else if (e.target === e.currentTarget) closeConfirm(false);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (!document.getElementById('confirm').hidden) closeConfirm(false);
+        else closeModal();
+    });
+    document.body.addEventListener('htmx:confirm', function (e) {
+        if (!e.detail.question) return;
+        e.preventDefault();
+        askConfirm(e.detail.elt, e.detail.question, function () { e.detail.issueRequest(true); });
+    });
+    document.addEventListener('submit', function (e) {
+        var f = e.target;
+        if (!f.hasAttribute('data-confirm') || f.dataset.confirmed) return;
+        e.preventDefault();
+        askConfirm(f, f.getAttribute('data-confirm'), function () { f.dataset.confirmed = '1'; f.submit(); });
+    });
+
+    // ── Modal (create VM) ──────────────────────────────────────────────
+    window.closeModal = function () {
+        var m = document.getElementById('create-modal');
+        if (m) m.innerHTML = '';
+    };
+
+    // ── Busy masks ─────────────────────────────────────────────────────
+    // The VM handlers block for the whole operation, so the page (or the
+    // list row) shows progress the moment the request leaves the browser.
+    window.omcBusy = function (el, msg) {
+        var scope = el.closest('[data-busy-scope]');
+        if (!scope) return;
+        scope.classList.add('is-busy');
+        var m = scope.querySelector('.busy-msg');
+        if (m) m.textContent = msg;
+    };
+    document.body.addEventListener('htmx:afterRequest', function (e) {
+        if (e.detail.successful) return;
+        var el = e.detail.elt;
+        var scope = el && el.closest ? el.closest('.is-busy') : null;
+        if (scope) scope.classList.remove('is-busy');
+    });
+    // Polls must not repaint a VM mid-action and wipe its spinner.
+    document.body.addEventListener('htmx:beforeRequest', function (e) {
+        var elt = e.detail.elt;
+        if (!elt || !elt.hasAttribute('data-poll')) return;
+        if (elt.classList.contains('is-busy') || elt.querySelector('.is-busy')) e.preventDefault();
+    });
+    // A page restored from the back/forward cache still wears the mask of the
+    // action it left on, which would keep its poll paused for good.
+    window.addEventListener('pageshow', function (e) {
+        if (!e.persisted) return;
+        document.querySelectorAll('.is-busy').forEach(function (el) { el.classList.remove('is-busy'); });
+    });
+
+    // ── Sidebar ────────────────────────────────────────────────────────
+    var path = window.location.pathname;
+    document.querySelectorAll('.side-nav a').forEach(function (a) {
+        if (path.indexOf(a.getAttribute('href')) === 0) a.classList.add('active');
+    });
+
+    // ── VM list: filter, search, row links ─────────────────────────────
+    var listFilter = 'all';
+    window.vmListSync = function () {
+        var list = document.getElementById('vm-list');
+        if (!list) return;
+        var rows = Array.prototype.slice.call(list.querySelectorAll('.vm-row'));
+        var running = rows.filter(function (r) { return r.dataset.state === 'running'; }).length;
+        var counts = { all: rows.length, running: running, stopped: rows.length - running };
+        var search = document.getElementById('vm-search');
+        var q = search ? search.value.trim().toLowerCase() : '';
+        var shown = 0;
+        rows.forEach(function (r) {
+            var byState = listFilter === 'all' || (listFilter === 'running' ? r.dataset.state === 'running' : r.dataset.state !== 'running');
+            var byText = !q || (r.dataset.search || '').toLowerCase().indexOf(q) !== -1;
+            r.hidden = !(byState && byText);
+            if (!r.hidden) shown++;
         });
-
-        // Don't let the 5s list poll repaint a card mid-action and wipe the
-        // spinner — pause it while any card is busy.
-        document.body.addEventListener('htmx:beforeRequest', function(e) {
-            if (e.detail.elt && e.detail.elt.id === 'vm-list' &&
-                document.querySelector('.card.is-busy')) {
-                e.preventDefault();
-            }
-        });
-
-        // Active nav link
-        (function() {
-            var path = window.location.pathname;
-            var links = document.querySelectorAll('.dash-nav-links a');
-            links.forEach(function(link) {
-                if (path.startsWith(link.getAttribute('href'))) {
-                    link.classList.add('active');
-                }
+        var none = list.querySelector('.vm-nomatch');
+        if (none) none.hidden = rows.length === 0 || shown > 0;
+        var bar = document.getElementById('vm-toolbar');
+        if (bar) {
+            bar.hidden = rows.length === 0;
+            bar.querySelectorAll('[data-filter]').forEach(function (b) {
+                var f = b.getAttribute('data-filter');
+                b.classList.toggle('on', f === listFilter);
+                var c = b.querySelector('.count');
+                if (c) c.textContent = counts[f];
             });
-        })();
-    </script>
+        }
+        var sum = document.getElementById('vm-summary');
+        if (sum) sum.textContent = rows.length ? rows.length + (rows.length === 1 ? ' machine' : ' machines') + ' · ' + running + ' running' : 'Nothing here yet';
+    };
+    document.addEventListener('click', function (e) {
+        var f = e.target.closest('[data-filter]');
+        if (f) { listFilter = f.getAttribute('data-filter'); vmListSync(); return; }
+        var row = e.target.closest('.vm-row[data-href]');
+        if (row && !e.target.closest('a, button, form, input')) window.location.href = row.getAttribute('data-href');
+    });
+    document.addEventListener('input', function (e) {
+        if (e.target.id === 'vm-search') vmListSync();
+    });
+
+    // ── VM detail: tabs and polling ────────────────────────────────────
+    window.applyTabs = function () {
+        document.querySelectorAll('.vm-detail').forEach(function (d) {
+            // A refused form re-renders the page at the address it was posted
+            // to. Point the address back at the page and its tab, so a reload
+            // does not post again and later swaps stay on the same tab.
+            var initial = d.getAttribute('data-initial-tab');
+            if (initial && !window.location.hash) {
+                var page = (d.getAttribute('hx-get') || '').replace(/\/card$/, '');
+                if (page) history.replaceState(null, '', page + '#' + initial);
+            }
+            var want = window.location.hash.slice(1);
+            if (!d.querySelector('[data-tab="' + want + '"]')) want = d.getAttribute('data-initial-tab') || 'overview';
+            d.querySelectorAll('[data-tab]').forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-tab') === want); });
+            d.querySelectorAll('[data-panel]').forEach(function (p) { p.classList.toggle('on', p.getAttribute('data-panel') === want); });
+        });
+    };
+    window.addEventListener('hashchange', applyTabs);
+    // The detail page refreshes itself, but never while the owner is typing
+    // into it: a swap would throw away what they have not saved yet.
+    window.vmDetailIdle = function (el) {
+        if (el.classList.contains('is-busy') || !document.getElementById('confirm').hidden) return false;
+        // A page showing a refusal keeps it on screen until the owner acts;
+        // the poll's fresh copy would not carry the message.
+        if (el.hasAttribute('data-initial-tab')) return false;
+        var fields = el.querySelectorAll('input, textarea, select');
+        for (var i = 0; i < fields.length; i++) {
+            var f = fields[i];
+            if (f === document.activeElement) return false;
+            if (f.type === 'checkbox' || f.type === 'radio') { if (f.checked !== f.defaultChecked) return false; }
+            else if (f.tagName === 'SELECT') {
+                for (var j = 0; j < f.options.length; j++) if (f.options[j].selected !== f.options[j].defaultSelected) return false;
+            }
+            else if (f.value !== f.defaultValue) return false;
+        }
+        return true;
+    };
+    // Publishing: Save lights up only when there is something to save, and the
+    // note describes what saving would do.
+    function syncPublish(form) {
+        var port = form.elements.app_port;
+        var pub = form.querySelector('input[name="app_public"]:checked');
+        var isPublic = pub && pub.value === '1';
+        var dirty = port.value !== port.defaultValue || (pub && !pub.defaultChecked);
+        var save = form.querySelector('[data-publish-save]');
+        if (save) save.className = 'btn btn-lg ' + (dirty ? 'btn-primary' : 'btn-quiet');
+        var note = form.querySelector('[data-publish-note]');
+        if (note) {
+            note.className = 'note ' + (isPublic ? 'note-accent' : 'note-plain');
+            note.textContent = isPublic
+                ? 'Anyone with the link reaches port ' + port.value + '. Other ports and PicoClaw stay behind your login.'
+                : 'Only you, members and share links reach port ' + port.value + '.';
+        }
+    }
+    document.addEventListener('input', function (e) {
+        var form = e.target.closest && e.target.closest('[data-publish-form]');
+        if (form) syncPublish(form);
+    });
+    document.addEventListener('change', function (e) {
+        var form = e.target.closest && e.target.closest('[data-publish-form]');
+        if (form) syncPublish(form);
+    });
+
+    // ── Create VM form ─────────────────────────────────────────────────
+    var NAME_RE = /^(?!agent-)(?![0-9]{1,5}-)[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/;
+    function gb(mb) { mb = +mb; return mb >= 1024 && mb % 1024 === 0 ? (mb / 1024) + ' GB' : mb + ' MB'; }
+    window.syncCreate = function (form) {
+        if (!form) return;
+        var name = form.elements.name;
+        var v = name.value;
+        var hint = form.querySelector('[data-name-hint]');
+        var host = form.getAttribute('data-host');
+        var bad = '';
+        if (v && !NAME_RE.test(v)) {
+            bad = (v.indexOf('agent-') === 0 || /^[0-9]{1,5}-/.test(v))
+                ? '“agent-” and port prefixes like “3000-” are reserved for VM URLs.'
+                : 'Use 2–63 lowercase letters, numbers and hyphens.';
+        }
+        name.classList.toggle('bad', !!bad);
+        hint.className = 'field-hint' + (bad ? ' tone-danger' : '');
+        var n = v || 'name';
+        hint.textContent = bad || ('Service at ' + n + '.' + host + ' · agent at agent-' + n + '.' + host);
+        var size = form.querySelector('input[name="size"]:checked');
+        form.querySelectorAll('.choice').forEach(function (c) { c.classList.toggle('on', c.contains(size)); });
+        form.querySelector('[data-custom]').hidden = !size || size.value !== 'custom';
+        var cpu = form.querySelector('input[name="cpu_limit"]:checked');
+        var ram = form.querySelector('input[name="memory_mb"]:checked');
+        var disk = form.querySelector('input[name="disk_gb"]:checked');
+        form.querySelector('[data-summary]').textContent = cpu.value + ' vCPU · ' + gb(ram.value) + ' · ' + disk.value + ' GB';
+        var ok = NAME_RE.test(v);
+        form.querySelector('[data-create-submit]').className = 'btn btn-lg ' + (ok ? 'btn-primary' : 'btn-quiet');
+    };
+    document.addEventListener('input', function (e) {
+        var form = e.target.closest && e.target.closest('[data-create-form]');
+        if (!form) return;
+        if (e.target.name === 'name') {
+            var lower = e.target.value.toLowerCase();
+            if (lower !== e.target.value) e.target.value = lower;
+        }
+        syncCreate(form);
+    });
+    document.addEventListener('change', function (e) {
+        var form = e.target.closest && e.target.closest('[data-create-form]');
+        if (!form) return;
+        if (e.target.name === 'size' && e.target.value !== 'custom') {
+            var p = e.target.dataset;
+            [['cpu_limit', p.cpu], ['memory_mb', p.ram], ['disk_gb', p.disk]].forEach(function (x) {
+                var r = form.querySelector('input[name="' + x[0] + '"][value="' + x[1] + '"]');
+                if (r) r.checked = true;
+            });
+        }
+        syncCreate(form);
+    });
+    document.addEventListener('click', function (e) {
+        var ex = e.target.closest('[data-example]');
+        if (!ex) return;
+        var form = ex.closest('form');
+        form.elements.initial_task.value = ex.getAttribute('data-example');
+        form.elements.initial_task.focus();
+    });
+
+    // ── After every swap ───────────────────────────────────────────────
+    function afterContent() {
+        vmListSync();
+        applyTabs();
+        var cf = document.querySelector('[data-create-form]');
+        if (cf) syncCreate(cf);
+    }
+    // afterSwap runs before the browser paints the new content, so a swapped
+    // VM page never flashes the Overview tab before the right one opens.
+    document.body.addEventListener('htmx:afterSwap', afterContent);
+    document.addEventListener('DOMContentLoaded', afterContent);
+})();
+</script>
 </body>
 </html>

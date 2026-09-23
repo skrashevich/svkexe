@@ -1,20 +1,40 @@
 {{define "vm_list_content"}}
 {{if .Containers}}
-<div class="grid">
-    {{range .Containers}}
-        {{if .SharedAccess}}{{template "shared_vm_card" .}}{{else}}{{template "vm_card" .}}{{end}}
-    {{end}}
+<div class="vm-table">
+    <div class="vm-thead vm-cols">
+        <span>Machine</span><span>Agent task</span><span>Resources</span><span>Access</span><span class="r">Actions</span>
+    </div>
+    {{range .Containers}}{{template "vm_row" .}}{{end}}
+    <div class="vm-nomatch" hidden>No VMs match this filter.</div>
+</div>
+{{else if ne .User.Role "guest"}}
+<div class="onboard">
+    <div class="stack" style="gap:6px; max-width:560px;">
+        <h2 style="font-size:18px; font-weight:600;">Set up your first VM in three steps</h2>
+        <p class="sub">Each VM is a persistent Linux machine with its own coding agent. Give it a task and it starts building as soon as it boots.</p>
+    </div>
+    <div class="onboard-steps">
+        <a class="onboard-step{{if .Nav.LLM}} done{{end}}" href="/dashboard/keys">
+            <span class="onboard-step-top"><span class="onboard-num">1</span><span class="onboard-state">{{if .Nav.LLM}}Done{{else}}To do{{end}}</span></span>
+            <span class="onboard-title">Connect an LLM</span>
+            <span class="onboard-body">The agent runs on your own key. OpenRouter or any OpenAI-compatible endpoint works.</span>
+        </a>
+        <a class="onboard-step{{if .Nav.SSHKeys}} done{{end}}" href="/dashboard/ssh-keys">
+            <span class="onboard-step-top"><span class="onboard-num">2</span><span class="onboard-state">{{if .Nav.SSHKeys}}Done{{else}}To do{{end}}</span></span>
+            <span class="onboard-title">Add an SSH key</span>
+            <span class="onboard-body">Optional — reach VMs from your terminal with <code>ssh -p 2222</code>.</span>
+        </a>
+        <button type="button" class="onboard-step"
+            hx-get="/dashboard/vms/create"
+            hx-target="#create-modal"
+            hx-swap="innerHTML">
+            <span class="onboard-step-top"><span class="onboard-num">3</span><span class="onboard-state">To do</span></span>
+            <span class="onboard-title">Create a VM</span>
+            <span class="onboard-body">Pick a size and describe what the agent should build first.</span>
+        </button>
+    </div>
 </div>
 {{else}}
-<div class="empty-state">
-    <h3>No VMs yet</h3>
-    {{if ne .User.Role "guest"}}<p>Create your first virtual machine to get started.</p>
-    <button class="btn btn-primary"
-        hx-get="/dashboard/vms/create"
-        hx-target="#create-modal"
-        hx-swap="innerHTML">
-        + New VM
-    </button>{{else}}<p>No VM access has been granted to your account.</p>{{end}}
-</div>
+<div class="list"><div class="list-empty">No VM access has been granted to your account.</div></div>
 {{end}}
 {{end}}

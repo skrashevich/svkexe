@@ -1,143 +1,220 @@
 {{template "layout.html" .}}
 
 {{define "content"}}
-<div class="page-header">
-    <h1>LLM</h1>
-</div>
+<header class="page-head">
+    <div>
+        <h1>LLM connections</h1>
+        <p class="sub">Your own keys replace the platform's models. Changes sync to running VMs; their agents restart to load them.</p>
+    </div>
+    <button type="button" class="btn btn-primary btn-lg" id="llm-add"><span class="plus">+</span>Add connection</button>
+</header>
 
-<div class="card" style="margin-bottom:20px;">
-    <div class="form-hint">Your own credentials replace the platform's models. Settings sync to running VMs after saving; the agent restarts to load them.</div>
-    <form id="llm-connection-form" hx-put="/dashboard/keys/new" hx-target="#llm-body" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful) this.reset()">
-        <div class="form-inline">
-            <div class="form-group" style="flex:0 0 260px;">
-                <label>Provider</label>
-                <select name="provider" required>
-                    <option value="">Select provider</option>
-                    <optgroup label="Presets">
-                        <option value="preset-openmodel">OpenModel — DeepSeek, Qwen, Claude</option>
-                        <option value="preset-deepseek">DeepSeek (direct)</option>
-                        <option value="preset-openrouter">OpenRouter</option>
-                    </optgroup>
-                    <optgroup label="Provider key">
-                        <option value="anthropic">Anthropic</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="gemini">Gemini</option>
-                        <option value="fireworks">Fireworks</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="custom">Custom OpenAI-compatible</option>
-                    </optgroup>
-                </select>
-            </div>
-            <div class="form-group" style="flex:1;">
-                <label>API Key</label>
-                <input type="password" name="key" placeholder="Paste your API key..." autocomplete="off">
-                <div class="form-hint">Editing a saved connection? Leave this blank to keep its current key.</div>
-            </div>
-            <button type="submit" class="btn btn-primary" style="flex-shrink:0;">
-                Save connection
-            </button>
-        </div>
-        <div class="form-inline">
-            <div class="form-group" style="flex:1;">
-                <label>Custom connection name</label>
-                <input name="name" pattern="[a-z0-9][a-z0-9-]{0,47}" placeholder="e.g. local or together">
-                <div class="form-hint">Required for Custom. Use lowercase letters, numbers and hyphens. To change a saved connection press <strong>Edit</strong> on its row — saving replaces the whole row, so retyping it by hand loses whatever you leave blank.</div>
-            </div>
-            <div class="form-group" style="flex:1;">
-                <label>Base URL</label>
-                <input name="base_url" type="url" placeholder="https://host.example/v1">
-                <div class="form-hint">API prefix without the operation path. OpenRouter defaults to https://openrouter.ai/api/v1.</div>
-            </div>
-            <div class="form-group" style="flex:0 0 200px;">
-                <label>Protocol</label>
-                <select name="protocol">
-                    <option value="">Default — chat completions</option>
-                    <option value="openai">OpenAI chat completions</option>
-                    <option value="openai-responses">OpenAI responses</option>
-                    <option value="anthropic">Anthropic messages</option>
-                    <option value="gemini">Gemini</option>
-                </select>
-                <div class="form-hint">What the endpoint serves; needs a Base URL. <em>Chat completions</em> posts to <code>{base}/chat/completions</code> and <em>responses</em> to <code>{base}/responses</code> — openmodel.ai serves only the latter. <em>Anthropic messages</em> and <em>Gemini</em> send to the Base URL verbatim, so give the full operation URL for those.</div>
-            </div>
-            <div class="form-group" style="flex:1;">
-                <label>Model IDs</label>
-                <input name="models" placeholder="vendor/model, another-model">
-                <div class="form-hint">Required for OpenRouter and custom endpoints. Comma-separated. Custom endpoints may omit the key.</div>
-            </div>
-        </div>
-    </form>
-</div>
+<form class="panel panel-focus" id="llm-connection-form" hidden style="gap:20px; padding:24px;"
+      data-error-slot="llm-form-error"
+      hx-put="/dashboard/keys/new" hx-target="#llm-body" hx-swap="innerHTML">
+    <div class="modal-head">
+        <h3 id="llm-form-title">New connection</h3>
+        <button type="button" class="btn btn-icon" data-llm-cancel aria-label="Close">&times;</button>
+    </div>
+    <input type="hidden" name="provider" value="">
 
-<div id="llm-body">
+    <div class="stack" style="gap:10px;">
+        <span class="step-label">1 · Provider</span>
+        <div class="choice-grid" style="grid-template-columns:repeat(auto-fill, minmax(170px, 1fr));">
+            {{/* Presets only prefill the form; every field stays editable,
+                 because a gateway's model list changes far more often than this
+                 page does. */}}
+            <button type="button" class="choice" data-pick="preset-openmodel" data-provider="custom" data-name="openmodel" data-base="https://api.openmodel.ai/v1" data-protocol="openai-responses" data-models="deepseek-v4-flash,deepseek-v4-pro">
+                <span class="choice-title llm-card-top">OpenModel <span class="llm-tag">preset</span></span><span class="llm-card-sub">DeepSeek, Qwen, Claude</span></button>
+            <button type="button" class="choice" data-pick="preset-deepseek" data-provider="custom" data-name="deepseek" data-base="https://api.deepseek.com/v1" data-protocol="openai" data-models="deepseek-v4-flash,deepseek-v4-pro">
+                <span class="choice-title llm-card-top">DeepSeek <span class="llm-tag">preset</span></span><span class="llm-card-sub">Direct API</span></button>
+            <button type="button" class="choice" data-pick="openrouter" data-provider="openrouter" data-models="deepseek/deepseek-v4-flash">
+                <span class="choice-title llm-card-top">OpenRouter <span class="llm-tag">preset</span></span><span class="llm-card-sub">One key, many vendors</span></button>
+            <button type="button" class="choice" data-pick="anthropic" data-provider="anthropic">
+                <span class="choice-title llm-card-top">Anthropic <span class="llm-tag">key</span></span><span class="llm-card-sub">Claude models</span></button>
+            <button type="button" class="choice" data-pick="openai" data-provider="openai">
+                <span class="choice-title llm-card-top">OpenAI <span class="llm-tag">key</span></span><span class="llm-card-sub">GPT models</span></button>
+            <button type="button" class="choice" data-pick="gemini" data-provider="gemini">
+                <span class="choice-title llm-card-top">Gemini <span class="llm-tag">key</span></span><span class="llm-card-sub">Google models</span></button>
+            <button type="button" class="choice" data-pick="fireworks" data-provider="fireworks">
+                <span class="choice-title llm-card-top">Fireworks <span class="llm-tag">key</span></span><span class="llm-card-sub">Open-weight models</span></button>
+            <button type="button" class="choice" data-pick="custom" data-provider="custom" data-protocol="openai" aria-label="Custom OpenAI-compatible">
+                <span class="choice-title llm-card-top">Custom <span class="llm-tag">url</span></span><span class="llm-card-sub">Any OpenAI-compatible URL</span></button>
+        </div>
+    </div>
+
+    <div class="stack" id="llm-details" hidden style="gap:14px;">
+        <span class="step-label">2 · Details</span>
+        <div class="grid-2" style="grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px;">
+            <label class="field" data-show="custom">Connection name
+                <input class="input mono" name="name" pattern="[a-z0-9][a-z0-9-]{0,47}" placeholder="e.g. local" autocomplete="off">
+                <span class="field-hint">Lowercase letters, numbers, hyphens.</span>
+            </label>
+            <label class="field">API key
+                <input class="input mono" type="password" name="key" placeholder="Paste your API key" autocomplete="off">
+                <span class="field-hint" id="llm-key-hint">Stored encrypted; never shown again.</span>
+            </label>
+            <label class="field" data-show="custom">Base URL
+                <input class="input mono" name="base_url" type="url" placeholder="https://host.example/v1">
+                <span class="field-hint">API prefix, reachable from the VM. No operation path.</span>
+            </label>
+            <label class="field" data-show="custom openrouter">Model IDs
+                <input class="input mono" name="models" placeholder="vendor/model, another-model">
+                <span class="field-hint">Comma-separated, exactly as the provider names them.</span>
+            </label>
+        </div>
+        <div class="stack" data-show="custom" style="gap:8px;">
+            <span class="field">Protocol</span>
+            {{/* The select is what gets submitted; the segmented buttons only
+                 drive it. Its empty option is how a provider-native key says
+                 "no protocol" — see TestProviderNativeKeySavesWithoutAProtocol. */}}
+            <label class="sr-only" for="llm-protocol">Protocol</label>
+            <select name="protocol" id="llm-protocol" class="sr-only">
+                <option value="">Default — chat completions</option>
+                <option value="openai">OpenAI chat completions</option>
+                <option value="openai-responses">OpenAI responses</option>
+                <option value="anthropic">Anthropic messages</option>
+                <option value="gemini">Gemini</option>
+            </select>
+            <div class="seg" id="llm-protocols" aria-hidden="true">
+                <button type="button" data-proto="openai" data-hint="POST {base}/chat/completions — OpenRouter, vLLM, Ollama, most servers">Chat completions</button>
+                <button type="button" data-proto="openai-responses" data-hint="POST {base}/responses — required by OpenModel">Responses</button>
+                <button type="button" data-proto="anthropic" data-hint="Base URL used verbatim — give the full messages URL">Anthropic</button>
+                <button type="button" data-proto="gemini" data-hint="Base URL used verbatim — give the full operation URL">Gemini</button>
+            </div>
+            <span class="mono" id="llm-proto-hint" style="font-size:12px; color:oklch(0.66 0.008 70);"></span>
+        </div>
+        <p class="tone-danger" id="llm-form-error" style="font-size:13px;" hidden></p>
+        <div class="form-actions">
+            <button type="button" class="btn" data-llm-cancel>Cancel</button>
+            <button type="submit" class="btn btn-primary" style="padding:0 16px;">Save connection</button>
+        </div>
+    </div>
+</form>
+
+<div id="llm-body" class="stack" style="gap:20px;">
     {{template "llm_body" .}}
 </div>
 
+<style>
+    .llm-card-top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+    .llm-tag { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-mute); }
+    .llm-card-sub { font-size: 12px; color: oklch(0.66 0.008 70); }
+    .conn-icon { width: 36px; height: 36px; flex: none; border-radius: 9px; display: grid; place-items: center; background: oklch(0.26 0.03 45); color: oklch(0.88 0.1 45); font-weight: 700; font-size: 14px; }
+    .conn-main { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .conn-detail { font-family: var(--mono); font-size: 12px; color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+
 <script>
-    // Presets only prefill the form; every field stays editable, because a
-    // gateway's model list changes far more often than this page does.
-    var LLM_PRESETS = {
-        "preset-openmodel": {
-            provider: "custom", name: "openmodel",
-            base_url: "https://api.openmodel.ai/v1", protocol: "openai-responses",
-            models: "deepseek-v4-flash,deepseek-v4-pro"
-        },
-        "preset-deepseek": {
-            provider: "custom", name: "deepseek",
-            base_url: "https://api.deepseek.com/v1", protocol: "openai",
-            models: "deepseek-v4-flash,deepseek-v4-pro"
-        },
-        "preset-openrouter": {
-            provider: "openrouter", name: "",
-            base_url: "https://openrouter.ai/api/v1", protocol: "openai",
-            models: "deepseek/deepseek-v4-flash"
-        }
-    };
-    // Fields a preset owns. Switching away from a preset clears exactly these,
-    // and only when a preset filled them: a base URL the user typed themselves
-    // is theirs to keep, but one left behind by a preset produces a rejection
-    // that names an endpoint they never entered and can no longer see.
-    var PRESET_FIELDS = ["name", "base_url", "protocol", "models"];
-    var presetFilled = false;
-    document.getElementById("llm-connection-form").addEventListener("change", function (event) {
-        if (event.target.name !== "provider") return;
-        var form = event.currentTarget;
-        var preset = LLM_PRESETS[event.target.value];
-        if (!preset) {
-            if (presetFilled) {
-                PRESET_FIELDS.forEach(function (field) { form.elements[field].value = ""; });
-                presetFilled = false;
-            }
+(function () {
+    var form = document.getElementById("llm-connection-form");
+    var details = document.getElementById("llm-details");
+    var errorBox = document.getElementById("llm-form-error");
+    var editing = false;
+
+    function kind() {
+        var p = form.elements.provider.value;
+        return p === "custom" ? "custom" : p;
+    }
+    function setError(msg) {
+        errorBox.textContent = msg || "";
+        errorBox.hidden = !msg;
+    }
+
+    // Fields the chosen provider does not use are hidden and disabled, so a
+    // value typed while exploring cannot ride along into the submission — a
+    // protocol without a base URL is a rejection, and a stale base URL names an
+    // endpoint the owner can no longer see.
+    function syncFields() {
+        var k = kind();
+        details.hidden = !k;
+        form.querySelectorAll("[data-show]").forEach(function (el) {
+            var on = el.getAttribute("data-show").split(" ").indexOf(k) !== -1;
+            el.hidden = !on;
+            el.querySelectorAll("input, select").forEach(function (f) { f.disabled = !on; });
+        });
+        var proto = form.elements.protocol;
+        proto.disabled = k !== "custom";
+        var current = proto.value || "openai";
+        var hint = "";
+        document.querySelectorAll("#llm-protocols [data-proto]").forEach(function (b) {
+            var on = b.getAttribute("data-proto") === current;
+            b.classList.toggle("on", on);
+            if (on) hint = b.getAttribute("data-hint");
+        });
+        document.getElementById("llm-proto-hint").textContent = hint.replace("{base}", form.elements.base_url.value.trim() || "{base}");
+        var key = form.elements.key;
+        key.placeholder = editing ? "Leave blank to keep the saved key" : "Paste your API key";
+        document.getElementById("llm-key-hint").textContent = k === "custom" ? "Optional for custom endpoints." : editing ? "The saved key is never shown." : "Stored encrypted; never shown again.";
+        form.querySelectorAll("[data-pick]").forEach(function (c) {
+            c.classList.toggle("on", c.getAttribute("data-pick") === form.dataset.picked);
+        });
+    }
+
+    function open(isEdit) {
+        editing = isEdit;
+        document.getElementById("llm-form-title").textContent = isEdit ? "Edit connection" : "New connection";
+        form.hidden = false;
+        document.getElementById("llm-add").hidden = true;
+        setError("");
+        syncFields();
+    }
+    function close() {
+        form.reset();
+        form.elements.provider.value = "";
+        form.dataset.picked = "";
+        form.hidden = true;
+        document.getElementById("llm-add").hidden = false;
+        setError("");
+        syncFields();
+    }
+
+    document.getElementById("llm-add").addEventListener("click", function () {
+        close();
+        open(false);
+    });
+    form.addEventListener("click", function (e) {
+        if (e.target.closest("[data-llm-cancel]")) { close(); return; }
+        var proto = e.target.closest("[data-proto]");
+        if (proto) {
+            form.elements.protocol.value = proto.getAttribute("data-proto");
+            syncFields();
             return;
         }
-        PRESET_FIELDS.forEach(function (field) { form.elements[field].value = preset[field]; });
-        presetFilled = true;
-        // Submit the real provider, not the preset that selected it.
-        event.target.value = preset.provider;
+        var card = e.target.closest("[data-pick]");
+        if (!card) return;
+        var d = card.dataset;
+        form.dataset.picked = d.pick;
+        form.elements.provider.value = d.provider;
+        // A preset owns these fields; picking any card resets them so nothing
+        // one provider filled in is left behind for another.
+        form.elements.name.value = d.name || "";
+        form.elements.base_url.value = d.base || "";
+        form.elements.protocol.value = d.protocol || "";
+        form.elements.models.value = d.models || "";
+        setError("");
+        syncFields();
+        (d.provider === "custom" && !d.name ? form.elements.name : form.elements.key).focus();
     });
-    document.getElementById("llm-connection-form").addEventListener("reset", function () {
-        presetFilled = false;
-        // The reset has not been applied to the fields yet when this fires.
-        setTimeout(syncProtocolState, 0);
+    form.addEventListener("input", function (e) {
+        setError("");
+        if (e.target.name === "base_url") syncFields();
     });
 
-    // A protocol only means anything alongside an endpoint, and the server
-    // rejects one without a Base URL. Disabling the control keeps it out of the
-    // submission entirely, so a protocol picked while experimenting cannot
-    // survive a switch to a provider key and turn into a rejection.
-    function syncProtocolState() {
-        var form = document.getElementById("llm-connection-form");
-        form.elements.protocol.disabled = form.elements.base_url.value.trim() === "";
-    }
-    document.getElementById("llm-connection-form").addEventListener("input", function (event) {
-        if (event.target.name === "base_url") syncProtocolState();
+    form.addEventListener("htmx:beforeRequest", function (e) {
+        if (e.detail.elt !== form) return;
+        var k = kind();
+        var msg = "";
+        if (k === "custom" && !/^[a-z0-9][a-z0-9-]{0,47}$/.test(form.elements.name.value)) msg = "Give the connection a name: lowercase letters, numbers and hyphens.";
+        else if (k === "custom" && !form.elements.base_url.value.trim()) msg = "Custom connections need a Base URL.";
+        else if (k !== "custom" && !editing && !form.elements.key.value) msg = "Paste the API key for this provider.";
+        if (msg) { e.preventDefault(); setError(msg); }
     });
-    document.getElementById("llm-connection-form").addEventListener("change", syncProtocolState);
-    syncProtocolState();
-    // Firefox restores field values on pageshow after a back/forward, and fires
-    // neither input nor change while doing it — without this the user sees a
-    // filled Base URL beside a disabled Protocol, and the protocol they can read
-    // on screen is silently left out of the submission.
-    window.addEventListener("pageshow", syncProtocolState);
+    form.addEventListener("htmx:afterRequest", function (e) {
+        if (e.detail.elt !== form || !e.detail.successful) return;
+        close();
+        svkToast("Saved · syncing to running VMs");
+    });
 
     // Editing loads the stored connection back into the form. Saving replaces
     // the whole row, so rotating a key by retyping the obvious fields would
@@ -148,11 +225,13 @@
     document.addEventListener("click", function (event) {
         var button = event.target.closest("[data-edit-connection]");
         if (!button) return;
-        var row = button.closest("tr");
-        var form = document.getElementById("llm-connection-form");
+        var row = button.closest("[data-provider]");
         var provider = row.dataset.provider;
         var custom = provider.indexOf("custom-") === 0;
+        form.reset();
+        form.dataset.picked = custom ? "custom" : provider;
         form.elements.provider.value = custom ? "custom" : provider;
+        open(true);
         form.elements.name.value = custom ? provider.slice("custom-".length) : "";
         form.elements.base_url.value = row.dataset.baseUrl;
         form.elements.models.value = row.dataset.models;
@@ -160,9 +239,15 @@
         // Left blank on purpose: the stored key is never rendered, and
         // SaveProviderKey carries it over rather than replacing it with nothing.
         form.elements.key.value = "";
-        presetFilled = false;
-        syncProtocolState();
+        syncFields();
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
         form.elements.key.focus();
     });
+
+    // Firefox restores field values on pageshow after a back/forward without
+    // firing input or change, so the visible state is rebuilt from the fields.
+    window.addEventListener("pageshow", syncFields);
+    syncFields();
+})();
 </script>
 {{end}}

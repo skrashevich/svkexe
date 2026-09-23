@@ -1,40 +1,24 @@
 {{define "llm_body"}}
-<div class="card" style="margin-bottom:20px;">
-    <h2 style="font-size:1rem; margin-bottom:4px;">Default model</h2>
-    <div class="form-hint">Every VM on this account opens on this model — the ones running now and the ones you create later.</div>
+<section class="panel" style="flex-direction:row; align-items:center; gap:20px; flex-wrap:wrap; padding:20px 22px;">
+    <div style="flex:1 1 280px; display:flex; flex-direction:column; gap:4px;">
+        <h3>Default model</h3>
+        <p class="panel-sub">Every VM on your account opens on this model — running ones and ones you create later.</p>
+    </div>
     {{if .Models}}
-    <form hx-post="/dashboard/keys/default" hx-target="#llm-body" hx-swap="innerHTML">
-        <div class="form-inline">
-            <div class="form-group" style="flex:1;">
-                <label>Model</label>
-                <select name="model">
-                    <option value="" {{if .Auto}}selected{{end}}>Auto — keep what each VM is on while it is still yours, else your first model</option>
-                    {{range .Models}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary" style="flex-shrink:0;">Use this model</button>
-        </div>
+    <form style="flex:1 1 280px; max-width:420px;"
+          hx-post="/dashboard/keys/default" hx-trigger="change" hx-target="#llm-body" hx-swap="innerHTML"
+          hx-on::after-request="if(event.detail.successful){svkToast('Default model updated')}">
+        <select class="input" name="model" aria-label="Default model" style="height:40px; font-size:13.5px;">
+            <option value="" {{if .Auto}}selected{{end}}>Auto — keep what each VM is on while it is still yours, else your first model</option>
+            {{range .Models}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
     </form>
     {{else}}
-    <div class="form-hint">Add a connection with a base URL and model IDs below, then pick one here. Until then your VMs run on the platform's own models.</div>
+    <p class="panel-note" style="flex:1 1 280px; max-width:420px;">Add a connection with a base URL and model IDs, then pick one here. Until then your VMs run on the platform's own models.</p>
     {{end}}
-</div>
+</section>
 
-<div class="card" style="padding:0; overflow:hidden;">
-    <table class="data-table">
-        <thead>
-            <tr>
-                <th>Provider</th>
-                <th>Endpoint / models</th>
-                <th>Protocol</th>
-                <th>Key</th>
-                <th>Added</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody id="key-table-body">
-            {{template "key_list" .Keys}}
-        </tbody>
-    </table>
-</div>
+<section class="list" id="key-table-body">
+    {{template "key_list" .Keys}}
+</section>
 {{end}}

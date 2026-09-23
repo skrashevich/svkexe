@@ -168,10 +168,10 @@ func TestProviderNativeKeySavesWithoutAProtocol(t *testing.T) {
 	// And the page has to offer that "none" — otherwise the form above is not
 	// something the UI can actually produce.
 	page := call2(t, router, "GET", "/keys")
-	if !strings.Contains(page, `<select name="protocol">`) {
+	if !strings.Contains(page, `<select name="protocol"`) {
 		t.Fatal("no protocol control on the page")
 	}
-	control := page[strings.Index(page, `<select name="protocol">`):]
+	control := page[strings.Index(page, `<select name="protocol"`):]
 	control = control[:strings.Index(control, "</select>")]
 	if !strings.Contains(control, `<option value="">`) {
 		t.Fatalf("protocol control cannot express 'none': %s", control)

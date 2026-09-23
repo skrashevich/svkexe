@@ -1,233 +1,55 @@
-{{define "vm_card"}}
-<div class="card vm-card" id="vm-{{.ID}}">
-    <div class="vm-busy" aria-hidden="true">
-        <span class="vm-busy-spinner"></span>
-        <span class="vm-busy-msg"></span>
-    </div>
-    <a class="vm-link" href="/dashboard/vms/{{.ID}}/access">Access</a>
-    <div class="vm-card-head">
-        <div>
-            <div class="vm-card-name">{{.Name}}</div>
-            <span class="badge badge-{{statusClass .Status}}">{{.Status}}</span>
+{{/* vm_row is one line of the VM list. The whole row opens the VM's page;
+     the buttons on it act without leaving the list. */}}
+{{define "vm_row"}}
+{{$t := task .}}
+<div class="vm-row vm-cols" id="row-{{.ID}}" data-busy-scope
+     data-href="/dashboard/vms/{{.ID}}"
+     data-state="{{if eq .Status "running"}}running{{else}}stopped{{end}}"
+     data-search="{{.Name}} {{.Name}}.{{domain}} {{.IPAddress}}{{range .Aliases}} {{.Hostname}}{{end}}">
+    <div class="vm-machine">
+        <span class="dot dot-{{statusClass .Status}}"></span>
+        <div class="vm-id">
+            <div class="vm-name-line">
+                <a class="vm-name" href="/dashboard/vms/{{.ID}}">{{.Name}}</a>
+                <span class="vm-state st-{{statusClass .Status}}">{{statusLabel .Status}}</span>
+            </div>
+            <span class="vm-url">{{.Name}}.{{domain}}</span>
+            <span class="vm-compact">
+                <span><span class="tdot tdot-{{$t.Tone}}"></span>{{$t.Label}}</span>
+                <span class="mono">{{.CPULimit}} vCPU · {{memSize .MemoryMB}} · {{.DiskGB}} GB</span>
+                <span class="{{if .AppPublic}}tone-accent{{end}}">{{if .SharedAccess}}Shared with you{{else if .AppPublic}}Public{{else}}Private{{end}}</span>
+            </span>
         </div>
+    </div>
+    <div class="vm-task-cell vm-col-wide"><span class="tdot tdot-{{$t.Tone}}"></span><span>{{$t.Label}}</span></div>
+    <div class="vm-specs vm-col-wide">{{.CPULimit}} vCPU · {{memSize .MemoryMB}} · {{.DiskGB}} GB</div>
+    <div class="vm-col-wide">
+        {{if .SharedAccess}}<span class="pill" title="Shared with you">Shared</span>
+        {{else if .AppPublic}}<span class="pill pill-accent">Public</span>
+        {{else}}<span class="pill">Private</span>{{end}}
+    </div>
+    <div class="vm-actions">
         {{if eq .Status "running"}}
-        <div class="vm-card-links">
-            <a href="https://agent-{{.Name}}.{{domain}}/" target="_blank" class="vm-link vm-link-accent">
-                PicoClaw
-            </a>
-            <a href="https://{{.Name}}.{{domain}}/" target="_blank" class="vm-link"
-               title="Your service on port {{.AppPort}} in this VM">
-                Open &rarr;
-            </a>
-        </div>
-        {{end}}
-    </div>
-
-    {{if .InitialTaskState}}
-    <div class="vm-task vm-task-{{.InitialTaskState}}">
-        <div class="vm-task-head">
-            <span class="vm-task-label">Initial task</span>
-            {{if eq .InitialTaskState "pending"}}
-            <span class="vm-task-state">waiting for the VM to come up</span>
-            {{else if and (ne .Status "running") (ne .Status "creating") (or (eq .InitialTaskState "sent") (eq .InitialTaskState "working"))}}
-            <span class="vm-task-state">on hold while the VM is not running; picked back up on its next start</span>
-            {{else if eq .InitialTaskState "sent"}}
-            <span class="vm-task-spinner" aria-hidden="true"></span>
-            <span class="vm-task-state">handed to the agent, starting…</span>
-            {{else if eq .InitialTaskState "working"}}
-            <span class="vm-task-spinner" aria-hidden="true"></span>
-            <span class="vm-task-state">the agent is working on it</span>
-            {{else if eq .InitialTaskState "done"}}
-            <span class="vm-task-state">the agent finished this task</span>
-            {{else}}
-            <span class="vm-task-state">did not finish</span>
-            <button class="btn btn-secondary btn-sm"
-                hx-post="/dashboard/vms/{{.ID}}/task/retry"
-                hx-target="#vm-{{.ID}}"
-                hx-swap="outerHTML">
-                Retry
-            </button>
-            {{end}}
-            {{if and .InitialTaskConversation (eq .Status "running")}}
-            <a class="vm-link" target="_blank"
-               href="https://agent-{{.Name}}.{{domain}}/c/{{.InitialTaskConversation}}">
-                Watch
-            </a>
-            {{end}}
-        </div>
-        <div class="vm-task-text">{{.InitialTask}}</div>
-        {{if .InitialTaskError}}<div class="vm-task-error">{{.InitialTaskError}}</div>{{end}}
-    </div>
-    {{end}}
-
-    <form class="vm-publish"
-        hx-post="/dashboard/vms/{{.ID}}/publish"
-        hx-target="#vm-{{.ID}}"
-        hx-swap="outerHTML">
-        <label class="vm-publish-field">
-            <span>Port</span>
-            <input name="app_port" type="number" min="1" max="65535" value="{{.AppPort}}">
-        </label>
-        <label class="vm-publish-field vm-publish-toggle">
-            <input name="app_public" type="checkbox" value="1" {{if .AppPublic}}checked{{end}}>
-            <span>Public</span>
-        </label>
-        <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
-        <span class="vm-publish-hint">
-            {{if .AppPublic}}
-            Anyone with the link reaches port {{.AppPort}}. PicoClaw stays private.
-            {{else}}
-            Only you and share links reach port {{.AppPort}}.
-            {{end}}
-        </span>
-    </form>
-
-    {{/* A change here only reaches the container when it boots, so the form
-         says so rather than letting the owner believe Docker works the moment
-         the box is ticked. */}}
-    <form class="vm-publish vm-nesting"
-        hx-post="/dashboard/vms/{{.ID}}/nesting"
-        hx-trigger="change"
-        hx-target="#vm-{{.ID}}"
-        hx-swap="outerHTML">
-        <label class="vm-publish-field vm-publish-toggle">
-            <input name="nesting" type="checkbox" value="1"
-                   {{if .Nesting}}checked{{end}}
-                   {{if not .NestingAllowed}}disabled{{end}}>
-            <span>Nested containers</span>
-        </label>
-        <span class="vm-publish-hint">
-            {{if not .NestingAllowed}}
-            Turned off for this whole deployment by an administrator, so Docker cannot start here.
-            {{else if .Nesting}}
-            Docker, buildah and nested Incus can create containers inside this VM.
-            {{else}}
-            Docker cannot create containers in this VM. Builds have to run from source.
-            {{end}}
-        </span>
-        {{if .NestingPending}}
-        <span class="vm-nesting-pending">
-            Restart this VM to apply.
-            <button type="button" class="btn btn-secondary btn-sm"
-                hx-post="/dashboard/vms/{{.ID}}/restart"
-                hx-target="#vm-{{.ID}}"
-                hx-swap="outerHTML"
-                hx-disabled-elt="this"
-                hx-confirm="Restart VM '{{.Name}}'? Anything running inside it, including the agent's current task, stops."
-                hx-on::before-request="omcBusy(this, 'Restarting…')">
-                Restart now
-            </button>
-        </span>
-        {{end}}
-    </form>
-
-    <div class="vm-aliases">
-        <div class="vm-aliases-head">
-            <span class="vm-aliases-label">Custom domains</span>
-        </div>
-        {{if .Aliases}}
-        <ul class="vm-alias-list">
-            {{range .Aliases}}
-            <li class="vm-alias-row">
-                <div class="vm-alias-main">
-                    {{if and .Verified (eq $.Status "running")}}
-                    <a href="https://{{.Hostname}}/" target="_blank" class="vm-alias-host">{{.Hostname}}</a>
-                    {{else}}
-                    <span class="vm-alias-host">{{.Hostname}}</span>
-                    {{end}}
-                    {{if .Verified}}
-                    <span class="badge badge-running">verified</span>
-                    {{else}}
-                    <span class="badge badge-stopped">unverified</span>
-                    {{end}}
-                </div>
-                {{if .LastError}}<div class="vm-alias-error">{{.LastError}}</div>{{end}}
-                <div class="vm-alias-actions">
-                    <button class="btn btn-secondary btn-sm"
-                        hx-post="/dashboard/vms/{{$.ID}}/aliases/{{.ID}}/verify"
-                        hx-target="#vm-{{$.ID}}"
-                        hx-swap="outerHTML">
-                        Re-check
-                    </button>
-                    <button class="btn btn-danger btn-sm"
-                        hx-delete="/dashboard/vms/{{$.ID}}/aliases/{{.ID}}"
-                        hx-target="#vm-{{$.ID}}"
-                        hx-swap="outerHTML"
-                        hx-confirm="Remove custom domain '{{.Hostname}}'?">
-                        Remove
-                    </button>
-                </div>
-            </li>
-            {{end}}
-        </ul>
-        {{end}}
-        {{if and (not .AppPublic) .Aliases}}
-        <p class="vm-alias-warning">
-            A custom domain only reaches a <strong>published</strong> workload or a share link:
-            the session cookie is scoped to {{domain}} and never reaches a custom domain.
-        </p>
-        {{end}}
-        <form class="vm-alias-add"
-            hx-post="/dashboard/vms/{{.ID}}/aliases"
-            hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML">
-            <input name="hostname" type="text" placeholder="app.example.org" autocomplete="off">
-            <button type="submit" class="btn btn-secondary btn-sm">Add domain</button>
-        </form>
-        <p class="vm-alias-hint">
-            Point a CNAME at <code>{{domain}}</code>, then add the hostname here and re-check it.
-            A custom domain never exposes the PicoClaw agent.
-        </p>
-    </div>
-
-    <div class="vm-card-specs">
-        <div class="vm-spec">CPU <span class="vm-spec-val">{{.CPULimit}} vCPU</span></div>
-        <div class="vm-spec">RAM <span class="vm-spec-val">{{.MemoryMB}} MB</span></div>
-        <div class="vm-spec">Disk <span class="vm-spec-val">{{.DiskGB}} GB</span></div>
-        {{if .IPAddress}}<div class="vm-spec">IP <span class="vm-spec-val">{{.IPAddress}}</span></div>{{end}}
-    </div>
-
-    <div class="vm-card-actions">
-        {{if eq .Status "stopped"}}
-        <button class="btn btn-secondary btn-sm"
+        <a class="btn btn-xs" href="/dashboard/vms/{{.ID}}/shell">Terminal</a>
+        <a class="btn btn-xs btn-accent-soft" href="https://agent-{{.Name}}.{{domain}}/" target="_blank" rel="noopener">PicoClaw</a>
+        <a class="btn btn-xs" href="https://{{.Name}}.{{domain}}/" target="_blank" rel="noopener"
+           title="Your service on port {{.AppPort}} in this VM">Open ↗</a>
+        {{else if eq .Status "stopped"}}
+        {{if not .SharedAccess}}
+        <span class="busy-label busy-msg" hidden></span>
+        <button class="btn btn-xs btn-ok"
             hx-post="/dashboard/vms/{{.ID}}/start"
-            hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML"
+            hx-swap="none"
             hx-disabled-elt="this"
-            hx-on::before-request="omcBusy(this, 'Starting…')">
-            Start
-        </button>
-        {{else if eq .Status "running"}}
-        <button class="btn btn-secondary btn-sm"
-            hx-post="/dashboard/vms/{{.ID}}/stop"
-            hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML"
-            hx-disabled-elt="this"
-            hx-on::before-request="omcBusy(this, 'Stopping…')">
-            Stop
-        </button>
+            hx-on::before-request="omcBusy(this, 'Starting…'); this.previousElementSibling.hidden = false; this.hidden = true"
+            hx-on::after-request="this.closest('.vm-row').classList.remove('is-busy'); htmx.trigger('#vm-list', 'vm-refresh')">Start</button>
         {{end}}
-        <button class="btn btn-danger btn-sm"
-            hx-delete="/dashboard/vms/{{.ID}}"
-            hx-target="#vm-{{.ID}}"
-            hx-swap="outerHTML"
-            hx-disabled-elt="this"
-            hx-confirm="Delete VM '{{.Name}}'? This cannot be undone."
-            hx-on::before-request="omcBusy(this, 'Deleting…')">
-            Delete
-        </button>
+        {{else if eq .Status "error"}}
+        <span class="busy-label tone-danger">Needs attention</span>
+        {{else}}
+        <span class="busy-label"><span class="spin"></span>{{statusLabel .Status}}</span>
+        {{end}}
+        <span class="chev" aria-hidden="true">›</span>
     </div>
-</div>
-{{end}}
-
-{{define "shared_vm_card"}}
-<div class="card vm-card" id="vm-{{.ID}}">
- <div class="vm-card-head"><div><div class="vm-card-name">{{.Name}}</div><span class="badge badge-{{statusClass .Status}}">{{.Status}}</span></div><span>Shared access</span></div>
- <p>SSH: <code>ssh -p 2222 {{.IncusName}}@{{if domain}}{{domain}}{{else}}GATEWAY_HOST{{end}}</code></p>
- {{if eq .Status "running"}}<div class="vm-card-links">
- <a class="vm-link" href="/dashboard/vms/{{.ID}}/shell">Terminal</a>
- <a class="vm-link vm-link-accent" href="https://agent-{{.Name}}.{{domain}}/" target="_blank">PicoClaw</a>
- <a class="vm-link" href="https://{{.Name}}.{{domain}}/" target="_blank">Open &rarr;</a>
- </div>{{end}}
 </div>
 {{end}}

@@ -1,16 +1,17 @@
 {{template "layout.html" .}}
 
 {{define "content"}}
-<div style="display:flex; align-items:center; gap:12px; margin-bottom:20px;">
-    <a href="/dashboard/vms" class="btn btn-secondary btn-sm">&larr; VMs</a>
-    <h1 style="font-size:1.1rem; font-weight:700; letter-spacing:-0.02em;">
-        <span style="font-family:var(--mono);">{{.Container.Name}}</span>
-    </h1>
-    <span class="badge badge-{{statusClass .Container.Status}}">{{.Container.Status}}</span>
+<div class="crumbs">
+    <a href="/dashboard/vms">← Virtual machines</a><span>/</span>
+    <a class="mono" href="/dashboard/vms/{{.Container.ID}}">{{.Container.Name}}</a><span>/</span><span>Terminal</span>
+</div>
+<div class="title-line">
+    <h1 class="page-title mono">{{.Container.Name}}</h1>
+    <span class="status-pill st-{{statusClass .Container.Status}}">{{statusLabel .Container.Status}}</span>
 </div>
 
-<div class="card" style="padding:0; overflow:hidden; border-radius:var(--radius-lg);">
-    <div id="terminal" style="width:100%; height:calc(100vh - 180px);"></div>
+<div class="list" style="padding:8px; background:#1a1a26;">
+    <div id="terminal" style="width:100%; height:calc(100vh - 220px);"></div>
 </div>
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">

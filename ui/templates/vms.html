@@ -1,22 +1,37 @@
 {{template "layout.html" .}}
 
 {{define "content"}}
-<div class="page-header">
-    <h1>Virtual Machines</h1>
-    {{if ne .User.Role "guest"}}<button class="btn btn-primary"
+<header class="page-head">
+    <div>
+        <h1>Virtual machines</h1>
+        <p class="sub" id="vm-summary">{{if .Containers}}{{len .Containers}} machines{{else}}Nothing here yet{{end}}</p>
+    </div>
+    {{if ne .User.Role "guest"}}<button class="btn btn-primary btn-lg"
         hx-get="/dashboard/vms/create"
         hx-target="#create-modal"
-        hx-swap="innerHTML">
-        + New VM
-    </button>{{end}}
-</div>
+        hx-swap="innerHTML"><span class="plus">+</span>New VM</button>{{end}}
+</header>
 
 <div id="create-modal"></div>
 
-<div id="vm-list"
-     hx-get="/dashboard/vms/list"
-     hx-trigger="every 5s"
-     hx-swap="innerHTML">
-    {{template "vm_list_content" .}}
+<div class="stack" style="gap:12px;">
+    {{/* The toolbar lives outside the polled list so the search box keeps its
+         focus and its text while the rows under it refresh. */}}
+    <div class="toolbar" id="vm-toolbar"{{if not .Containers}} hidden{{end}}>
+        <div class="seg seg-sm" role="group" aria-label="Filter by state">
+            <button type="button" class="on" data-filter="all">All <span class="count"></span></button>
+            <button type="button" data-filter="running">Running <span class="count"></span></button>
+            <button type="button" data-filter="stopped">Stopped <span class="count"></span></button>
+        </div>
+        <input id="vm-search" class="input search" type="search" placeholder="Search by name, domain or IP" autocomplete="off" aria-label="Search VMs">
+    </div>
+
+    <div id="vm-list"
+         data-poll
+         hx-get="/dashboard/vms/list"
+         hx-trigger="every 5s, vm-refresh"
+         hx-swap="innerHTML">
+        {{template "vm_list_content" .}}
+    </div>
 </div>
 {{end}}

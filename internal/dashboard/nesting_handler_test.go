@@ -128,7 +128,7 @@ func TestTheCardAsksForTheRestartItIsOwed(t *testing.T) {
 	nestingVM(t, database, "owner", "running", true)
 
 	body := post(t, router, "/vms/vm/nesting", url.Values{"nesting": {"1"}}).Body.String()
-	if !strings.Contains(body, "Restart this VM to apply") {
+	if !strings.Contains(body, "takes effect on the next start") {
 		t.Errorf("the card does not ask for a restart: %s", body)
 	}
 	if !strings.Contains(body, "/dashboard/vms/vm/restart") {
@@ -139,7 +139,7 @@ func TestTheCardAsksForTheRestartItIsOwed(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = post(t, router, "/vms/vm/nesting", url.Values{"nesting": {"1"}}).Body.String()
-	if strings.Contains(body, "Restart this VM to apply") {
+	if strings.Contains(body, "takes effect on the next start") {
 		t.Error("a VM that booted with the setting still asks for a restart")
 	}
 }
@@ -164,7 +164,7 @@ func TestRestartAppliesTheSetting(t *testing.T) {
 	if !c.NestingApplied {
 		t.Fatal("the restart did not record the setting it booted with")
 	}
-	if strings.Contains(rec.Body.String(), "Restart this VM to apply") {
+	if strings.Contains(rec.Body.String(), "takes effect on the next start") {
 		t.Error("the card still asks for a restart right after one")
 	}
 }

@@ -2,137 +2,105 @@
 
 {{define "content"}}
 <style>
-    /* The component list is a plain key/value grid; two fixed columns like
-       .vm-card-specs would leave the long commit values wrapping in half a
-       card. */
-    .system-specs {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 8px 24px;
-    }
-    .system-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-    .system-state {
-        font-size: 0.85rem;
-        color: var(--fg-dim);
-    }
-    .system-state + .system-state { margin-top: 6px; }
-    .system-ok { color: var(--ok); }
-    .system-bad { color: var(--danger); }
-    .system-note {
-        margin-top: 10px;
-        font-size: 0.75rem;
-        color: var(--fg-mute);
-    }
-    .system-actions { margin-top: 14px; }
-    /* The update log arrives as raw script output, so newlines have to survive
-       and a long build must not stretch the card. */
-    .system-log {
-        margin-top: 12px;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        max-height: 320px;
-        overflow-y: auto;
-        line-height: 1.6;
-    }
-    .system-link {
-        color: var(--accent);
-        border-bottom: 1px solid oklch(0.76 0.18 45 / 0.3);
-    }
+    .upd-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .upd-row > #update-check { flex: 1 1 320px; min-width: 0; }
+    .upd-main { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .upd-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--fg-mute); box-shadow: 0 0 0 5px oklch(0.60 0.008 70 / 0.18); }
+    .upd-dot.ok { background: var(--ok); box-shadow: 0 0 0 5px var(--ok-soft); }
+    .upd-dot.accent { background: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); }
+    .upd-dot.warn { background: var(--warn); box-shadow: 0 0 0 5px oklch(0.80 0.15 85 / 0.18); }
+    .upd-dot.danger { background: var(--danger); box-shadow: 0 0 0 5px var(--danger-soft); }
+    .upd-text { flex: 1 1 240px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .upd-title { font-size: 16px; font-weight: 600; }
+    .upd-sub { font-size: 13px; color: var(--fg-dim); overflow-wrap: anywhere; }
+    .upd-bar { height: 6px; border-radius: 6px; background: var(--bg-inset); overflow: hidden; position: relative; }
+    .upd-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: 6px; background: var(--accent); animation: upd-slide 1.4s ease-in-out infinite; }
+    @keyframes upd-slide { from { left: -35%; } to { left: 100%; } }
+    .system-log { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .system-link { color: var(--accent); }
 </style>
 
-<div class="page-header">
-    <h1>System</h1>
-</div>
-
-<div class="card" style="margin-bottom:20px;">
-    <div class="card-title">Components</div>
-    <div class="vm-card-specs system-specs">
-        <div class="vm-spec">Gateway version <span class="vm-spec-val">{{.Version.Version}}</span></div>
-        <div class="vm-spec">Gateway commit <span class="vm-spec-val">{{.Version.Commit}}</span></div>
-        <div class="vm-spec">Build date <span class="vm-spec-val">{{.Version.BuildDate}}</span></div>
-        <div class="vm-spec">PicoClaw version <span class="vm-spec-val">{{.Version.PicoClawVersion}}</span></div>
-        <div class="vm-spec">Shelley commit <span class="vm-spec-val">{{.Version.ShelleyCommit}}</span></div>
+<header class="page-head">
+    <div>
+        <h1>System</h1>
+        <p class="sub">Platform version, updates and deployment-wide policy.</p>
     </div>
-</div>
+</header>
 
-<div class="card" style="margin-bottom:20px;">
-    <div class="card-title">Nested containers</div>
-    <div id="nesting-policy">{{template "nesting_policy" .}}</div>
-</div>
-
-<div class="card">
-    <div class="card-title">Updates</div>
-
-    {{/* Check on load so the admin lands on an answer — and on the Update
-         button when there is one — instead of having to press a button to find
-         out anything. This request is served from the checker's cache; the
-         explicit re-check below forces a fresh lookup. */}}
-    <div id="update-check"
-         hx-get="/dashboard/system/check"
-         hx-trigger="load"
-         hx-target="this"
-         hx-swap="innerHTML">{{template "update_check" .}}</div>
-
-    <div class="system-actions">
-        <button class="btn btn-secondary"
+<section class="panel" id="update-panel">
+    <div class="upd-row">
+        {{/* Check on load so the admin lands on an answer — and on the Update
+             button when there is one — instead of having to press a button to
+             find out anything. This request is served from the checker's cache;
+             the explicit re-check forces a fresh lookup. */}}
+        <div id="update-check"
+             hx-get="/dashboard/system/check"
+             hx-trigger="load"
+             hx-target="this"
+             hx-swap="innerHTML">{{template "update_check" .}}</div>
+        <button class="btn"
                 hx-get="/dashboard/system/check?force=1"
                 hx-target="#update-check"
-                hx-swap="innerHTML"
-                hx-indicator="find .htmx-indicator">
-            <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:6px;">
-                <svg width="14" height="14" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31 31" stroke-linecap="round"/></svg>
-                Checking...
-            </span>
+                hx-swap="innerHTML">
+            <span class="htmx-indicator" style="align-items:center; gap:8px;"><span class="spin"></span>Checking GitHub…</span>
             <span class="btn-label">Check for updates</span>
         </button>
     </div>
 
-    <div id="update-status" style="margin-top:16px;">{{template "update_status" .}}</div>
+    <div id="update-status">{{template "update_status" .}}</div>
 
     {{if not .CanUpdate}}
     {{/* The check still works without a runner, so say up front that the result
          cannot be acted on here rather than only when the button is pressed. */}}
-    <div class="system-note">This deployment cannot install updates itself: {{.UnavailableReason}}</div>
+    <p class="panel-note">This deployment cannot install updates itself: {{.UnavailableReason}}</p>
     {{end}}
+    <p class="panel-note">Installing an update rebuilds the gateway and restarts it, so this page may be unreachable for a few seconds. Progress resumes on its own once the gateway is back.</p>
+</section>
 
-    <div class="system-note">Installing an update rebuilds the gateway and restarts it, so this page may be unreachable for a few seconds. Progress below resumes on its own once the gateway is back.</div>
+<div class="grid-2">
+    <section class="panel" style="gap:4px;">
+        <h3 style="margin-bottom:8px;">Components</h3>
+        <div class="kv-rows">
+            <div class="kv"><span>Gateway version</span><span class="mono">{{.Version.Version}}</span></div>
+            <div class="kv"><span>Gateway commit</span><span class="mono">{{.Version.Commit}}</span></div>
+            <div class="kv"><span>Build date</span><span class="mono">{{.Version.BuildDate}}</span></div>
+            <div class="kv"><span>PicoClaw version</span><span class="mono">{{.Version.PicoClawVersion}}</span></div>
+            <div class="kv"><span>Shelley commit</span><span class="mono">{{.Version.ShelleyCommit}}</span></div>
+        </div>
+    </section>
+
+    <section class="panel" style="gap:12px;" id="nesting-policy">{{template "nesting_policy" .}}</section>
 </div>
 {{end}}
 
 {{/* nesting_policy is the deployment-wide ceiling. It is a ceiling and not a
      default: turning it off takes the capability away from every VM, whatever
      each owner has chosen, which is what makes it usable as an emergency lever.
-     Running VMs keep what they booted with until they restart, and each VM card
+     Running VMs keep what they booted with until they restart, and each VM page
      says so, so this fragment does not pretend the change is instant. */}}
 {{define "nesting_policy"}}
-<form hx-post="/dashboard/system/nesting"
+<form class="stack" style="gap:12px;"
+      hx-post="/dashboard/system/nesting"
       hx-trigger="change"
       hx-target="#nesting-policy"
       hx-swap="innerHTML">
-    <label class="vm-publish-toggle">
-        <input type="checkbox" name="nesting_allowed" value="1" {{if .NestingAllowed}}checked{{end}}>
-        <span>Allow VMs to run nested containers</span>
-    </label>
-    <div class="system-state">
-        {{if .NestingAllowed}}
-        Owners may enable Docker, buildah and nested Incus on their own VMs. Each VM still has its own switch.
-        {{else}}
-        No VM can run containers of its own, whatever its owner has chosen. Their switches are shown disabled.
-        {{end}}
+    <div class="toggle-row">
+        <div>
+            <h3><label for="nesting-allowed">Nested containers</label></h3>
+            <p class="panel-sub">
+                {{if .NestingAllowed}}
+                Owners may run Docker, buildah and nested Incus on their own VMs. Each VM keeps its own switch.
+                {{else}}
+                No VM can run containers of its own, whatever its owner has chosen. Their switches are shown disabled.
+                {{end}}
+            </p>
+        </div>
+        <span class="switch"><input type="checkbox" id="nesting-allowed" name="nesting_allowed" value="1" aria-label="Allow VMs to run nested containers" {{if .NestingAllowed}}checked{{end}}><span class="switch-track"></span></span>
     </div>
     {{if .NestingError}}
-    <div class="system-state system-bad">Could not save this setting: {{.NestingError}}</div>
+    <div class="alert-error">Could not save this setting: {{.NestingError}}</div>
     {{end}}
-    <div class="system-note">
-        Nesting relaxes the isolation between a VM and this host: a tenant that can create containers
-        reaches more of the kernel's surface than one that cannot. Turn it off if you host tenants you
-        do not trust. A change here applies to each VM the next time it starts.
-    </div>
+    <p class="panel-note">Nesting relaxes the isolation between a VM and this host: a tenant that can create containers reaches more of the kernel's surface than one that cannot. Turn it off if you host tenants you do not trust. A change here applies to each VM the next time it starts.</p>
 </form>
 {{end}}
 
@@ -144,35 +112,42 @@
         hx-post="/dashboard/system/update"
         hx-target="#update-status"
         hx-swap="innerHTML"
-        hx-confirm="This rebuilds and restarts the whole platform. Running VMs keep running, but the dashboard, the SSH gateway and the proxy will be unavailable for a few minutes. Continue?">
+        hx-confirm="The gateway rebuilds and restarts. Running VMs keep running, but the dashboard, the SSH gateway and the proxy are unavailable for a few minutes."
+        data-confirm-title="Install the update?"
+        data-confirm-cta="Update now">
     Update now
 </button>
 {{else}}
 <button class="btn btn-primary" disabled>Update now</button>
-<div class="system-note">{{.UnavailableReason}}</div>
+<p class="panel-note">{{.UnavailableReason}}</p>
 {{end}}
 {{end}}
 
 {{define "update_check"}}
+<div class="upd-main">
 {{if not .Checked}}
-<div class="system-state">Checking for updates...</div>
+    <span class="upd-dot"></span>
+    <div class="upd-text"><span class="upd-title">Checking for updates…</span><span class="upd-sub">Asking GitHub about the latest build</span></div>
 {{else if .CheckError}}
-<div class="system-state system-bad">Update check failed: {{.CheckError}}</div>
+    <span class="upd-dot danger"></span>
+    <div class="upd-text"><span class="upd-title">Update check failed</span><span class="upd-sub">{{.CheckError}}</span></div>
 {{else if .Status}}
 {{if .Status.Reason}}
-<div class="system-state">Cannot compare this build with upstream: {{.Status.Reason}}</div>
+    <span class="upd-dot"></span>
+    <div class="upd-text"><span class="upd-title">Running {{.Version.Short}}</span><span class="upd-sub">Cannot compare this build with upstream: {{.Status.Reason}}</span></div>
 {{else if .UpdateAvailable}}
-{{with .Status.Latest}}
-<div class="system-state system-ok">Update available: <span class="cell-mono">{{.Version}}</span></div>
-<div class="system-state">Published {{formatTime .PublishedAt}}{{if .URL}} &middot; <a class="system-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">view on GitHub</a>{{end}}</div>
-{{end}}
-<div class="system-state">Running <span class="cell-mono">{{.Version.Short}}</span>, checked {{formatTime .Status.CheckedAt}}.</div>
-<div class="system-actions">{{template "update_button" .}}</div>
+    <span class="upd-dot accent"></span>
+    <div class="upd-text">
+        {{with .Status.Latest}}<span class="upd-title">Update available · <span class="mono">{{.Version}}</span></span>{{end}}
+        <span class="upd-sub">Running <span class="mono">{{.Version.Short}}</span>{{with .Status.Latest}} · published {{formatTime .PublishedAt}}{{if .URL}} · <a class="system-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">view on GitHub</a>{{end}}{{end}} · checked {{formatTime .Status.CheckedAt}}</span>
+    </div>
+    <div>{{template "update_button" .}}</div>
 {{else}}
-<div class="system-state system-ok">Up to date: <span class="cell-mono">{{.Version.Short}}</span></div>
-<div class="system-state">Checked {{formatTime .Status.CheckedAt}}.</div>
+    <span class="upd-dot ok"></span>
+    <div class="upd-text"><span class="upd-title">Up to date · <span class="mono">{{.Version.Short}}</span></span><span class="upd-sub">Checked {{formatTime .Status.CheckedAt}}</span></div>
 {{end}}
 {{end}}
+</div>
 {{end}}
 
 {{/* update_status carries its own poller so that it stops by itself: the
@@ -180,23 +155,24 @@
      swaps them away. A poll that fails while the gateway restarts does not
      swap at all, so this element — and its trigger — survive to retry. */}}
 {{define "update_status"}}
-<div class="update-status"{{if eq .Run.State "running"}} hx-get="/dashboard/system/status" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML"{{end}}>
+<div class="update-status stack" style="gap:8px;"{{if eq .Run.State "running"}} hx-get="/dashboard/system/status" hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML"{{end}}>
 {{if .StartError}}
-<div class="system-state system-bad">Could not start the update: {{.StartError}}</div>
-<div class="system-actions">{{template "update_button" .}}</div>
+<div class="alert-error">Could not start the update: {{.StartError}}</div>
+<div>{{template "update_button" .}}</div>
 {{end}}
 {{if eq .Run.State "running"}}
-<div class="system-row">
-    <div class="vm-busy-spinner"></div>
-    <div class="system-state">Update in progress{{if not .Run.StartedAt.IsZero}}, started {{formatTime .Run.StartedAt}}{{end}}.</div>
+<div class="upd-main">
+    <span class="upd-dot warn"></span>
+    <div class="upd-text"><span class="upd-title">Installing update…</span><span class="upd-sub">Update in progress{{if not .Run.StartedAt.IsZero}}, started {{formatTime .Run.StartedAt}}{{end}}.</span></div>
 </div>
-<div class="system-note">The gateway restarts itself as part of the update; this page may briefly fail to load. It picks the progress back up automatically.</div>
-{{if .Run.Log}}<div class="code-block system-log">{{.Run.Log}}</div>{{end}}
+<div class="upd-bar"></div>
+{{if .Run.Log}}<pre class="code-block system-log">{{.Run.Log}}</pre>{{end}}
+<p class="panel-note">The gateway restarts during the update; this page picks the progress back up on its own.</p>
 {{else if eq .Run.State "success"}}
-<div class="system-state system-ok">Update finished{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}.{{if .Run.Commit}} Now running <span class="cell-mono">{{.Run.Commit}}</span>.{{end}}</div>
+<div class="note note-plain"><span class="tone-ok">Update finished{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}.{{if .Run.Commit}} Now running <span class="mono">{{.Run.Commit}}</span>.{{end}}</span></div>
 {{else if eq .Run.State "failed"}}
-<div class="system-state system-bad">Update failed{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}{{if .Run.Error}}: {{.Run.Error}}{{end}}</div>
-{{if .Run.Log}}<div class="code-block system-log">{{.Run.Log}}</div>{{end}}
+<div class="alert-error">Update failed{{if not .Run.FinishedAt.IsZero}} {{formatTime .Run.FinishedAt}}{{end}}{{if .Run.Error}}: {{.Run.Error}}{{end}}</div>
+{{if .Run.Log}}<pre class="code-block system-log">{{.Run.Log}}</pre>{{end}}
 {{end}}
 </div>
 {{end}}

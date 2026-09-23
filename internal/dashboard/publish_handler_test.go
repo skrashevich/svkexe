@@ -213,7 +213,7 @@ func TestCardShowsAnInProgressTaskOnHoldWhileTheVMIsOff(t *testing.T) {
 	}
 
 	body := post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
-	if !strings.Contains(body, "handed to the agent, starting") {
+	if !strings.Contains(body, "Handed to the agent") {
 		t.Error("a running VM stopped reporting the hand-over")
 	}
 
@@ -221,10 +221,10 @@ func TestCardShowsAnInProgressTaskOnHoldWhileTheVMIsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
-	if strings.Contains(body, "handed to the agent, starting") {
+	if strings.Contains(body, "Handed to the agent") {
 		t.Error("a stopped VM still claims the agent is starting")
 	}
-	if !strings.Contains(body, "on hold while the VM is not running") {
+	if !strings.Contains(body, "On hold while the VM is not running") {
 		t.Errorf("card does not say the task is on hold: %s", body)
 	}
 	if strings.Contains(body, "vm-task-spinner") {
@@ -238,7 +238,7 @@ func TestCardShowsAnInProgressTaskOnHoldWhileTheVMIsOff(t *testing.T) {
 			t.Fatal(err)
 		}
 		body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
-		if strings.Contains(body, "handed to the agent, starting") {
+		if strings.Contains(body, "Handed to the agent") {
 			t.Errorf("a VM in %q still claims the agent is starting", status)
 		}
 	}
@@ -249,7 +249,7 @@ func TestCardShowsAnInProgressTaskOnHoldWhileTheVMIsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = post(t, router, "/vms/vm/publish", url.Values{"app_port": {"3000"}}).Body.String()
-	if !strings.Contains(body, "handed to the agent, starting") {
+	if !strings.Contains(body, "Handed to the agent") {
 		t.Error("a VM that is still coming up reports its task as on hold")
 	}
 

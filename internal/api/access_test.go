@@ -31,6 +31,7 @@ func TestGuestHTTPAccessMatrix(t *testing.T) {
 	}{
 		{"GET", "/api/containers", 200}, {"GET", "/api/containers/shared", 200}, {"GET", "/api/containers/private", 403},
 		{"GET", "/dashboard/vms", 200}, {"GET", "/dashboard/vms/list", 200}, {"GET", "/dashboard/vms/shared/shell", 200}, {"GET", "/dashboard/vms/private/shell", 403},
+		{"GET", "/dashboard/vms/shared", 200}, {"GET", "/dashboard/vms/shared/card", 200}, {"GET", "/dashboard/vms/private", 403}, {"GET", "/dashboard/vms/private/card", 403},
 		{"POST", "/api/containers", 403}, {"POST", "/api/containers/shared/start", 403}, {"DELETE", "/api/containers/shared", 403},
 		{"POST", "/dashboard/vms", 403}, {"POST", "/dashboard/vms/shared/stop", 403}, {"GET", "/dashboard/vms/create", 403},
 		{"GET", "/dashboard/vms/shared/access", 403}, {"POST", "/dashboard/vms/shared/access", 403},
@@ -44,12 +45,15 @@ func TestGuestHTTPAccessMatrix(t *testing.T) {
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
-			if tc.path == "/dashboard/vms" && w.Code == 200 {
-				for _, forbidden := range []string{"+ New VM", "/access", "/stop", "private"} {
+			if (tc.path == "/dashboard/vms" || tc.path == "/dashboard/vms/shared" || tc.path == "/dashboard/vms/shared/card") && w.Code == 200 {
+				for _, forbidden := range []string{"New VM", "/access", "/stop", "/publish", "/nesting", "/recreate", "private"} {
 					if strings.Contains(w.Body.String(), forbidden) {
 						t.Errorf("guest page contains %q", forbidden)
 					}
 				}
+			}
+			if tc.path == "/dashboard/vms/shared" && w.Code == 200 && !strings.Contains(w.Body.String(), `data-tab="overview"`) {
+				t.Errorf("guest did not get the VM page: %s", w.Body.String())
 			}
 		})
 	}

@@ -160,7 +160,12 @@ func guestRequestAllowed(r *http.Request) bool {
 	}
 	if rest, ok := strings.CutPrefix(path, "/dashboard/vms/"); ok {
 		parts := strings.Split(rest, "/")
-		return len(parts) == 2 && (parts[1] == "shell" || parts[1] == "ws")
+		// The VM page and its self-poll are read-only views; the handlers
+		// check access and show a guest only the Overview of a shared VM.
+		if len(parts) == 1 {
+			return parts[0] != "" && parts[0] != "create"
+		}
+		return len(parts) == 2 && (parts[1] == "shell" || parts[1] == "ws" || parts[1] == "card")
 	}
 	return false
 }

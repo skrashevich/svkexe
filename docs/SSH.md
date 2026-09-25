@@ -53,8 +53,11 @@ The shell is meant to be driven by programs as well as people.
   account and that command, instead of an ASCII banner.
 - Read commands accept **`--json`** and then emit a single line of JSON built
   from typed structures, with no terminal escapes and no carriage returns.
-- A one-shot invocation exits **0** on success, **1** when the command failed
-  and **127** when the command does not exist.
+- A one-shot **management** command exits **0** on success, **1** when the command
+  failed and **127** when the command does not exist. For a command run inside a
+  VM with a VM login, the current gateway reports the SSH session's status,
+  which can be 0 even when the command inside the VM failed. Print and inspect
+  an explicit exit marker in the VM command when its status matters.
 - An unrecognised flag is refused by name rather than ignored, so a typo is
   visible instead of silently changing what the command did. Flags belong to the
   action, not to the word it is grouped under: `share list` takes `--json` and

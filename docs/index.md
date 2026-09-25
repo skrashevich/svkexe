@@ -8,6 +8,7 @@ svkexe runs persistent Linux VMs (Incus containers) for several users behind one
 - [Deployment guide](/docs/DEPLOY): prerequisites, bare-metal installer, Docker Compose, updates.
 - [API reference](/docs/API): authentication, VM lifecycle, keys, LLM proxy endpoints.
 - [SSH interface](/docs/SSH): the management shell, direct VM access, and the JSON command catalogue for LLM agents.
+- [Skill for external LLM agents](https://github.com/skrashevich/svkexe/blob/main/skills/svkexe/SKILL.md): use your own svkexe installation as a persistent Linux workspace.
 - [Named VM access](/docs/ACCESS): guest accounts, SSH keys and revocation.
 - [PicoClaw agent](/docs/PICOCLAW): how the agent is built into the VM image and configured per VM.
 

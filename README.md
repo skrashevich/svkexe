@@ -41,6 +41,8 @@ The demo does not start Incus containers or call an LLM.*
 
 The PicoClaw runtime with Shelley web UI and HTTP API is available as a [standalone package in `agent/`](agent/README.md). Build it with `make -C agent build`, or export it with `make -C agent package` for use in another project. It does not require the svkexe gateway or Incus.
 
+To let an external LLM agent use your svkexe installation for development tasks, give it the [svkexe skill](skills/svkexe/SKILL.md). For Codex, copy `skills/svkexe/` into `~/.codex/skills/`; then provide the agent with your gateway host and a registered SSH identity. The skill discovers the live command catalogue and works inside the VMs your account can access.
+
 ## Features
 
 - **Persistent Linux VMs** via Incus LXC containers with native systemd

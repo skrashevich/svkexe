@@ -75,6 +75,10 @@ func environmentGuide(c *db.Container, domain string) []byte {
 	// What matters to the agent is what the running container actually booted
 	// with, not what the owner has since asked for: a setting that is still
 	// waiting on a restart would have the agent try Docker and fail.
+
+	b.WriteString("\n## LLM gateway\n\n")
+	b.WriteString("- SDK connection settings are in `/etc/picoclaw/llm-gateway.json` (`base_url`, `api_key`) when the gateway is configured. Read them within the invoking process; never print or commit the key. This is a VM-scoped credential, not an IMDS token.\n")
+	b.WriteString("- `GET {base_url}/models` lists this owner's connected models with connection-qualified IDs and their `protocol`. Use those IDs in requests. OpenAI uses `/chat/completions`, OpenAI Responses uses `/responses`, Anthropic uses `/messages`, and Gemini uses `/models/{id}:generateContent` or `:streamGenerateContent`. Protocols are forwarded natively, not converted. Without owner models the platform's OpenRouter fallback is used if configured. Changes to LLM connections take effect on the next request.\n")
 	b.WriteString("\n## Containers inside this VM\n\n")
 	if c.NestingApplied {
 		b.WriteString("- Nested containers are **enabled** here. Docker, buildah and nested Incus can create containers, so prefer an image-based workflow over building from source when the project ships one.\n")

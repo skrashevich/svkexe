@@ -230,3 +230,21 @@ func (w flushingWriter) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// ServeVM serves an already authenticated VM without forwarding its token upstream.
+func (p *Proxy) ServeVM(w http.ResponseWriter, r *http.Request) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+p.cfg.InternalToken)
+	switch r.URL.Path {
+	case "/api/llm/v1/models":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		p.ServeModels(w, r)
+	case "/api/llm/v1/chat/completions":
+		p.ServeHTTP(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}

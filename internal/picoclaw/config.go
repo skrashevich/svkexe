@@ -31,6 +31,9 @@ const (
 	// ConfigFilePath is the agent configuration file.
 	ConfigFilePath = ConfigDir + "/picoclaw.json"
 
+	// GatewayCredentialPath is a protected SDK connection descriptor, independent of agent model selection.
+	GatewayCredentialPath = ConfigDir + "/llm-gateway.json"
+
 	// ContainerUser is the non-root user inside svkexe containers.
 	ContainerUser = "user"
 
@@ -41,6 +44,8 @@ const (
 
 // LLMProxyConfig holds the gateway-level LLM proxy settings to pass to PicoClaw.
 type LLMProxyConfig struct {
+	// TokenForVM issues a token bound to a VM and its current owner.
+	TokenForVM func(container, owner string) string
 	// BaseURL is the LLM gateway URL (e.g. "https://example.test/api/llm/v1").
 	BaseURL string
 	// Token is the Bearer token PicoClaw uses to authenticate to the proxy.

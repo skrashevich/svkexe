@@ -104,7 +104,8 @@ func (m *Materializer) RefreshKeys(containerID, ownerID string) error {
 }
 
 // ProviderModels returns decrypted connection settings for DB-backed models.
-// These values must only be written to the owner's protected guest configuration.
+// These values may only be used for the owner's protected guest configuration
+// or authenticated VM-scoped gateway requests; never return them in model lists.
 func (m *Materializer) ProviderModels(owner string) ([]ProviderModel, error) {
 	keys, err := m.db.ListAPIKeysByOwner(owner)
 	if err != nil {

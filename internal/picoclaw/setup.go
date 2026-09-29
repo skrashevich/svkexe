@@ -33,6 +33,13 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, database *
 		return fmt.Errorf("setup PicoClaw: no container given")
 	}
 	containerID, incusName, ownerID := c.ID, c.IncusName, c.OwnerID
+	if llmCfg != nil {
+		local := *llmCfg
+		if local.TokenForVM != nil {
+			local.Token = local.TokenForVM(containerID, ownerID)
+		}
+		llmCfg = &local
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	lock, _ := setupLocks.LoadOrStore(incusName, make(chan struct{}, 1))
@@ -48,6 +55,21 @@ func SetupContainer(ctx context.Context, rt runtime.ContainerRuntime, database *
 	}
 	if _, err := rt.Exec(ctx, incusName, []string{"mkdir", "-p", "/data", ConfigDir, "/etc/systemd/system"}); err != nil {
 		return err
+	}
+	if llmCfg != nil && llmCfg.BaseURL != "" {
+		credential, err := json.Marshal(struct {
+			BaseURL string `json:"base_url"`
+			APIKey  string `json:"api_key"`
+		}{llmCfg.BaseURL, llmCfg.Token})
+		if err != nil {
+			return err
+		}
+		if err := writeGuestFile(ctx, rt, incusName, GatewayCredentialPath, credential); err != nil {
+			return err
+		}
+		if _, err := rt.Exec(ctx, incusName, []string{"sh", "-c", "chown root:user " + GatewayCredentialPath + " && chmod 640 " + GatewayCredentialPath}); err != nil {
+			return err
+		}
 	}
 	if err := installBinary(ctx, rt, incusName); err != nil {
 		return err

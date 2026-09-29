@@ -337,3 +337,25 @@ func TestSetupRejectsIncompatibleArtifactBeforeStopping(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupVMGatewayCredentialWithoutPlatformModels(t *testing.T) {
+	guest := &guestRuntime{files: map[string][]byte{}}
+	cfg := &LLMProxyConfig{BaseURL: "https://example.test/api/llm/v1", Token: "legacy", TokenForVM: func(id, owner string) string { return id + ":" + owner }}
+	c := testContainer("owner")
+	if err := SetupContainer(t.Context(), guest, nil, nil, c, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var credential struct {
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+	}
+	if err := json.Unmarshal(guest.files[GatewayCredentialPath], &credential); err != nil {
+		t.Fatal(err)
+	}
+	if credential.APIKey != c.ID+":owner" || credential.BaseURL != cfg.BaseURL {
+		t.Fatalf("incorrect scoped credential")
+	}
+	if cfg.Token != "legacy" {
+		t.Fatal("shared config mutated")
+	}
+}

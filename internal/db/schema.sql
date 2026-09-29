@@ -130,3 +130,13 @@ CREATE TABLE IF NOT EXISTS container_access (
     PRIMARY KEY(container_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS container_access_user_idx ON container_access(user_id);
+
+CREATE TABLE IF NOT EXISTS user_integrations (
+ owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ provider TEXT NOT NULL,
+ config TEXT NOT NULL,
+ credentials BLOB NOT NULL,
+ schema_version INTEGER NOT NULL DEFAULT 1,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(owner_id, provider)
+);

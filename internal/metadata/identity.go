@@ -7,7 +7,8 @@
 // against the container runtime's live view of which instance holds that address
 // rather than against anything the caller says or anything the platform last
 // happened to record. Everything it publishes is therefore readable by every
-// process in the VM, so nothing secret may enter an Identity.
+// process in the VM, so nothing secret may enter an Identity. Explicitly connected external-service
+// credentials are fetched separately and require a VM-bound IMDSv2 token.
 package metadata
 
 import (

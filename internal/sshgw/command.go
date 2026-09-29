@@ -124,6 +124,7 @@ func buildRegistry() []*command {
 	all = append(all, configCommands()...)
 	all = append(all, domainCommands()...)
 	all = append(all, accountCommands()...)
+	all = append(all, integrationCommand())
 	all = append(all, passwordCommand())
 	all = append(all, sessionCommands()...)
 	all = append(all, adminCommands()...)

@@ -10,6 +10,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/dashboard"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/integrations"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
 	"github.com/skrashevich/svkexe/internal/metrics"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
@@ -22,19 +23,20 @@ import (
 
 // Server holds the HTTP server dependencies.
 type Server struct {
-	db             *db.DB
-	runtime        runtime.ContainerRuntime
-	encKey         []byte
-	domain         string
-	router         chi.Router
-	containerProxy *proxy.ContainerProxy
-	materializer   *secrets.Materializer
-	rateLimiter    *ratelimit.Limiter
-	llmProxy       *llmproxy.Proxy
-	picoclawLLMCfg *picoclaw.LLMProxyConfig
-	updater        *updater.Service
-	aliases        *aliases.Manager
-	aliasVerifier  aliases.Verifier
+	integrationService *integrations.Service
+	db                 *db.DB
+	runtime            runtime.ContainerRuntime
+	encKey             []byte
+	domain             string
+	router             chi.Router
+	containerProxy     *proxy.ContainerProxy
+	materializer       *secrets.Materializer
+	rateLimiter        *ratelimit.Limiter
+	llmProxy           *llmproxy.Proxy
+	picoclawLLMCfg     *picoclaw.LLMProxyConfig
+	updater            *updater.Service
+	aliases            *aliases.Manager
+	aliasVerifier      aliases.Verifier
 }
 
 // NewServer constructs a Server with the given dependencies and registers routes.
@@ -166,7 +168,15 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 		// Shared link management
 		r.Delete("/shares/{token}", s.revokeSharedLink)
 
-		// API key endpoints
+		// External service connections
+		svc := s.serviceIntegrations()
+		ih := svc.HTTPHandler(func(r *http.Request) string { return userIDFromCtx(r.Context()) }, func(r *http.Request) string { return chi.URLParam(r, "provider") })
+		r.Get("/integrations/providers", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, svc.Descriptors()) })
+		r.Get("/integrations", ih)
+		r.Put("/integrations/{provider}", ih)
+		r.Delete("/integrations/{provider}", ih)
+
+		// LLM API key endpoints
 		r.Get("/keys", s.listKeys)
 		r.Post("/keys", s.createKey)
 		r.Delete("/keys/{id}", s.deleteKey)
@@ -203,4 +213,11 @@ func (s *Server) registerAuthedRoutes(r chi.Router) {
 		log.Fatalf("failed to initialize dashboard: %v", err)
 	}
 	r.Route("/dashboard", d.RegisterRoutes)
+}
+
+func (s *Server) serviceIntegrations() *integrations.Service {
+	if s.integrationService != nil {
+		return s.integrationService
+	}
+	return integrations.New(s.db, s.encKey)
 }

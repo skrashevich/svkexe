@@ -553,6 +553,7 @@
         <nav class="side-nav">
             <a href="/dashboard/vms"><span class="nav-mark"></span><span class="nav-label">Virtual machines</span><span class="nav-count">{{.Nav.VMs}}</span></a>
             {{if ne .User.Role "guest"}}<a href="/dashboard/keys"><span class="nav-mark"></span><span class="nav-label">LLM</span><span class="nav-count">{{.Nav.LLM}}</span></a>{{end}}
+            <a href="/dashboard/integrations"><span class="nav-mark"></span><span class="nav-label">Integrations</span></a>
             <a href="/dashboard/ssh-keys"><span class="nav-mark"></span><span class="nav-label">SSH keys</span><span class="nav-count">{{.Nav.SSHKeys}}</span></a>
             {{if .IsAdmin}}<a href="/dashboard/system"><span class="nav-mark"></span><span class="nav-label">System</span></a>{{end}}
         </nav>

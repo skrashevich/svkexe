@@ -11,6 +11,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/integrations"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
@@ -20,16 +21,17 @@ import (
 
 // Dashboard holds dependencies for the web dashboard.
 type Dashboard struct {
-	db             *db.DB
-	runtime        runtime.ContainerRuntime
-	materializer   *secrets.Materializer
-	domain         string
-	encKey         []byte
-	picoclawLLMCfg *picoclaw.LLMProxyConfig
-	updater        *updater.Service
-	aliases        *aliases.Manager
-	templates      *template.Template
-	funcMap        template.FuncMap
+	integrationService *integrations.Service
+	db                 *db.DB
+	runtime            runtime.ContainerRuntime
+	materializer       *secrets.Materializer
+	domain             string
+	encKey             []byte
+	picoclawLLMCfg     *picoclaw.LLMProxyConfig
+	updater            *updater.Service
+	aliases            *aliases.Manager
+	templates          *template.Template
+	funcMap            template.FuncMap
 }
 
 // NewDashboard creates a Dashboard and parses all HTML templates.
@@ -124,6 +126,9 @@ func (d *Dashboard) RegisterRoutes(r chi.Router) {
 	r.Post("/vms/{id}/access/{userID}/revoke", d.postRevokeAccess)
 	r.Get("/vms/{id}/shell", d.getShell)
 	r.Get("/vms/{id}/ws", d.handleWS)
+	r.Get("/integrations", d.getIntegrations)
+	r.Post("/integrations/{provider}", d.saveIntegration)
+	r.Post("/integrations/{provider}/delete", d.deleteIntegration)
 	r.Get("/keys", d.getKeys)
 	// Static before the wildcard: "default" is a setting, not a provider.
 	r.Post("/keys/default", d.postDefaultModel)
@@ -293,4 +298,11 @@ func (d *Dashboard) renderPage(w http.ResponseWriter, pageFile string, data inte
 	if err := tmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
 		http.Error(w, "render error: "+err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (d *Dashboard) serviceIntegrations() *integrations.Service {
+	if d.integrationService != nil {
+		return d.integrationService
+	}
+	return integrations.New(d.db, d.encKey)
 }

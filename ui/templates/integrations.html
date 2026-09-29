@@ -1,0 +1,18 @@
+{{define "content"}}
+<header class="page-head"><div><h1>Integrations</h1><p class="sub">Connect external services for all your VMs.</p></div></header>
+<p>Credentials are available to all processes inside your VMs. Saved secrets are never displayed here. Disconnecting stops future downloads; revoke the token at the external service to invalidate existing copies.</p>
+{{range .Integrations}}
+<section class="panel">
+<h2>{{.Descriptor.Name}}</h2>
+<p>{{if .Connected}}Connected — enter new credentials to replace this connection.{{else}}Not connected{{end}}</p>
+<form method="post" action="/dashboard/integrations/{{.Descriptor.ID}}">
+{{$config := .Config}}
+{{range .Descriptor.Config}}<label class="field">{{.Label}}<input class="input" name="config_{{.Name}}" value="{{index $config .Name}}" {{if .Required}}required{{end}}></label>{{end}}
+{{range .Descriptor.Secrets}}<label class="field">{{.Label}}<input class="input" type="password" name="secret_{{.Name}}" autocomplete="new-password" {{if .Required}}required{{end}}></label>{{end}}
+<button class="btn btn-primary" type="submit">Save connection</button>
+</form>
+{{if .Connected}}<form method="post" action="/dashboard/integrations/{{.Descriptor.ID}}/delete"><button class="btn btn-danger" type="submit">Disconnect</button></form>{{end}}
+<p>Metadata: <code>/latest/meta-data/svkexe/integrations/{{.Descriptor.ID}}/</code> (requires an IMDSv2 token).</p>
+</section>
+{{end}}
+{{end}}

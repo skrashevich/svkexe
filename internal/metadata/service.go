@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/skrashevich/svkexe/internal/integrations"
 )
 
 const (
@@ -52,6 +54,8 @@ const (
 // Config is the deployment-wide half of what the service publishes: the facts
 // that are the same for every VM.
 type Config struct {
+	Integrations *integrations.Service
+
 	// Domain is the gateway's base domain, used for the public hostname and the
 	// service domain. Empty means subdomain routing is not configured and those
 	// keys are not published.
@@ -115,6 +119,9 @@ func New(r Resolver, cfg Config) *Service {
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "EC2ws")
+	if path := cleanPath(r.URL.Path); path == integrationPath || strings.HasPrefix(path, integrationPath+"/") {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 
 	// A request that has been through a proxy is refused outright, header and
 	// all. The classic way to steal instance credentials is to talk an
@@ -177,6 +184,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.serveIntegrations(w, r, id) {
+		return
+	}
 	s.serveTree(w, r, id)
 }
 
@@ -190,6 +200,29 @@ func (s *Service) serveTree(w http.ResponseWriter, r *http.Request, id *Identity
 
 	segments := strings.Split(strings.Trim(requested, "/"), "/")
 	n := buildTree(id, s.cfg)
+	if s.cfg.Integrations != nil {
+		connections, err := s.cfg.Integrations.List(r.Context(), id.OwnerID)
+		if err != nil {
+			s.fail(w, http.StatusServiceUnavailable, "metadata is temporarily unavailable")
+			return
+		}
+		if len(connections) > 0 {
+			providers := []*node{}
+			for _, connection := range connections {
+				desc, err := s.cfg.Integrations.Descriptor(connection.Provider)
+				if err != nil {
+					continue
+				}
+				credentials := []*node{}
+				for _, name := range desc.Credentials {
+					credentials = append(credentials, leaf(name, ""))
+				}
+				providers = append(providers, dir(connection.Provider, credentials...))
+			}
+			platform := n.child("meta-data").child("svkexe")
+			platform.children = dir("svkexe", append(platform.children, dir("integrations", providers...))...).children
+		}
+	}
 	if segments[0] != n.name {
 		s.fail(w, http.StatusNotFound, "not found")
 		return

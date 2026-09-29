@@ -11,6 +11,7 @@ import (
 	gssh "github.com/gliderlabs/ssh"
 	"github.com/skrashevich/svkexe/internal/aliases"
 	"github.com/skrashevich/svkexe/internal/db"
+	"github.com/skrashevich/svkexe/internal/integrations"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
 	"github.com/skrashevich/svkexe/internal/runtime"
 	"github.com/skrashevich/svkexe/internal/secrets"
@@ -45,15 +46,16 @@ type Config struct {
 
 // Server is the SSH gateway server.
 type Server struct {
-	db             *db.DB
-	runtime        runtime.ContainerRuntime
-	materializer   *secrets.Materializer
-	picoclawLLMCfg *picoclaw.LLMProxyConfig
-	encKey         []byte
-	domain         string
-	aliases        *aliases.Manager
-	updater        *updater.Service
-	srv            *gssh.Server
+	integrationService *integrations.Service
+	db                 *db.DB
+	runtime            runtime.ContainerRuntime
+	materializer       *secrets.Materializer
+	picoclawLLMCfg     *picoclaw.LLMProxyConfig
+	encKey             []byte
+	domain             string
+	aliases            *aliases.Manager
+	updater            *updater.Service
+	srv                *gssh.Server
 }
 
 // New creates a new SSH gateway server.
@@ -265,4 +267,11 @@ func (s *Server) attach(ctx context.Context, sess gssh.Session, container *db.Co
 	case <-ctx.Done():
 	}
 	return nil
+}
+
+func (s *Server) serviceIntegrations() *integrations.Service {
+	if s.integrationService != nil {
+		return s.integrationService
+	}
+	return integrations.New(s.db, s.encKey)
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/api"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/dnscheck"
+	"github.com/skrashevich/svkexe/internal/integrations"
 	"github.com/skrashevich/svkexe/internal/llmproxy"
 	"github.com/skrashevich/svkexe/internal/metadata"
 	"github.com/skrashevich/svkexe/internal/picoclaw"
@@ -265,7 +266,7 @@ func main() {
 	// the handler above: identity there comes from the source address alone, so
 	// exposing it on the public port would let anyone who can set a Host header
 	// read a VM's metadata.
-	metadataServer := startMetadata(metadataAddr, database, rt, domain, gatewayPublicIPs)
+	metadataServer := startMetadata(metadataAddr, database, rt, domain, gatewayPublicIPs, encKey)
 
 	// Upgrade agents in running VMs; stopped VMs are handled on their next start.
 	agentCtx, stopAgents := context.WithCancel(context.Background())
@@ -304,17 +305,22 @@ func main() {
 // Nothing here is fatal. A deployment whose gateway cannot hold the link-local
 // address still serves every other part of the platform, and turning that into a
 // crash loop would take the dashboard down over a feature a VM merely queries.
-func startMetadata(addr string, database *db.DB, rt runtime.ContainerRuntime, domain, publicIPs string) *http.Server {
+func startMetadata(addr string, database *db.DB, rt runtime.ContainerRuntime, domain, publicIPs string, integrationKey ...[]byte) *http.Server {
 	if addr == "" || strings.EqualFold(addr, "off") {
 		log.Printf("instance metadata service disabled (METADATA_ADDR=%q)", addr)
 		return nil
 	}
+	var integrationService *integrations.Service
+	if len(integrationKey) > 0 {
+		integrationService = integrations.New(database, integrationKey[0])
+	}
 	svc := metadata.New(
 		metadata.NewRuntimeResolver(rt, database, 0, nil),
 		metadata.Config{
-			Domain:    domain,
-			PublicIPs: strings.Split(publicIPs, ","),
-			ImageID:   picoclaw.DefaultImage,
+			Integrations: integrationService,
+			Domain:       domain,
+			PublicIPs:    strings.Split(publicIPs, ","),
+			ImageID:      picoclaw.DefaultImage,
 			// Its own limiter, not the API's: the key here is a VM's address
 			// rather than a user, and a VM reading its own metadata must not eat
 			// its owner's dashboard budget.

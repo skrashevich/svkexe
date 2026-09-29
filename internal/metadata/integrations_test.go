@@ -2,6 +2,8 @@ package metadata
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,7 +25,7 @@ func TestIntegrationCredentialsRequireOwnIMDSToken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := integrations.New(database, bytes.Repeat([]byte{1}, 32))
+	svc := integrations.New(database, bytes.Repeat([]byte{1}, 32), integrations.GitHub{Client: &http.Client{Transport: metadataGitHubTransport{}}})
 	ctx := t.Context()
 	save := func(owner, token string) {
 		t.Helper()
@@ -100,7 +102,7 @@ type labMetadataProvider struct{}
 func (labMetadataProvider) Descriptor() integrations.Descriptor {
 	return integrations.Descriptor{ID: "lab", Name: "Lab", Secrets: []integrations.Field{{Name: "key", Required: true}, {Name: "password", Required: true}}, Credentials: []string{"key", "password"}}
 }
-func (labMetadataProvider) Validate(integrations.Input) error { return nil }
+func (labMetadataProvider) Validate(context.Context, integrations.Input) error { return nil }
 func (labMetadataProvider) Credential(in integrations.Input, name string) (string, error) {
 	return in.Secrets[name], nil
 }
@@ -132,4 +134,10 @@ func TestMetadataSecondProvider(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
+}
+
+type metadataGitHubTransport struct{}
+
+func (metadataGitHubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"id":1,"login":"tester"}`)), Request: r}, nil
 }

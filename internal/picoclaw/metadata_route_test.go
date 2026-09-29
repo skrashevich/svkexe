@@ -201,3 +201,16 @@ func TestTheGuideStaysSilentWhereTheServiceIsNotServed(t *testing.T) {
 		t.Errorf("the guide promises an endpoint this deployment does not serve:\n%s", guide)
 	}
 }
+
+func TestGuideExplainsIntegrationCredentialDiscovery(t *testing.T) {
+	metadataServed(t)
+	guide := string(environmentGuide(&db.Container{Name: "demo", AppPort: 3000}, "example.com"))
+	for _, text := range []string{"svkexe/integrations/", "{provider}/{credential}", "X-aws-ec2-metadata-token-ttl-seconds: 60", "X-aws-ec2-metadata-token: $imds_token", "github/token", "export GH_TOKEN=", "set +x", "same shell/tool invocation", "Never print them", "Dashboard → Integrations", "unset GH_TOKEN"} {
+		if !strings.Contains(guide, text) {
+			t.Errorf("guide missing %q", text)
+		}
+	}
+	if strings.Contains(guide, "gh auth login --with-token") {
+		t.Fatal("guide persists credentials")
+	}
+}

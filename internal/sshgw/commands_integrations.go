@@ -83,7 +83,8 @@ func cmdIntegrationAdd(c *cmdCtx) error {
 		}
 	}
 	if err = svc.Save(c.ctx, c.user.ID, provider, in); err != nil {
-		return fmt.Errorf("could not save integration; check required fields")
+		_, message := integrations.PublicError(err)
+		return fmt.Errorf("%s", message)
 	}
 	c.printf("Integration %s saved for your VMs.\n", provider)
 	return nil

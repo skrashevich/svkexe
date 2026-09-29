@@ -19,6 +19,8 @@ import (
 )
 
 var ErrInvalid = errors.New("invalid integration configuration")
+var ErrRejected = errors.New("external service rejected credentials")
+var ErrVerificationUnavailable = errors.New("credential verification unavailable; try again later")
 var safeName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // Field describes a string field. Secret fields are always write-only.
@@ -44,7 +46,7 @@ type Input struct {
 // Validation errors are deliberately not exposed to clients, as they may contain secrets.
 type Provider interface {
 	Descriptor() Descriptor
-	Validate(Input) error
+	Validate(context.Context, Input) error
 	Credential(Input, string) (string, error)
 }
 type Connection struct {
@@ -142,8 +144,16 @@ func (s *Service) Save(ctx context.Context, owner, provider string, in Input) er
 	if !validFields(in.Config, d.Config) || !validFields(in.Secrets, d.Secrets) {
 		return ErrInvalid
 	}
-	if err := p.Validate(in); err != nil {
-		return ErrInvalid
+	if err := p.Validate(ctx, in); err != nil {
+		// Keep only safe classifications; a provider error can contain credentials.
+		switch {
+		case errors.Is(err, ErrRejected):
+			return ErrRejected
+		case errors.Is(err, ErrInvalid):
+			return ErrInvalid
+		default:
+			return ErrVerificationUnavailable
+		}
 	}
 	if in.Config == nil {
 		in.Config = map[string]string{}

@@ -54,12 +54,7 @@ func (s *Service) HTTPHandler(owner func(*http.Request) string, provider func(*h
 			return
 		}
 		if err != nil {
-			status := 500
-			msg := "integration operation failed"
-			if errors.Is(err, ErrInvalid) {
-				status = 400
-				msg = "invalid integration configuration"
-			}
+			status, msg := PublicError(err)
 			http.Error(w, msg, status)
 			return
 		}
@@ -69,5 +64,19 @@ func (s *Service) HTTPHandler(owner func(*http.Request) string, provider func(*h
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
+	}
+}
+
+// PublicError returns fixed, secret-free messages for all management adapters.
+func PublicError(err error) (int, string) {
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return http.StatusBadRequest, "invalid integration configuration"
+	case errors.Is(err, ErrRejected):
+		return http.StatusBadRequest, "credentials rejected by the external service; check that the token is valid and has not expired or been revoked"
+	case errors.Is(err, ErrVerificationUnavailable):
+		return http.StatusServiceUnavailable, "could not verify credentials with the external service; try again later"
+	default:
+		return http.StatusInternalServerError, "integration operation failed"
 	}
 }

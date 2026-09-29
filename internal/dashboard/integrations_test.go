@@ -6,6 +6,7 @@ import (
 	"github.com/skrashevich/svkexe/internal/ctxkeys"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/integrations"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,7 +19,7 @@ type labProvider struct{}
 func (labProvider) Descriptor() integrations.Descriptor {
 	return integrations.Descriptor{ID: "lab", Name: "Lab", Config: []integrations.Field{{Name: "account", Label: "Account", Required: true}}, Secrets: []integrations.Field{{Name: "key", Label: "Key", Required: true}, {Name: "password", Label: "Password", Required: true}}, Credentials: []string{"key", "password"}}
 }
-func (labProvider) Validate(integrations.Input) error { return nil }
+func (labProvider) Validate(context.Context, integrations.Input) error { return nil }
 func (labProvider) Credential(in integrations.Input, n string) (string, error) {
 	return in.Secrets[n], nil
 }
@@ -67,5 +68,46 @@ func TestIntegrationDashboardUsesProviderDescriptors(t *testing.T) {
 	rows, err := d.integrationService.List(t.Context(), owner.ID)
 	if err != nil || len(rows) != 0 {
 		t.Fatal("disconnect failed")
+	}
+}
+
+type invalidGitHubTransport struct{}
+
+func (invalidGitHubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 401, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"message":"private-token"}`)), Request: r}, nil
+}
+func TestDashboardRejectsInvalidGitHubToken(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.SetMaxOpenConns(1)
+	defer database.Close()
+	owner, err := database.EnsureUser("owner", "owner@test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDashboard(database, nil, nil, "test", []byte("01234567890123456789012345678901"), nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.integrationService = integrations.New(database, d.encKey, integrations.GitHub{Client: &http.Client{Transport: invalidGitHubTransport{}}})
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxkeys.User, owner)))
+		})
+	})
+	d.RegisterRoutes(router)
+	r := httptest.NewRequest("POST", "/integrations/github", strings.NewReader(url.Values{"secret_token": {"private-token"}}.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "credentials rejected") || strings.Contains(w.Body.String(), "private-token") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	list, err := d.integrationService.List(t.Context(), owner.ID)
+	if err != nil || len(list) != 0 {
+		t.Fatal("invalid GitHub token saved")
 	}
 }

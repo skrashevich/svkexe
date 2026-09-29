@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,7 @@ type testProvider struct{}
 func (testProvider) Descriptor() Descriptor {
 	return Descriptor{ID: "lab", Name: "Lab", Config: []Field{{Name: "account", Required: true}}, Secrets: []Field{{Name: "key", Required: true}, {Name: "password", Required: true}}, Credentials: []string{"access", "password"}}
 }
-func (testProvider) Validate(Input) error { return nil }
+func (testProvider) Validate(context.Context, Input) error { return nil }
 func (testProvider) Credential(in Input, n string) (string, error) {
 	if n == "access" {
 		return in.Config["account"] + ":" + in.Secrets["key"], nil

@@ -134,6 +134,7 @@ func TestEnvironmentGuideSilentWithoutAliases(t *testing.T) {
 // Setup must plant the guide inside the VM, readable by the agent's user and
 // writable only by the gateway.
 func TestSetupWritesEnvironmentGuide(t *testing.T) {
+	metadataServed(t)
 	original := Domain
 	Domain = "example.com"
 	t.Cleanup(func() { Domain = original })
@@ -143,6 +144,9 @@ func TestSetupWritesEnvironmentGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 	guide := string(guest.files[GuideFilePath])
+	if !strings.Contains(guide, "svkexe/integrations/") || !strings.Contains(guide, "export GH_TOKEN=") {
+		t.Fatal("VM guide missing integration instructions")
+	}
 	if !strings.Contains(guide, "https://vm.example.com/") {
 		t.Errorf("guide not written into the VM: %q", guide)
 	}

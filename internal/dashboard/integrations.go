@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -70,12 +69,7 @@ func (d *Dashboard) saveIntegration(w http.ResponseWriter, r *http.Request) {
 		in.Secrets[f.Name] = r.PostForm.Get("secret_" + f.Name)
 	}
 	if err = svc.Save(r.Context(), user.ID, provider, in); err != nil {
-		status := http.StatusInternalServerError
-		message := "integration operation failed"
-		if errors.Is(err, integrations.ErrInvalid) {
-			status = http.StatusBadRequest
-			message = "could not save integration; check required fields"
-		}
+		status, message := integrations.PublicError(err)
 		http.Error(w, message, status)
 		return
 	}

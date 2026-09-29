@@ -2,8 +2,11 @@ package sshgw
 
 import (
 	"bytes"
+	"context"
 	"github.com/skrashevich/svkexe/internal/db"
 	"github.com/skrashevich/svkexe/internal/integrations"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -13,7 +16,7 @@ type labIntegration struct{}
 func (labIntegration) Descriptor() integrations.Descriptor {
 	return integrations.Descriptor{ID: "lab", Name: "Lab", Config: []integrations.Field{{Name: "account", Required: true}}, Secrets: []integrations.Field{{Name: "key", Required: true}, {Name: "password", Required: true}}, Credentials: []string{"key", "password"}}
 }
-func (labIntegration) Validate(integrations.Input) error { return nil }
+func (labIntegration) Validate(context.Context, integrations.Input) error { return nil }
 func (labIntegration) Credential(in integrations.Input, n string) (string, error) {
 	return in.Secrets[n], nil
 }
@@ -54,5 +57,25 @@ func TestSSHIntegrationInputAndIsolation(t *testing.T) {
 	guest := &db.User{ID: "guest", Role: db.GuestRole}
 	if _, err := run(t, s, guest, "integration list"); err == nil {
 		t.Fatal("guest command allowed")
+	}
+}
+
+type rejectedGitHubTransport struct{}
+
+func (rejectedGitHubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 401, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"message":"private-token"}`)), Request: r}, nil
+}
+func TestSSHRejectsInvalidGitHubBeforeSaving(t *testing.T) {
+	s, user := accountServer(t)
+	s.integrationService = integrations.New(s.db, s.encKey, integrations.GitHub{Client: &http.Client{Transport: rejectedGitHubTransport{}}})
+	session := newSession(t, user, "svkexe", "integration add github", `{"secrets":{"token":"private-token"}}`)
+	var out bytes.Buffer
+	err := s.exec(t.Context(), session, newOut(&out, false), user, "integration add github", false, false)
+	if err == nil || !strings.Contains(err.Error(), "credentials rejected") || strings.Contains(err.Error(), "private-token") {
+		t.Fatal("missing safe rejection", err)
+	}
+	list, err := s.integrationService.List(t.Context(), user.ID)
+	if err != nil || len(list) != 0 {
+		t.Fatal("invalid GitHub token saved")
 	}
 }

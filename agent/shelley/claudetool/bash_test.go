@@ -3,7 +3,6 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -543,42 +542,6 @@ func TestFormatForegroundBashOutput(t *testing.T) {
 		}
 
 		t.Logf("Large output with long lines result:\n%s", result)
-	})
-}
-
-func TestIsNoTrailerSet(t *testing.T) {
-	// Test when config is not set (default)
-	t.Run("Default No Config", func(t *testing.T) {
-		if isNoTrailerSet() {
-			t.Error("Expected isNoTrailerSet() to be false when not configured")
-		}
-	})
-
-	// Test when config is set to true
-	t.Run("Config Set True", func(t *testing.T) {
-		// Set the global config
-		cmd := exec.Command("git", "config", "--global", "shelley.no-trailer", "true")
-		if err := cmd.Run(); err != nil {
-			t.Skipf("Could not set git config: %v", err)
-		}
-		defer exec.Command("git", "config", "--global", "--unset", "shelley.no-trailer").Run()
-
-		if !isNoTrailerSet() {
-			t.Error("Expected isNoTrailerSet() to be true when shelley.no-trailer=true")
-		}
-	})
-
-	// Test when config is set to false
-	t.Run("Config Set False", func(t *testing.T) {
-		cmd := exec.Command("git", "config", "--global", "shelley.no-trailer", "false")
-		if err := cmd.Run(); err != nil {
-			t.Skipf("Could not set git config: %v", err)
-		}
-		defer exec.Command("git", "config", "--global", "--unset", "shelley.no-trailer").Run()
-
-		if isNoTrailerSet() {
-			t.Error("Expected isNoTrailerSet() to be false when shelley.no-trailer=false")
-		}
 	})
 }
 

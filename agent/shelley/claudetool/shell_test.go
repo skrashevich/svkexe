@@ -383,21 +383,41 @@ func TestShellLargeOutputSummarized(t *testing.T) {
 	}
 }
 
-func TestShellCoauthorTrailerIntegration(t *testing.T) {
-	// Exercise the AddCoauthorTrailer code path with a 'git commit' style
-	// command. We don't want a real commit, so we run it in a non-git dir;
-	// the command will fail with 'not a git repository' but the trailer code
-	// should run without panicking.
-	s := newTestShell(t)
-	s.WorkingDir = NewMutableWorkingDir(t.TempDir())
-	// 'git commit -m foo' will fail (no repo) but exercise trailer logic.
-	_, _, err := runShell(t, s,
-		`{"command":"git commit -m 'test message'"}`,
-		5*time.Second)
-	// We expect a failure because there's no repo, but the trailer path
-	// should have run without panicking. Either outcome is acceptable —
-	// what we're really testing is that the code path doesn't crash.
-	if err != nil && !strings.Contains(err.Error(), "command failed") {
-		t.Errorf("unexpected error shape: %v", err)
+func TestGitCommitPreservesMessage(t *testing.T) {
+	for _, toolName := range []string{"bash", "shell"} {
+		t.Run(toolName, func(t *testing.T) {
+			dir := t.TempDir()
+			git := func(args ...string) string {
+				t.Helper()
+				cmd := exec.Command("git", args...)
+				cmd.Dir = dir
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("git %v: %v: %s", args, err, out)
+				}
+				return string(out)
+			}
+			git("init")
+			git("config", "user.name", "Test User")
+			git("config", "user.email", "test@example.com")
+			git("config", "core.hooksPath", "/dev/null")
+			git("config", "commit.gpgsign", "false")
+			input := json.RawMessage(`{"command":"git commit --allow-empty -m 'test message'"}`)
+			if toolName == "bash" {
+				out := (&BashTool{WorkingDir: NewMutableWorkingDir(dir)}).Tool().Run(context.Background(), input)
+				if out.Error != nil {
+					t.Fatal(out.Error)
+				}
+			} else {
+				s := newTestShell(t)
+				s.WorkingDir = NewMutableWorkingDir(dir)
+				if _, _, err := runShell(t, s, string(input), 5*time.Second); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := git("log", "-1", "--format=%B"); strings.TrimSpace(got) != "test message" {
+				t.Fatalf("commit message changed: %q", got)
+			}
+		})
 	}
 }

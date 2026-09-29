@@ -208,10 +208,6 @@ func (s *ShellTool) run(ctx context.Context, req shellInput) llm.ToolOut {
 		}
 	}
 
-	if !isNoTrailerSet() {
-		req.Command = bashkit.AddCoauthorTrailer(req.Command, "Co-authored-by: Shelley <shelley@exe.dev>")
-	}
-
 	yield := s.yieldDuration(req)
 
 	// Open a temp log file. We want a deterministic, pid-based name so the

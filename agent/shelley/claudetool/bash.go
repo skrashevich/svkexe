@@ -89,15 +89,6 @@ func (b *BashTool) getWorkingDir() string {
 	return b.WorkingDir.Get()
 }
 
-// isNoTrailerSet checks if user has disabled co-author trailer via git config.
-func isNoTrailerSet() bool {
-	out, err := exec.Command("git", "config", "--get", "shelley.no-trailer").Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) == "true"
-}
-
 const (
 	bashName        = "bash"
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
@@ -188,11 +179,6 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 		if err != nil {
 			slog.DebugContext(ctx, "failed to auto-install missing tools", "error", err)
 		}
-	}
-
-	// Add co-author trailer to git commits unless user has disabled it
-	if !isNoTrailerSet() {
-		req.Command = bashkit.AddCoauthorTrailer(req.Command, "Co-authored-by: Shelley <shelley@exe.dev>")
 	}
 
 	timeout := req.timeout(b.Timeouts)

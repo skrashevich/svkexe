@@ -450,13 +450,60 @@ See [deployment](DEPLOY.md) for installation of the privileged update watcher.
 
 ### LLM proxy
 
-`POST /api/llm/v1/chat/completions` accepts OpenAI-style chat requests and
-streams responses when `stream: true`. `GET /api/llm/v1/models` lists the
-platform fallback models. Routes are registered only when the gateway has an
-`OPENROUTER_API_KEY`. Use `Authorization: Bearer <LLM_INTERNAL_TOKEN>` when that token is configured.
-Session cookies do not authenticate this proxy. An empty internal token disables
-proxy authentication, so set it whenever enabling the platform fallback.
-The token is for the VM-to-gateway LLM path, not general administration.
+The gateway serves `/api/llm/v1` independently of `OPENROUTER_API_KEY`.
+VM setup writes `/etc/picoclaw/llm-gateway.json` with `base_url` and `api_key`
+(root:user, mode 0640). Use `Authorization: Bearer <api_key>`; session cookies
+and IMDS tokens do not authenticate this API. Running VMs receive the file
+and updated seeded credentials during reconciliation after a gateway update;
+stopped VMs receive them when started through the platform.
+
+A VM token is bound to its container and owner. Each request verifies the
+container still belongs to that owner and reads current LLM connections from
+the database. `GET /api/llm/v1/models` returns the owner's endpoint-backed
+models, with connection-qualified IDs (`svkexe_user:provider:model`) and a
+`protocol` field. Provider credentials stay on the gateway for these requests.
+Model names without the prefix are accepted only when unambiguous. Unknown
+models are rejected rather than replaced with another provider's model.
+
+Use the native endpoint matching the listed protocol:
+
+| Protocol | Endpoint under `/api/llm/v1` |
+| --- | --- |
+| `openai` | `POST /chat/completions` |
+| `openai-responses` | `POST /responses` |
+| `anthropic` | `POST /messages` |
+| `gemini` | `POST /models/{id}:generateContent` or `:streamGenerateContent` |
+
+The gateway forwards native payloads and streams; it does not translate
+between protocols. Requests using a model with the wrong protocol return 400.
+For Gemini the model ID is in the URL; for the other protocols it is the
+JSON `model` field. Provider selection is explicit; failed owner requests never
+fall back to the platform's key. With no endpoint-backed owner models, the
+configured OpenRouter platform list and its existing chat-completion fallback
+chain are used. With neither owner models nor a platform key, requests return 503.
+
+Read the descriptor without displaying its token:
+
+```python
+import json
+import urllib.request
+
+with open("/etc/picoclaw/llm-gateway.json") as f:
+    gateway = json.load(f)
+request = urllib.request.Request(
+    gateway["base_url"] + "/models",
+    headers={"Authorization": "Bearer " + gateway["api_key"]},
+)
+with urllib.request.urlopen(request) as response:
+    print(response.read().decode())
+```
+
+The legacy shared `LLM_INTERNAL_TOKEN` still accesses only the platform
+OpenRouter list and `/chat/completions`; it cannot identify an owner. An empty
+internal token disables authentication for that legacy platform path, so set it
+whenever enabling the platform fallback. An external `LLM_PROXY_URL` retains
+its configured endpoint and shared token; VM-scoped owner routing applies to
+the built-in gateway URL derived from `DOMAIN`.
 
 ### Metrics
 
